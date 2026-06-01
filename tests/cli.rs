@@ -187,6 +187,21 @@ fn context_returns_read_first_packet_for_agent_task() {
             .iter()
             .any(|reference| reference == "src/auth/session.test.ts")
     );
+    assert!(
+        first["blast_radius"]["imports"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|import| import == "src/auth/token.ts")
+    );
+    assert!(
+        first["blast_radius"]["tests"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|test| test == "src/auth/session.test.ts")
+    );
+    assert_eq!(first["blast_radius"]["risk"], "medium");
     assert!(!first["why"].as_array().unwrap().is_empty());
 }
 

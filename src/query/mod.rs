@@ -129,9 +129,21 @@ struct ContextFile {
     imports: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     referenced_by: Vec<String>,
+    blast_radius: BlastRadius,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     related_tests: Vec<RelatedTest>,
     why: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct BlastRadius {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    imports: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    referenced_by: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tests: Vec<String>,
+    risk: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -419,6 +431,7 @@ pub fn build_context(
             let related_tests = related_tests(index, file);
             let imports = resolved_imports_for_file(index, &file.path);
             let referenced_by = references_to_file(index, &file.path);
+            let blast_radius = blast_radius_for(&imports, &referenced_by, &related_tests);
 
             selected_symbols += symbols.len();
             selected_related_tests += related_tests.len();
@@ -432,6 +445,7 @@ pub fn build_context(
                 snippets,
                 imports,
                 referenced_by,
+                blast_radius,
                 related_tests,
                 why: candidate.why,
             })
@@ -566,6 +580,29 @@ fn references_to_file(index: &CodeIndex, path: &str) -> Vec<String> {
     references.sort();
     references.dedup();
     references
+}
+
+fn blast_radius_for(
+    imports: &[String],
+    referenced_by: &[String],
+    related_tests: &[RelatedTest],
+) -> BlastRadius {
+    let tests: Vec<String> = related_tests.iter().map(|test| test.file.clone()).collect();
+    let total_edges = imports.len() + referenced_by.len();
+    let risk = if referenced_by.len() >= 5 || total_edges >= 8 {
+        "high"
+    } else if total_edges > 0 || !tests.is_empty() {
+        "medium"
+    } else {
+        "low"
+    };
+
+    BlastRadius {
+        imports: imports.to_vec(),
+        referenced_by: referenced_by.to_vec(),
+        tests,
+        risk: risk.to_string(),
+    }
 }
 
 fn snippet_for(root: &Path, file: &FileRecord, symbol: Option<&SymbolRecord>) -> Option<Snippet> {
@@ -884,6 +921,83 @@ mod tests {
                 .referenced_by
                 .contains(&"src/auth/session.test.ts".to_string())
         );
+    }
+
+    #[test]
+    fn context_populates_blast_radius_for_selected_files() {
+        let (temp, index) = fixture_index();
+        let output = build_context(
+            temp.path(),
+            &index,
+            "change createSession behavior",
+            8,
+            2,
+            true,
+        )
+        .unwrap();
+
+        let session_file = output
+            .read_first
+            .iter()
+            .find(|file| file.file == "src/auth/session.ts")
+            .unwrap();
+
+        assert!(
+            session_file
+                .blast_radius
+                .imports
+                .contains(&"src/auth/token.ts".to_string())
+        );
+        assert!(
+            session_file
+                .blast_radius
+                .referenced_by
+                .contains(&"src/auth/session.test.ts".to_string())
+        );
+        assert!(
+            session_file
+                .blast_radius
+                .tests
+                .contains(&"src/auth/session.test.ts".to_string())
+        );
+        assert_eq!(session_file.blast_radius.risk, "medium");
+    }
+
+    #[test]
+    fn context_marks_widely_referenced_files_as_high_risk() {
+        let temp = tempfile::tempdir().unwrap();
+        write(
+            temp.path().join("src/shared.ts"),
+            "export function sharedToken() {\n  return 'token';\n}\n",
+        );
+        for index in 0..5 {
+            write(
+                temp.path().join(format!("src/consumer{index}.ts")),
+                &format!(
+                    "import {{ sharedToken }} from './shared';\n\nexport function consumer{index}() {{\n  return sharedToken();\n}}\n"
+                ),
+            );
+        }
+
+        let index = indexer::build_index(temp.path()).unwrap();
+        let output = build_context(
+            temp.path(),
+            &index,
+            "change sharedToken behavior",
+            8,
+            2,
+            true,
+        )
+        .unwrap();
+
+        let shared_file = output
+            .read_first
+            .iter()
+            .find(|file| file.file == "src/shared.ts")
+            .unwrap();
+
+        assert_eq!(shared_file.blast_radius.risk, "high");
+        assert_eq!(shared_file.blast_radius.referenced_by.len(), 5);
     }
 
     #[test]

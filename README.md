@@ -106,6 +106,12 @@ cargo run -- context . "change login token expiry behavior"
       ],
       "imports": ["src/auth/token.ts"],
       "referenced_by": ["src/auth/session.test.ts"],
+      "blast_radius": {
+        "imports": ["src/auth/token.ts"],
+        "referenced_by": ["src/auth/session.test.ts"],
+        "tests": ["src/auth/session.test.ts"],
+        "risk": "medium"
+      },
       "related_tests": [
         {
           "file": "src/auth/session.test.ts",
