@@ -78,6 +78,18 @@ pub enum Command {
         no_snippets: bool,
     },
 
+    /// Build an agent-ready context packet agents should request before grep.
+    AgentContext {
+        path: PathBuf,
+        task: String,
+
+        #[arg(long, default_value_t = 8)]
+        limit: usize,
+
+        #[arg(long, default_value_t = 2)]
+        snippets_per_file: usize,
+    },
+
     /// Estimate token savings versus a naive grep/read loop.
     Benchmark {
         path: PathBuf,
@@ -120,7 +132,14 @@ struct IndexOutput {
     files: usize,
     symbols: usize,
     imports: usize,
+    references: usize,
     warnings: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct AgentContextOutput {
+    instruction: &'static str,
+    context: query::ContextOutput,
 }
 
 pub fn run() -> Result<()> {
@@ -138,6 +157,7 @@ pub fn run() -> Result<()> {
                 files: index.files.len(),
                 symbols: index.symbols.len(),
                 imports: index.imports.len(),
+                references: index.references.len(),
                 warnings: index.warnings,
             };
             output::json::print(&output)?;
@@ -176,6 +196,21 @@ pub fn run() -> Result<()> {
             let index = store::json_store::load_index(&path)?;
             let output =
                 query::build_context(&path, &index, &task, limit, snippets_per_file, !no_snippets)?;
+            output::json::print(&output)?;
+        }
+        Command::AgentContext {
+            path,
+            task,
+            limit,
+            snippets_per_file,
+        } => {
+            let index = store::json_store::load_index(&path)?;
+            let context =
+                query::build_context(&path, &index, &task, limit, snippets_per_file, true)?;
+            let output = AgentContextOutput {
+                instruction: "Use this read_first packet before grep. Read selected snippets and files first; grep only if the packet is insufficient.",
+                context,
+            };
             output::json::print(&output)?;
         }
         Command::Benchmark {
@@ -267,6 +302,7 @@ mod tests {
         Cli::try_parse_from(["callsieve", "symbol", ".", "UserService"]).unwrap();
         Cli::try_parse_from(["callsieve", "query", ".", "where is auth handled?"]).unwrap();
         Cli::try_parse_from(["callsieve", "context", ".", "change token expiry"]).unwrap();
+        Cli::try_parse_from(["callsieve", "agent-context", ".", "change token expiry"]).unwrap();
         Cli::try_parse_from(["callsieve", "benchmark", ".", "change token expiry"]).unwrap();
         Cli::try_parse_from(["callsieve", "benchmark-suite", ".", "benchmarks/tasks.json"])
             .unwrap();

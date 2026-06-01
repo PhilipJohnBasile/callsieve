@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     indexer::language::Language,
-    store::{CodeIndex, FileRecord, SymbolRecord},
+    store::{CodeIndex, FileRecord, ReferenceRecord, SymbolRecord},
 };
 
 #[derive(Debug, Serialize)]
@@ -51,6 +51,12 @@ struct SymbolDetail {
     signature: String,
     imports: Vec<String>,
     referenced_by: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    calls: Vec<ReferenceEdge>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    references: Vec<ReferenceEdge>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    called_by: Vec<ReferenceEdge>,
 }
 
 #[derive(Debug, Serialize)]
@@ -131,8 +137,24 @@ struct ContextFile {
     referenced_by: Vec<String>,
     blast_radius: BlastRadius,
     #[serde(skip_serializing_if = "Vec::is_empty")]
+    calls: Vec<ReferenceEdge>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    called_by: Vec<ReferenceEdge>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     related_tests: Vec<RelatedTest>,
     why: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct ReferenceEdge {
+    file: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    symbol: Option<String>,
+    target: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target_file: Option<String>,
+    kind: String,
+    line: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -143,6 +165,10 @@ struct BlastRadius {
     referenced_by: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     tests: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    calls: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    called_by: Vec<String>,
     risk: String,
 }
 
@@ -347,8 +373,8 @@ impl ContextCandidate {
     }
 
     fn add_graph_boost(&mut self, score: i32, why: String) {
-        self.graph_score += score;
         if self.seen_why.insert(why.clone()) {
+            self.graph_score += score;
             self.why.push(why);
         }
     }
@@ -360,6 +386,7 @@ pub struct StatsOutput {
     files: usize,
     symbols: usize,
     imports: usize,
+    references: usize,
     tests: usize,
     configs: usize,
     languages: BTreeMap<Language, usize>,
@@ -432,6 +459,9 @@ pub fn find_symbol(
                 signature: symbol.signature.clone(),
                 imports: imports_for_file(index, &file.path),
                 referenced_by: references_to_file(index, &file.path),
+                calls: calls_from_symbol(index, symbol),
+                references: references_from_symbol(index, symbol),
+                called_by: called_by_symbol(index, symbol),
             })
         })
         .collect();
@@ -529,6 +559,7 @@ pub fn build_context(
         );
     }
     add_graph_context(index, &ranked, &mut grouped);
+    add_reference_context(index, &ranked, &mut grouped);
 
     let mut candidates: Vec<ContextCandidate> = grouped.into_values().collect();
     candidates.sort_by(|left, right| {
@@ -574,7 +605,10 @@ pub fn build_context(
             let related_tests = related_tests(index, file);
             let imports = resolved_imports_for_file(index, &file.path);
             let referenced_by = references_to_file(index, &file.path);
-            let blast_radius = blast_radius_for(&imports, &referenced_by, &related_tests);
+            let calls = calls_from_file(index, file);
+            let called_by = called_by_file(index, file);
+            let blast_radius =
+                blast_radius_for(&imports, &referenced_by, &related_tests, &calls, &called_by);
 
             selected_symbols += symbols.len();
             selected_related_tests += related_tests.len();
@@ -589,6 +623,8 @@ pub fn build_context(
                 imports,
                 referenced_by,
                 blast_radius,
+                calls,
+                called_by,
                 related_tests,
                 why: candidate.why,
             })
@@ -791,6 +827,7 @@ pub fn stats(root: &Path, index: &CodeIndex) -> Result<StatsOutput> {
         files: index.files.len(),
         symbols: index.symbols.len(),
         imports: index.imports.len(),
+        references: index.references.len(),
         tests: index.files.iter().filter(|file| file.is_test).count(),
         configs: index.files.iter().filter(|file| file.is_config).count(),
         languages,
@@ -858,6 +895,89 @@ fn add_graph_context(
     }
 }
 
+fn add_reference_context(
+    index: &CodeIndex,
+    ranked: &[ranker::RankedMatch],
+    grouped: &mut BTreeMap<String, ContextCandidate>,
+) {
+    const CALLEE_BOOST: i32 = 10;
+    const CALLER_BOOST: i32 = 14;
+
+    let matched_file_ids: BTreeSet<&str> = ranked
+        .iter()
+        .map(|match_| match_.file_id.as_str())
+        .collect();
+    let matched_symbol_ids: BTreeSet<&str> = ranked
+        .iter()
+        .filter_map(|match_| match_.symbol_id.as_deref())
+        .collect();
+
+    for reference in &index.references {
+        if matched_file_ids.contains(reference.file_id.as_str())
+            && let Some(target_path) = reference.target_path.as_deref()
+            && let Some(target_file) = file_by_path(index, target_path)
+        {
+            let entry = grouped
+                .entry(target_file.id.clone())
+                .or_insert_with(|| ContextCandidate::new(target_file.id.clone(), 0, usize::MAX));
+            entry.add_graph_boost(
+                CALLEE_BOOST,
+                format!(
+                    "{} from matched file: {}",
+                    reference.kind, reference.target_name
+                ),
+            );
+        }
+
+        if let Some(target_path) = reference.target_path.as_deref()
+            && file_by_path(index, target_path)
+                .is_some_and(|target_file| matched_file_ids.contains(target_file.id.as_str()))
+            && let Some(source_file) = file_by_path(index, &reference.source_path)
+        {
+            let entry = grouped
+                .entry(source_file.id.clone())
+                .or_insert_with(|| ContextCandidate::new(source_file.id.clone(), 0, usize::MAX));
+            entry.add_graph_boost(
+                CALLER_BOOST,
+                format!("{} matched file: {}", reference.kind, target_path),
+            );
+        }
+
+        if let Some(target_symbol_id) = reference.target_symbol_id.as_deref()
+            && matched_symbol_ids.contains(target_symbol_id)
+            && let Some(source_file) = file_by_path(index, &reference.source_path)
+        {
+            let entry = grouped
+                .entry(source_file.id.clone())
+                .or_insert_with(|| ContextCandidate::new(source_file.id.clone(), 0, usize::MAX));
+            entry.add_graph_boost(
+                CALLER_BOOST,
+                format!(
+                    "{} matched symbol: {}",
+                    reference.kind, reference.target_name
+                ),
+            );
+        }
+
+        if let Some(source_symbol_id) = reference.source_symbol_id.as_deref()
+            && matched_symbol_ids.contains(source_symbol_id)
+            && let Some(target_path) = reference.target_path.as_deref()
+            && let Some(target_file) = file_by_path(index, target_path)
+        {
+            let entry = grouped
+                .entry(target_file.id.clone())
+                .or_insert_with(|| ContextCandidate::new(target_file.id.clone(), 0, usize::MAX));
+            entry.add_graph_boost(
+                CALLEE_BOOST,
+                format!(
+                    "{} from matched symbol: {}",
+                    reference.kind, reference.target_name
+                ),
+            );
+        }
+    }
+}
+
 fn imports_for_file(index: &CodeIndex, path: &str) -> Vec<String> {
     index
         .imports
@@ -896,14 +1016,96 @@ fn references_to_file(index: &CodeIndex, path: &str) -> Vec<String> {
     references
 }
 
+fn calls_from_symbol(index: &CodeIndex, symbol: &SymbolRecord) -> Vec<ReferenceEdge> {
+    index
+        .references
+        .iter()
+        .filter(|reference| {
+            reference.source_symbol_id.as_deref() == Some(symbol.id.as_str())
+                && reference.kind == "call"
+        })
+        .map(|reference| reference_edge(index, reference))
+        .take(10)
+        .collect()
+}
+
+fn references_from_symbol(index: &CodeIndex, symbol: &SymbolRecord) -> Vec<ReferenceEdge> {
+    index
+        .references
+        .iter()
+        .filter(|reference| {
+            reference.source_symbol_id.as_deref() == Some(symbol.id.as_str())
+                && reference.kind != "call"
+        })
+        .map(|reference| reference_edge(index, reference))
+        .take(10)
+        .collect()
+}
+
+fn called_by_symbol(index: &CodeIndex, symbol: &SymbolRecord) -> Vec<ReferenceEdge> {
+    index
+        .references
+        .iter()
+        .filter(|reference| {
+            reference.target_symbol_id.as_deref() == Some(symbol.id.as_str())
+                && reference.kind == "call"
+        })
+        .map(|reference| reference_edge(index, reference))
+        .take(10)
+        .collect()
+}
+
+fn calls_from_file(index: &CodeIndex, file: &FileRecord) -> Vec<ReferenceEdge> {
+    index
+        .references
+        .iter()
+        .filter(|reference| reference.source_path == file.path && reference.kind == "call")
+        .map(|reference| reference_edge(index, reference))
+        .take(10)
+        .collect()
+}
+
+fn called_by_file(index: &CodeIndex, file: &FileRecord) -> Vec<ReferenceEdge> {
+    index
+        .references
+        .iter()
+        .filter(|reference| {
+            reference.target_path.as_deref() == Some(file.path.as_str())
+                && reference.source_path != file.path
+                && reference.kind == "call"
+        })
+        .map(|reference| reference_edge(index, reference))
+        .take(10)
+        .collect()
+}
+
+fn reference_edge(index: &CodeIndex, reference: &ReferenceRecord) -> ReferenceEdge {
+    ReferenceEdge {
+        file: reference.source_path.clone(),
+        symbol: reference
+            .source_symbol_id
+            .as_deref()
+            .and_then(|symbol_id| symbol_by_id(index, symbol_id))
+            .map(|symbol| symbol.name.clone()),
+        target: reference.target_name.clone(),
+        target_file: reference.target_path.clone(),
+        kind: reference.kind.clone(),
+        line: reference.line,
+    }
+}
+
 fn blast_radius_for(
     imports: &[String],
     referenced_by: &[String],
     related_tests: &[RelatedTest],
+    calls: &[ReferenceEdge],
+    called_by: &[ReferenceEdge],
 ) -> BlastRadius {
     let tests: Vec<String> = related_tests.iter().map(|test| test.file.clone()).collect();
-    let total_edges = imports.len() + referenced_by.len();
-    let risk = if referenced_by.len() >= 5 || total_edges >= 8 {
+    let call_targets = edge_files(calls, true);
+    let callers = edge_files(called_by, false);
+    let total_edges = imports.len() + referenced_by.len() + call_targets.len() + callers.len();
+    let risk = if referenced_by.len() >= 5 || callers.len() >= 5 || total_edges >= 8 {
         "high"
     } else if total_edges > 0 || !tests.is_empty() {
         "medium"
@@ -915,8 +1117,26 @@ fn blast_radius_for(
         imports: imports.to_vec(),
         referenced_by: referenced_by.to_vec(),
         tests,
+        calls: call_targets,
+        called_by: callers,
         risk: risk.to_string(),
     }
+}
+
+fn edge_files(edges: &[ReferenceEdge], use_target: bool) -> Vec<String> {
+    let mut files: Vec<String> = edges
+        .iter()
+        .filter_map(|edge| {
+            if use_target {
+                edge.target_file.clone()
+            } else {
+                Some(edge.file.clone())
+            }
+        })
+        .collect();
+    files.sort();
+    files.dedup();
+    files
 }
 
 fn baseline_benchmark(root: &Path, index: &CodeIndex, task: &str) -> BaselineBenchmark {

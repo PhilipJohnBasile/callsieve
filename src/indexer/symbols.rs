@@ -32,6 +32,7 @@ pub fn extract_symbols(content: &str, language: Language) -> Vec<RawSymbol> {
         }
     }
 
+    assign_parents(&mut symbols);
     symbols
 }
 
@@ -112,15 +113,22 @@ fn parse_js_line(line: &str) -> Option<(String, String, String)> {
     }
 
     for prefix in ["const ", "let ", "var "] {
-        if let Some(after_prefix) = rest.strip_prefix(prefix)
-            && (after_prefix.contains("=>") || after_prefix.contains("function"))
-        {
+        if let Some(after_prefix) = rest.strip_prefix(prefix) {
+            let kind = if after_prefix.contains("=>") || after_prefix.contains("function") {
+                "function"
+            } else {
+                "constant"
+            };
             return Some((
                 take_identifier(after_prefix)?,
-                "function".to_string(),
+                kind.to_string(),
                 visibility.to_string(),
             ));
         }
+    }
+
+    if let Some(name) = parse_js_method(rest) {
+        return Some((name, "method".to_string(), visibility.to_string()));
     }
 
     None
@@ -158,6 +166,40 @@ fn take_identifier(input: &str) -> Option<String> {
         None
     } else {
         Some(identifier)
+    }
+}
+
+fn parse_js_method(line: &str) -> Option<String> {
+    let rest = line.strip_prefix("async ").unwrap_or(line).trim_start();
+    let name = take_identifier(rest)?;
+    if matches!(
+        name.as_str(),
+        "if" | "for" | "while" | "switch" | "catch" | "function" | "return"
+    ) {
+        return None;
+    }
+
+    let after_name = rest[name.len()..].trim_start();
+    (after_name.starts_with('(') && (after_name.contains('{') || after_name.contains("=>")))
+        .then_some(name)
+}
+
+fn assign_parents(symbols: &mut [RawSymbol]) {
+    for index in 0..symbols.len() {
+        let parent = symbols[..index]
+            .iter()
+            .rev()
+            .find(|candidate| {
+                candidate.start_line < symbols[index].start_line
+                    && candidate.end_line >= symbols[index].end_line
+                    && matches!(
+                        candidate.kind.as_str(),
+                        "class" | "impl" | "struct" | "enum" | "trait" | "interface"
+                    )
+            })
+            .map(|candidate| candidate.name.clone());
+
+        symbols[index].parent = parent;
     }
 }
 
@@ -264,6 +306,11 @@ mod tests {
         assert!(symbols.iter().any(|symbol| symbol.name == "User"));
         assert!(symbols.iter().any(|symbol| symbol.name == "helper"));
         assert!(symbols.iter().any(|symbol| symbol.name == "name"));
+        assert!(
+            symbols
+                .iter()
+                .any(|symbol| symbol.name == "name" && symbol.parent.as_deref() == Some("User"))
+        );
     }
 
     #[test]
@@ -278,14 +325,39 @@ mod tests {
     }
 
     #[test]
+    fn extracts_python_method_parent() {
+        let symbols = extract_symbols(
+            "class User:\n    def login(self):\n        return True\n",
+            Language::Python,
+        );
+
+        assert!(
+            symbols
+                .iter()
+                .any(|symbol| symbol.name == "login" && symbol.parent.as_deref() == Some("User"))
+        );
+    }
+
+    #[test]
     fn extracts_javascript_symbols() {
         let symbols = extract_symbols(
-            "export function createSession() {}\nconst refreshSession = () => null;\nclass Session {}\n",
+            "export function createSession() {}\nconst refreshSession = () => null;\nexport const token = 'x';\nclass Session {\n  renew() {}\n}\n",
             Language::TypeScript,
         );
 
         assert!(symbols.iter().any(|symbol| symbol.name == "createSession"));
         assert!(symbols.iter().any(|symbol| symbol.name == "refreshSession"));
+        assert!(
+            symbols
+                .iter()
+                .any(|symbol| symbol.name == "token" && symbol.kind == "constant")
+        );
         assert!(symbols.iter().any(|symbol| symbol.name == "Session"));
+        assert!(
+            symbols
+                .iter()
+                .any(|symbol| symbol.name == "renew"
+                    && symbol.parent.as_deref() == Some("Session"))
+        );
     }
 }

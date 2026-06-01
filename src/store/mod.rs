@@ -12,6 +12,8 @@ pub struct CodeIndex {
     pub symbols: Vec<SymbolRecord>,
     pub imports: Vec<ImportRecord>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub references: Vec<ReferenceRecord>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
 }
 
@@ -50,4 +52,16 @@ pub struct ImportRecord {
     pub source_path: String,
     pub imported: String,
     pub resolved_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReferenceRecord {
+    pub file_id: String,
+    pub source_path: String,
+    pub source_symbol_id: Option<String>,
+    pub target_name: String,
+    pub target_symbol_id: Option<String>,
+    pub target_path: Option<String>,
+    pub kind: String,
+    pub line: usize,
 }

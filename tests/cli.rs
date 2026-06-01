@@ -77,10 +77,12 @@ fn index_writes_local_json_and_stats_cover_languages() {
     let index = json(&run(&["index", root]));
     assert_eq!(index["command"], "index");
     assert_eq!(index["files"], 5);
+    assert!(index["references"].as_u64().unwrap() > 0);
     assert!(repo.path().join(".callsieve/index.json").is_file());
 
     let stats = json(&run(&["stats", root]));
     assert_eq!(stats["files"], 5);
+    assert!(stats["references"].as_u64().unwrap() > 0);
     assert_eq!(stats["tests"], 1);
     assert_eq!(stats["languages"]["typescript"], 3);
     assert_eq!(stats["languages"]["python"], 1);
@@ -113,6 +115,13 @@ fn symbols_and_symbol_commands_return_indexed_symbols() {
             .unwrap()
             .iter()
             .any(|import| import == "src/auth/token.ts")
+    );
+    assert!(
+        symbol["matches"][0]["calls"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|call| call["target"] == "tokenFor" && call["target_file"] == "src/auth/token.ts")
     );
 }
 
@@ -201,7 +210,21 @@ fn context_returns_read_first_packet_for_agent_task() {
             .iter()
             .any(|test| test == "src/auth/session.test.ts")
     );
+    assert!(
+        first["blast_radius"]["calls"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|file| file == "src/auth/token.ts")
+    );
     assert_eq!(first["blast_radius"]["risk"], "medium");
+    assert!(
+        first["calls"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|call| call["target"] == "tokenFor")
+    );
     assert!(!first["why"].as_array().unwrap().is_empty());
 }
 
@@ -225,6 +248,32 @@ fn context_includes_graph_neighbor_when_limit_allows() {
             .unwrap()
             .iter()
             .any(|file| file["file"] == "src/auth/token.ts")
+    );
+}
+
+#[test]
+fn agent_context_wraps_context_with_before_grep_guidance() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+    json(&run(&["index", root]));
+
+    let output = json(&run(&[
+        "agent-context",
+        root,
+        "change createSession token behavior",
+        "--limit",
+        "5",
+    ]));
+
+    assert!(
+        output["instruction"]
+            .as_str()
+            .unwrap()
+            .contains("before grep")
+    );
+    assert_eq!(
+        output["context"]["read_first"][0]["file"],
+        "src/auth/session.ts"
     );
 }
 
@@ -344,6 +393,7 @@ fn missing_index_returns_json_error() {
         vec!["stats", root],
         vec!["query", root, "where is auth handled?"],
         vec!["context", root, "change createSession token behavior"],
+        vec!["agent-context", root, "change createSession token behavior"],
         vec!["benchmark", root, "change createSession token behavior"],
         vec!["benchmark-suite", root, "tasks.json"],
     ] {

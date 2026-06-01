@@ -26,6 +26,7 @@ callsieve symbols <path>
 callsieve symbol <path> <symbol_name>
 callsieve query <path> "<question>"
 callsieve context <path> "<task>" [--limit <n>] [--snippets-per-file <n>] [--no-snippets]
+callsieve agent-context <path> "<task>" [--limit <n>] [--snippets-per-file <n>]
 callsieve benchmark <path> "<task>" [--limit <n>] [--snippets-per-file <n>] [--no-snippets]
 callsieve benchmark-suite <path> <tasks.json> [--limit <n>] [--snippets-per-file <n>] [--no-snippets]
 callsieve stats <path>
@@ -37,6 +38,7 @@ Example:
 cargo run -- index .
 cargo run -- query . "where is auth handled?"
 cargo run -- context . "change login token expiry behavior"
+cargo run -- agent-context . "change login token expiry behavior"
 cargo run -- benchmark . "change login token expiry behavior"
 cargo run -- benchmark-suite . benchmarks/tasks.json
 ```
@@ -45,11 +47,13 @@ cargo run -- benchmark-suite . benchmarks/tasks.json
 
 - walks a repository while respecting common ignore rules
 - detects TypeScript, JavaScript, Python, and Rust source files
-- extracts practical first-pass symbols and imports
+- extracts practical first-pass symbols, imports, references, and calls
 - stores a local JSON index at `.callsieve/index.json`
 - returns compact JSON for agent consumption
 - ranks matches with deterministic, explainable scoring
 - builds compact read-first context packets for coding tasks
+- boosts context with import, caller, and callee proximity
+- provides an `agent-context` wrapper agents can call before grep
 - estimates context-packet token savings versus a naive grep/read loop
 
 ## Example Query Output
@@ -115,8 +119,19 @@ cargo run -- benchmark-suite . benchmarks/tasks.json
         "imports": ["src/auth/token.ts"],
         "referenced_by": ["src/auth/session.test.ts"],
         "tests": ["src/auth/session.test.ts"],
+        "calls": ["src/auth/token.ts"],
         "risk": "medium"
       },
+      "calls": [
+        {
+          "file": "src/auth/session.ts",
+          "symbol": "createSession",
+          "target": "tokenFor",
+          "target_file": "src/auth/token.ts",
+          "kind": "call",
+          "line": 13
+        }
+      ],
       "related_tests": [
         {
           "file": "src/auth/session.test.ts",

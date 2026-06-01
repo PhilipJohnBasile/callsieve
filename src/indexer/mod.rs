@@ -1,5 +1,6 @@
 pub mod imports;
 pub mod language;
+pub mod references;
 pub mod symbols;
 pub mod walker;
 
@@ -11,11 +12,11 @@ use std::{
 
 use anyhow::{Context, Result};
 
-use crate::store::{CodeIndex, FileRecord, ImportRecord, SymbolRecord};
+use crate::store::{CodeIndex, FileRecord, ImportRecord, ReferenceRecord, SymbolRecord};
 
 use self::language::Language;
 
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 pub fn build_index(root: &Path) -> Result<CodeIndex> {
     let root = root
@@ -25,6 +26,7 @@ pub fn build_index(root: &Path) -> Result<CodeIndex> {
     let mut files = Vec::new();
     let mut symbols = Vec::new();
     let mut imports = Vec::new();
+    let mut file_contents = Vec::new();
 
     for relative_path in walker::source_files(&root)? {
         let absolute_path = root.join(&relative_path);
@@ -86,6 +88,7 @@ pub fn build_index(root: &Path) -> Result<CodeIndex> {
         }
 
         files.push(file);
+        file_contents.push((file_id, path_string, content));
     }
 
     files.sort_by(|left, right| left.path.cmp(&right.path));
@@ -100,6 +103,14 @@ pub fn build_index(root: &Path) -> Result<CodeIndex> {
             .cmp(&right.source_path)
             .then(left.imported.cmp(&right.imported))
     });
+    let mut references = build_references(&file_contents, &files, &symbols, &imports);
+    references.sort_by(|left, right| {
+        left.source_path
+            .cmp(&right.source_path)
+            .then(left.line.cmp(&right.line))
+            .then(left.target_name.cmp(&right.target_name))
+            .then(left.kind.cmp(&right.kind))
+    });
 
     Ok(CodeIndex {
         schema_version: SCHEMA_VERSION,
@@ -107,6 +118,7 @@ pub fn build_index(root: &Path) -> Result<CodeIndex> {
         files,
         symbols,
         imports,
+        references,
         warnings,
     })
 }
@@ -218,6 +230,97 @@ fn normalize_relative(path: PathBuf) -> PathBuf {
     normalized
 }
 
+fn build_references(
+    file_contents: &[(String, String, String)],
+    files: &[FileRecord],
+    symbols: &[SymbolRecord],
+    imports: &[ImportRecord],
+) -> Vec<ReferenceRecord> {
+    let candidate_names: std::collections::BTreeSet<String> =
+        symbols.iter().map(|symbol| symbol.name.clone()).collect();
+    let mut references = Vec::new();
+
+    for (file_id, path, content) in file_contents {
+        for raw in references::extract_references(content, &candidate_names) {
+            let target =
+                resolve_reference_target(file_id, path, &raw.target_name, files, symbols, imports);
+            references.push(ReferenceRecord {
+                file_id: file_id.clone(),
+                source_path: path.clone(),
+                source_symbol_id: source_symbol_for_line(file_id, raw.line, symbols)
+                    .map(|symbol| symbol.id.clone()),
+                target_name: raw.target_name,
+                target_symbol_id: target.map(|symbol| symbol.id.clone()),
+                target_path: target.and_then(|symbol| {
+                    files
+                        .iter()
+                        .find(|file| file.id == symbol.file_id)
+                        .map(|file| file.path.clone())
+                }),
+                kind: raw.kind,
+                line: raw.line,
+            });
+        }
+    }
+
+    references
+}
+
+fn source_symbol_for_line<'a>(
+    file_id: &str,
+    line: usize,
+    symbols: &'a [SymbolRecord],
+) -> Option<&'a SymbolRecord> {
+    symbols
+        .iter()
+        .filter(|symbol| {
+            symbol.file_id == file_id && symbol.start_line <= line && symbol.end_line >= line
+        })
+        .min_by_key(|symbol| symbol.end_line.saturating_sub(symbol.start_line))
+}
+
+fn resolve_reference_target<'a>(
+    file_id: &str,
+    source_path: &str,
+    target_name: &str,
+    files: &[FileRecord],
+    symbols: &'a [SymbolRecord],
+    imports: &[ImportRecord],
+) -> Option<&'a SymbolRecord> {
+    let same_file: Vec<&SymbolRecord> = symbols
+        .iter()
+        .filter(|symbol| symbol.file_id == file_id && symbol.name == target_name)
+        .collect();
+    if same_file.len() == 1 {
+        return same_file.first().copied();
+    }
+
+    let imported_paths: std::collections::BTreeSet<&str> = imports
+        .iter()
+        .filter(|import| import.source_path == source_path)
+        .filter_map(|import| import.resolved_path.as_deref())
+        .collect();
+    let imported_symbols: Vec<&SymbolRecord> = symbols
+        .iter()
+        .filter(|symbol| {
+            symbol.name == target_name
+                && files
+                    .iter()
+                    .find(|file| file.id == symbol.file_id)
+                    .is_some_and(|file| imported_paths.contains(file.path.as_str()))
+        })
+        .collect();
+    if imported_symbols.len() == 1 {
+        return imported_symbols.first().copied();
+    }
+
+    let global_symbols: Vec<&SymbolRecord> = symbols
+        .iter()
+        .filter(|symbol| symbol.name == target_name)
+        .collect();
+    (global_symbols.len() == 1).then(|| global_symbols[0])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -253,5 +356,9 @@ mod tests {
                 .iter()
                 .any(|import| import.resolved_path.as_deref() == Some("src/token.ts"))
         );
+        assert!(index.references.iter().any(|reference| {
+            reference.target_name == "token"
+                && reference.target_path.as_deref() == Some("src/token.ts")
+        }));
     }
 }
