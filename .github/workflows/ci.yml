@@ -19,9 +19,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
-          git init .
-          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
-          git -c http.extraheader="AUTHORIZATION: bearer ${GITHUB_TOKEN}" fetch --depth=1 origin "${GITHUB_REF}"
+          git init --initial-branch=main .
+          git remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git fetch --depth=1 origin "${GITHUB_REF}"
           git checkout --detach "${GITHUB_SHA}"
 
       - name: Install Rust
