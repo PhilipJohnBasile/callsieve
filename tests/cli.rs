@@ -173,7 +173,44 @@ fn context_returns_read_first_packet_for_agent_task() {
             .iter()
             .any(|test| test["file"] == "src/auth/session.test.ts")
     );
+    assert!(
+        first["imports"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|import| import == "src/auth/token.ts")
+    );
+    assert!(
+        first["referenced_by"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|reference| reference == "src/auth/session.test.ts")
+    );
     assert!(!first["why"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn context_includes_graph_neighbor_when_limit_allows() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+    json(&run(&["index", root]));
+
+    let context = json(&run(&[
+        "context",
+        root,
+        "change createSession behavior",
+        "--limit",
+        "5",
+    ]));
+
+    assert!(
+        context["read_first"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|file| file["file"] == "src/auth/token.ts")
+    );
 }
 
 #[test]

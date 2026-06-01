@@ -104,13 +104,19 @@ cargo run -- context . "change login token expiry behavior"
           "text": "export function createSession(...) { ... }"
         }
       ],
+      "imports": ["src/auth/token.ts"],
+      "referenced_by": ["src/auth/session.test.ts"],
       "related_tests": [
         {
           "file": "src/auth/session.test.ts",
           "symbols": ["createSession returns token-backed session"]
         }
       ],
-      "why": ["exact symbol match: createSession", "keyword overlap: auth, session"]
+      "why": [
+        "exact symbol match: createSession",
+        "keyword overlap: auth, session",
+        "references matched file: src/auth/token.ts"
+      ]
     }
   ],
   "stats": {

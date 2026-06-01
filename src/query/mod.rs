@@ -126,6 +126,10 @@ struct ContextFile {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     snippets: Vec<Snippet>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
+    imports: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    referenced_by: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     related_tests: Vec<RelatedTest>,
     why: Vec<String>,
 }
@@ -142,6 +146,7 @@ struct ContextStats {
 struct ContextCandidate {
     file_id: String,
     best_score: i32,
+    graph_score: i32,
     first_rank: usize,
     symbol_ids: Vec<String>,
     why: Vec<String>,
@@ -153,6 +158,7 @@ impl ContextCandidate {
         Self {
             file_id,
             best_score: score,
+            graph_score: 0,
             first_rank,
             symbol_ids: Vec::new(),
             why: Vec::new(),
@@ -166,7 +172,7 @@ impl ContextCandidate {
             .len()
             .saturating_sub(1)
             .min((i32::MAX / 5) as usize) as i32;
-        self.best_score + (bonus_count * 5)
+        self.best_score + self.graph_score + (bonus_count * 5)
     }
 
     fn add_match(&mut self, score: i32, symbol_id: Option<&str>, why: &[String]) {
@@ -182,6 +188,13 @@ impl ContextCandidate {
             if self.seen_why.insert(reason.clone()) {
                 self.why.push(reason.clone());
             }
+        }
+    }
+
+    fn add_graph_boost(&mut self, score: i32, why: String) {
+        self.graph_score += score;
+        if self.seen_why.insert(why.clone()) {
+            self.why.push(why);
         }
     }
 }
@@ -360,6 +373,7 @@ pub fn build_context(
             &ranked_match.why,
         );
     }
+    add_graph_context(index, &ranked, &mut grouped);
 
     let mut candidates: Vec<ContextCandidate> = grouped.into_values().collect();
     candidates.sort_by(|left, right| {
@@ -403,6 +417,8 @@ pub fn build_context(
                 include_snippets,
             );
             let related_tests = related_tests(index, file);
+            let imports = resolved_imports_for_file(index, &file.path);
+            let referenced_by = references_to_file(index, &file.path);
 
             selected_symbols += symbols.len();
             selected_related_tests += related_tests.len();
@@ -414,6 +430,8 @@ pub fn build_context(
                 language: file.language,
                 symbols,
                 snippets,
+                imports,
+                referenced_by,
                 related_tests,
                 why: candidate.why,
             })
@@ -460,6 +478,58 @@ fn symbol_by_id<'a>(index: &'a CodeIndex, symbol_id: &str) -> Option<&'a SymbolR
     index.symbols.iter().find(|symbol| symbol.id == symbol_id)
 }
 
+fn file_by_path<'a>(index: &'a CodeIndex, path: &str) -> Option<&'a FileRecord> {
+    index.files.iter().find(|file| file.path == path)
+}
+
+fn add_graph_context(
+    index: &CodeIndex,
+    ranked: &[ranker::RankedMatch],
+    grouped: &mut BTreeMap<String, ContextCandidate>,
+) {
+    const IMPORTED_FILE_BOOST: i32 = 12;
+    const REFERENCING_FILE_BOOST: i32 = 8;
+
+    let matched_file_ids: BTreeSet<&str> = ranked
+        .iter()
+        .map(|match_| match_.file_id.as_str())
+        .collect();
+
+    for file_id in matched_file_ids {
+        let Some(file) = file_by_id(index, file_id) else {
+            continue;
+        };
+
+        for imported_path in resolved_imports_for_file(index, &file.path) {
+            let Some(imported_file) = file_by_path(index, &imported_path) else {
+                continue;
+            };
+            let entry = grouped
+                .entry(imported_file.id.clone())
+                .or_insert_with(|| ContextCandidate::new(imported_file.id.clone(), 0, usize::MAX));
+            entry.add_graph_boost(
+                IMPORTED_FILE_BOOST,
+                format!("referenced by matched file: {}", file.path),
+            );
+        }
+
+        for referencing_path in references_to_file(index, &file.path) {
+            let Some(referencing_file) = file_by_path(index, &referencing_path) else {
+                continue;
+            };
+            let entry = grouped
+                .entry(referencing_file.id.clone())
+                .or_insert_with(|| {
+                    ContextCandidate::new(referencing_file.id.clone(), 0, usize::MAX)
+                });
+            entry.add_graph_boost(
+                REFERENCING_FILE_BOOST,
+                format!("references matched file: {}", file.path),
+            );
+        }
+    }
+}
+
 fn imports_for_file(index: &CodeIndex, path: &str) -> Vec<String> {
     index
         .imports
@@ -472,6 +542,18 @@ fn imports_for_file(index: &CodeIndex, path: &str) -> Vec<String> {
                 .unwrap_or_else(|| import.imported.clone())
         })
         .collect()
+}
+
+fn resolved_imports_for_file(index: &CodeIndex, path: &str) -> Vec<String> {
+    let mut imports: Vec<String> = index
+        .imports
+        .iter()
+        .filter(|import| import.source_path == path)
+        .filter_map(|import| import.resolved_path.clone())
+        .collect();
+    imports.sort();
+    imports.dedup();
+    imports
 }
 
 fn references_to_file(index: &CodeIndex, path: &str) -> Vec<String> {
@@ -717,5 +799,109 @@ mod tests {
                 .iter()
                 .any(|test| test.file == "src/auth/session.test.ts")
         );
+    }
+
+    #[test]
+    fn context_adds_imported_files_as_graph_neighbors() {
+        let (temp, index) = fixture_index();
+        let output = build_context(
+            temp.path(),
+            &index,
+            "change createSession behavior",
+            8,
+            2,
+            true,
+        )
+        .unwrap();
+
+        let token_file = output
+            .read_first
+            .iter()
+            .find(|file| file.file == "src/auth/token.ts")
+            .expect("imported token file should be selected");
+
+        assert!(
+            token_file
+                .why
+                .contains(&"referenced by matched file: src/auth/session.ts".to_string())
+        );
+    }
+
+    #[test]
+    fn context_adds_referencing_files_as_graph_neighbors() {
+        let (temp, index) = fixture_index();
+        let output =
+            build_context(temp.path(), &index, "change tokenFor behavior", 8, 2, true).unwrap();
+
+        let session_file = output
+            .read_first
+            .iter()
+            .find(|file| file.file == "src/auth/session.ts")
+            .expect("referencing session file should be selected");
+
+        assert!(
+            session_file
+                .why
+                .contains(&"references matched file: src/auth/token.ts".to_string())
+        );
+    }
+
+    #[test]
+    fn context_keeps_exact_symbol_matches_above_graph_neighbors() {
+        let (temp, index) = fixture_index();
+        let output =
+            build_context(temp.path(), &index, "change tokenFor behavior", 8, 2, true).unwrap();
+
+        assert_eq!(output.read_first[0].file, "src/auth/token.ts");
+    }
+
+    #[test]
+    fn context_populates_graph_hints_for_selected_files() {
+        let (temp, index) = fixture_index();
+        let output = build_context(
+            temp.path(),
+            &index,
+            "change createSession behavior",
+            8,
+            2,
+            true,
+        )
+        .unwrap();
+
+        let session_file = output
+            .read_first
+            .iter()
+            .find(|file| file.file == "src/auth/session.ts")
+            .unwrap();
+
+        assert!(
+            session_file
+                .imports
+                .contains(&"src/auth/token.ts".to_string())
+        );
+        assert!(
+            session_file
+                .referenced_by
+                .contains(&"src/auth/session.test.ts".to_string())
+        );
+    }
+
+    #[test]
+    fn context_deduplicates_graph_reasons() {
+        let (temp, index) = fixture_index();
+        let output = build_context(
+            temp.path(),
+            &index,
+            "change createSession refreshSession behavior",
+            8,
+            2,
+            true,
+        )
+        .unwrap();
+
+        for file in output.read_first {
+            let unique_why: BTreeSet<&String> = file.why.iter().collect();
+            assert_eq!(file.why.len(), unique_why.len());
+        }
     }
 }
