@@ -274,6 +274,52 @@ fn benchmark_returns_grep_vs_context_savings_estimate() {
 }
 
 #[test]
+fn benchmark_suite_reports_recall_and_observed_session_savings() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+    json(&run(&["index", root]));
+
+    let suite_path = repo.path().join("tasks.json");
+    write(
+        &suite_path,
+        r#"{
+  "tasks": [
+    {
+      "id": "auth-session",
+      "task": "change createSession token behavior",
+      "expected_files": ["src/auth/session.ts", "src/auth/token.ts"],
+      "observed": {
+        "baseline": { "grep_commands": 6, "file_reads": 9, "tokens": 12000 },
+        "callsieve": { "grep_commands": 1, "file_reads": 3, "tokens": 4000 }
+      }
+    }
+  ]
+}"#,
+    );
+
+    let suite = json(&run(&[
+        "benchmark-suite",
+        root,
+        suite_path.to_str().unwrap(),
+        "--limit",
+        "5",
+    ]));
+
+    assert_eq!(suite["task_count"], 1);
+    assert_eq!(suite["summary"]["expected_files"], 2);
+    assert_eq!(suite["summary"]["expected_files_found"], 2);
+    assert_eq!(suite["summary"]["expected_file_recall"], 1.0);
+    assert_eq!(suite["summary"]["observed_session"]["token_savings"], 8000);
+    assert_eq!(
+        suite["tasks"][0]["expected_files_found"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+}
+
+#[test]
 fn context_no_snippets_omits_snippets() {
     let repo = fixture_repo();
     let root = repo.path().to_str().unwrap();
@@ -299,6 +345,7 @@ fn missing_index_returns_json_error() {
         vec!["query", root, "where is auth handled?"],
         vec!["context", root, "change createSession token behavior"],
         vec!["benchmark", root, "change createSession token behavior"],
+        vec!["benchmark-suite", root, "tasks.json"],
     ] {
         let output = run(&args);
 

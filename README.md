@@ -27,6 +27,7 @@ callsieve symbol <path> <symbol_name>
 callsieve query <path> "<question>"
 callsieve context <path> "<task>" [--limit <n>] [--snippets-per-file <n>] [--no-snippets]
 callsieve benchmark <path> "<task>" [--limit <n>] [--snippets-per-file <n>] [--no-snippets]
+callsieve benchmark-suite <path> <tasks.json> [--limit <n>] [--snippets-per-file <n>] [--no-snippets]
 callsieve stats <path>
 ```
 
@@ -37,6 +38,7 @@ cargo run -- index .
 cargo run -- query . "where is auth handled?"
 cargo run -- context . "change login token expiry behavior"
 cargo run -- benchmark . "change login token expiry behavior"
+cargo run -- benchmark-suite . benchmarks/tasks.json
 ```
 
 ## What The MVP Does
@@ -163,6 +165,26 @@ cargo run -- benchmark . "change login token expiry behavior"
   }
 }
 ```
+
+## Example Benchmark Suite
+
+```json
+{
+  "tasks": [
+    {
+      "id": "auth-token-expiry",
+      "task": "change login token expiry behavior",
+      "expected_files": ["src/auth/session.ts", "src/auth/token.ts"],
+      "observed": {
+        "baseline": { "grep_commands": 12, "file_reads": 18, "tokens": 42000 },
+        "callsieve": { "grep_commands": 1, "file_reads": 6, "tokens": 9000 }
+      }
+    }
+  ]
+}
+```
+
+`benchmark-suite` reports expected-file recall, aggregate estimated token savings, and optional observed session savings when real agent trace numbers are supplied.
 
 ## Local-First Guarantees
 

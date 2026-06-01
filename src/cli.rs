@@ -1,6 +1,9 @@
-use std::path::{Path, PathBuf};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use serde::Serialize;
 
@@ -79,6 +82,21 @@ pub enum Command {
     Benchmark {
         path: PathBuf,
         task: String,
+
+        #[arg(long, default_value_t = 8)]
+        limit: usize,
+
+        #[arg(long, default_value_t = 2)]
+        snippets_per_file: usize,
+
+        #[arg(long)]
+        no_snippets: bool,
+    },
+
+    /// Run benchmark estimates across a JSON task suite.
+    BenchmarkSuite {
+        path: PathBuf,
+        tasks: PathBuf,
 
         #[arg(long, default_value_t = 8)]
         limit: usize,
@@ -178,6 +196,28 @@ pub fn run() -> Result<()> {
             )?;
             output::json::print(&output)?;
         }
+        Command::BenchmarkSuite {
+            path,
+            tasks,
+            limit,
+            snippets_per_file,
+            no_snippets,
+        } => {
+            let index = store::json_store::load_index(&path)?;
+            let tasks_json = fs::read_to_string(&tasks)
+                .with_context(|| format!("failed to read benchmark suite: {}", tasks.display()))?;
+            let suite: query::BenchmarkSuiteInput = serde_json::from_str(&tasks_json)
+                .with_context(|| format!("failed to parse benchmark suite: {}", tasks.display()))?;
+            let output = query::benchmark_suite(
+                &path,
+                &index,
+                suite,
+                limit,
+                snippets_per_file,
+                !no_snippets,
+            )?;
+            output::json::print(&output)?;
+        }
         Command::Stats { path } => {
             let index = store::json_store::load_index(&path)?;
             let output = query::stats(&path, &index)?;
@@ -228,6 +268,8 @@ mod tests {
         Cli::try_parse_from(["callsieve", "query", ".", "where is auth handled?"]).unwrap();
         Cli::try_parse_from(["callsieve", "context", ".", "change token expiry"]).unwrap();
         Cli::try_parse_from(["callsieve", "benchmark", ".", "change token expiry"]).unwrap();
+        Cli::try_parse_from(["callsieve", "benchmark-suite", ".", "benchmarks/tasks.json"])
+            .unwrap();
         Cli::try_parse_from(["callsieve", "stats", "."]).unwrap();
     }
 }

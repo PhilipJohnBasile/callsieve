@@ -8,7 +8,7 @@ use std::{
 };
 
 use anyhow::Result;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     indexer::language::Language,
@@ -205,6 +205,96 @@ struct SavingsBenchmark {
     estimated_token_savings: isize,
     estimated_token_reduction_percent: f64,
     notes: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BenchmarkSuiteInput {
+    tasks: Vec<BenchmarkSuiteTaskInput>,
+}
+
+#[derive(Debug, Deserialize)]
+struct BenchmarkSuiteTaskInput {
+    id: Option<String>,
+    task: String,
+    #[serde(default)]
+    expected_files: Vec<String>,
+    observed: Option<ObservedSessionComparison>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct ObservedSessionComparison {
+    baseline: ObservedSessionMetrics,
+    callsieve: ObservedSessionMetrics,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct ObservedSessionMetrics {
+    grep_commands: usize,
+    file_reads: usize,
+    tokens: usize,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BenchmarkSuiteOutput {
+    root: String,
+    task_count: usize,
+    tasks: Vec<BenchmarkSuiteTaskOutput>,
+    summary: BenchmarkSuiteSummary,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    warnings: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct BenchmarkSuiteTaskOutput {
+    id: Option<String>,
+    task: String,
+    expected_files: Vec<String>,
+    selected_files: Vec<String>,
+    expected_files_found: Vec<String>,
+    expected_files_missing: Vec<String>,
+    expected_file_recall: f64,
+    benchmark: BenchmarkOutput,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    observed_session: Option<ObservedSessionOutput>,
+}
+
+#[derive(Debug, Serialize)]
+struct BenchmarkSuiteSummary {
+    task_count: usize,
+    tasks_with_all_expected_files: usize,
+    expected_files: usize,
+    expected_files_found: usize,
+    expected_file_recall: f64,
+    total_estimated_token_savings: isize,
+    average_estimated_token_reduction_percent: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    observed_session: Option<ObservedSessionSummary>,
+}
+
+#[derive(Debug, Serialize)]
+struct ObservedSessionOutput {
+    baseline: ObservedSessionMetrics,
+    callsieve: ObservedSessionMetrics,
+    savings: ObservedSessionSavings,
+}
+
+#[derive(Debug, Serialize)]
+struct ObservedSessionSavings {
+    avoided_grep_commands: usize,
+    avoided_file_reads: usize,
+    token_savings: isize,
+    token_reduction_percent: f64,
+}
+
+#[derive(Debug, Serialize)]
+struct ObservedSessionSummary {
+    sessions: usize,
+    baseline_tokens: usize,
+    callsieve_tokens: usize,
+    token_savings: isize,
+    token_reduction_percent: f64,
+    avoided_grep_commands: usize,
+    avoided_file_reads: usize,
 }
 
 #[derive(Debug)]
@@ -590,6 +680,106 @@ pub fn benchmark_context(
     })
 }
 
+pub fn benchmark_suite(
+    root: &Path,
+    index: &CodeIndex,
+    suite: BenchmarkSuiteInput,
+    limit: usize,
+    snippets_per_file: usize,
+    include_snippets: bool,
+) -> Result<BenchmarkSuiteOutput> {
+    let mut task_outputs = Vec::new();
+    let mut expected_files = 0;
+    let mut expected_files_found = 0;
+    let mut tasks_with_all_expected_files = 0;
+    let mut total_estimated_token_savings = 0;
+    let mut total_estimated_reduction_percent = 0.0;
+    let mut observed_summary = ObservedSessionAccumulator::default();
+
+    for task in suite.tasks {
+        let benchmark = benchmark_context(
+            root,
+            index,
+            &task.task,
+            limit,
+            snippets_per_file,
+            include_snippets,
+        )?;
+        let selected_files: Vec<String> = benchmark
+            .callsieve
+            .top_files
+            .iter()
+            .map(|file| file.file.clone())
+            .collect();
+        let selected_set: BTreeSet<&str> = selected_files.iter().map(String::as_str).collect();
+        let expected_files_for_task = task.expected_files.len();
+        let expected_files_found_for_task: Vec<String> = task
+            .expected_files
+            .iter()
+            .filter(|file| selected_set.contains(file.as_str()))
+            .cloned()
+            .collect();
+        let expected_files_missing: Vec<String> = task
+            .expected_files
+            .iter()
+            .filter(|file| !selected_set.contains(file.as_str()))
+            .cloned()
+            .collect();
+        let expected_file_recall =
+            recall(expected_files_found_for_task.len(), expected_files_for_task);
+
+        expected_files += expected_files_for_task;
+        expected_files_found += expected_files_found_for_task.len();
+        if expected_files_for_task > 0 && expected_files_missing.is_empty() {
+            tasks_with_all_expected_files += 1;
+        }
+        total_estimated_token_savings += benchmark.savings.estimated_token_savings;
+        total_estimated_reduction_percent += benchmark.savings.estimated_token_reduction_percent;
+
+        let observed_session = task.observed.map(|observed| {
+            let output = observed_session_output(observed);
+            observed_summary.add(&output);
+            output
+        });
+
+        task_outputs.push(BenchmarkSuiteTaskOutput {
+            id: task.id,
+            task: task.task,
+            expected_files: task.expected_files,
+            selected_files,
+            expected_files_found: expected_files_found_for_task,
+            expected_files_missing,
+            expected_file_recall,
+            benchmark,
+            observed_session,
+        });
+    }
+
+    let task_count = task_outputs.len();
+    let summary = BenchmarkSuiteSummary {
+        task_count,
+        tasks_with_all_expected_files,
+        expected_files,
+        expected_files_found,
+        expected_file_recall: recall(expected_files_found, expected_files),
+        total_estimated_token_savings,
+        average_estimated_token_reduction_percent: if task_count == 0 {
+            0.0
+        } else {
+            total_estimated_reduction_percent / task_count as f64
+        },
+        observed_session: observed_summary.finish(),
+    };
+
+    Ok(BenchmarkSuiteOutput {
+        root: root_label(root),
+        task_count,
+        tasks: task_outputs,
+        summary,
+        warnings: stale_warnings(root, index),
+    })
+}
+
 pub fn stats(root: &Path, index: &CodeIndex) -> Result<StatsOutput> {
     let mut languages = BTreeMap::new();
     for file in &index.files {
@@ -823,6 +1013,83 @@ fn estimate_tokens(text: &str) -> usize {
         0
     } else {
         text.len().div_ceil(4)
+    }
+}
+
+fn recall(found: usize, total: usize) -> f64 {
+    if total == 0 {
+        0.0
+    } else {
+        found as f64 / total as f64
+    }
+}
+
+fn observed_session_output(observed: ObservedSessionComparison) -> ObservedSessionOutput {
+    let token_savings = observed.baseline.tokens as isize - observed.callsieve.tokens as isize;
+    let token_reduction_percent = if observed.baseline.tokens == 0 {
+        0.0
+    } else {
+        (token_savings as f64 / observed.baseline.tokens as f64) * 100.0
+    };
+    let savings = ObservedSessionSavings {
+        avoided_grep_commands: observed
+            .baseline
+            .grep_commands
+            .saturating_sub(observed.callsieve.grep_commands),
+        avoided_file_reads: observed
+            .baseline
+            .file_reads
+            .saturating_sub(observed.callsieve.file_reads),
+        token_savings,
+        token_reduction_percent,
+    };
+
+    ObservedSessionOutput {
+        baseline: observed.baseline,
+        callsieve: observed.callsieve,
+        savings,
+    }
+}
+
+#[derive(Default)]
+struct ObservedSessionAccumulator {
+    sessions: usize,
+    baseline_tokens: usize,
+    callsieve_tokens: usize,
+    avoided_grep_commands: usize,
+    avoided_file_reads: usize,
+}
+
+impl ObservedSessionAccumulator {
+    fn add(&mut self, observed: &ObservedSessionOutput) {
+        self.sessions += 1;
+        self.baseline_tokens += observed.baseline.tokens;
+        self.callsieve_tokens += observed.callsieve.tokens;
+        self.avoided_grep_commands += observed.savings.avoided_grep_commands;
+        self.avoided_file_reads += observed.savings.avoided_file_reads;
+    }
+
+    fn finish(self) -> Option<ObservedSessionSummary> {
+        if self.sessions == 0 {
+            return None;
+        }
+
+        let token_savings = self.baseline_tokens as isize - self.callsieve_tokens as isize;
+        let token_reduction_percent = if self.baseline_tokens == 0 {
+            0.0
+        } else {
+            (token_savings as f64 / self.baseline_tokens as f64) * 100.0
+        };
+
+        Some(ObservedSessionSummary {
+            sessions: self.sessions,
+            baseline_tokens: self.baseline_tokens,
+            callsieve_tokens: self.callsieve_tokens,
+            token_savings,
+            token_reduction_percent,
+            avoided_grep_commands: self.avoided_grep_commands,
+            avoided_file_reads: self.avoided_file_reads,
+        })
     }
 }
 
@@ -1263,6 +1530,47 @@ mod tests {
                 .iter()
                 .any(|file| file.file == "src/auth/session.ts")
         );
+    }
+
+    #[test]
+    fn benchmark_suite_reports_expected_file_recall_and_observed_sessions() {
+        let (temp, index) = fixture_index();
+        let suite = BenchmarkSuiteInput {
+            tasks: vec![BenchmarkSuiteTaskInput {
+                id: Some("auth-session".to_string()),
+                task: "change createSession token behavior".to_string(),
+                expected_files: vec![
+                    "src/auth/session.ts".to_string(),
+                    "src/auth/token.ts".to_string(),
+                ],
+                observed: Some(ObservedSessionComparison {
+                    baseline: ObservedSessionMetrics {
+                        grep_commands: 6,
+                        file_reads: 9,
+                        tokens: 12_000,
+                    },
+                    callsieve: ObservedSessionMetrics {
+                        grep_commands: 1,
+                        file_reads: 3,
+                        tokens: 4_000,
+                    },
+                }),
+            }],
+        };
+
+        let output = benchmark_suite(temp.path(), &index, suite, 8, 2, true).unwrap();
+
+        assert_eq!(output.task_count, 1);
+        assert_eq!(output.summary.expected_files, 2);
+        assert_eq!(output.summary.expected_files_found, 2);
+        assert_eq!(output.summary.expected_file_recall, 1.0);
+        assert_eq!(output.summary.tasks_with_all_expected_files, 1);
+
+        let observed = output.summary.observed_session.unwrap();
+        assert_eq!(observed.sessions, 1);
+        assert_eq!(observed.token_savings, 8_000);
+        assert_eq!(observed.avoided_grep_commands, 5);
+        assert_eq!(observed.avoided_file_reads, 6);
     }
 
     #[test]
