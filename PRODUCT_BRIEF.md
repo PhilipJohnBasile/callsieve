@@ -8,6 +8,12 @@ CallSieve is the local codebase filter for AI coding agents.
 
 Agentic coding tools waste massive context and cost rediscovering codebases through repeated grep, ripgrep, file reads, directory scans, and duplicate exploration.
 
+The keystone observation:
+
+> "Almost all context windows for developer sessions, truly massive percentages, are filled up by grepping. If people came up with a solution for less grepping in projects, that would save a lot of tokens and would probably be worth money."
+>
+> - Microsoft engineer
+
 This makes coding agents:
 - slower
 - more expensive
@@ -97,3 +103,7 @@ CallSieve becomes:
 Most tools help agents generate code.
 
 CallSieve helps agents stop wasting tokens before they generate code.
+
+The product should be judged by one question:
+
+Can it make a coding agent read the right 5 files instead of grepping through 50?

@@ -4,6 +4,14 @@ CallSieve is the local codebase filter for AI coding agents.
 
 It indexes a repository and returns compact, structured context so agents can spend fewer tokens on blind grep, file discovery, repeated reads, and rediscovering project structure.
 
+## Keystone Thesis
+
+> "Almost all context windows for developer sessions, truly massive percentages, are filled up by grepping. If people came up with a solution for less grepping in projects, that would save a lot of tokens and would probably be worth money."
+>
+> - Microsoft engineer
+
+CallSieve exists to turn that observation into infrastructure.
+
 ## Product Promise
 
 Stop paying AI agents to grep your repo.

@@ -7,6 +7,12 @@ CallSieve is a local-first codebase intelligence layer for AI coding agents.
 The core pain:
 Developers are wasting huge percentages of agent context windows on grep, ripgrep, file discovery, repeated file reads, and re-discovering codebase structure.
 
+Keystone thesis:
+
+> "Almost all context windows for developer sessions, truly massive percentages, are filled up by grepping. If people came up with a solution for less grepping in projects, that would save a lot of tokens and would probably be worth money."
+>
+> - Microsoft engineer
+
 The product promise:
 Stop paying AI agents to grep your repo.
 
