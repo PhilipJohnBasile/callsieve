@@ -16,11 +16,20 @@ const SKIPPED_DIRS: &[&str] = &[
     "vendor",
 ];
 
+const SKIPPED_FILES: &[&str] = &[
+    "cargo.lock",
+    "package-lock.json",
+    "pnpm-lock.yaml",
+    "yarn.lock",
+    "deno.lock",
+];
+
 pub fn source_files(root: &Path) -> Result<Vec<PathBuf>> {
     let mut files = Vec::new();
 
     for entry in WalkBuilder::new(root)
         .standard_filters(true)
+        .hidden(false)
         .require_git(false)
         .build()
     {
@@ -42,6 +51,10 @@ pub fn source_files(root: &Path) -> Result<Vec<PathBuf>> {
             continue;
         };
 
+        if is_skipped_file(relative) {
+            continue;
+        }
+
         if Language::from_path(relative).is_some() {
             files.push(relative.to_path_buf());
         }
@@ -60,6 +73,16 @@ fn should_skip(path: &Path) -> bool {
     })
 }
 
+fn is_skipped_file(path: &Path) -> bool {
+    let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+
+    SKIPPED_FILES
+        .iter()
+        .any(|skipped| file_name.eq_ignore_ascii_case(skipped))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -70,11 +93,20 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         fs::write(temp.path().join(".gitignore"), "ignored.ts\n").unwrap();
         fs::write(temp.path().join("kept.ts"), "export function kept() {}\n").unwrap();
+        fs::write(temp.path().join("README.md"), "# Kept docs\n").unwrap();
+        fs::write(
+            temp.path().join("Cargo.toml"),
+            "[package]\nname = \"kept\"\n",
+        )
+        .unwrap();
+        fs::write(temp.path().join("Cargo.lock"), "# lock\n").unwrap();
         fs::write(
             temp.path().join("ignored.ts"),
             "export function ignored() {}\n",
         )
         .unwrap();
+        fs::create_dir_all(temp.path().join(".github/workflows")).unwrap();
+        fs::write(temp.path().join(".github/workflows/ci.yml"), "name: CI\n").unwrap();
         fs::create_dir_all(temp.path().join(".callsieve")).unwrap();
         fs::write(
             temp.path().join(".callsieve/index.ts"),
@@ -84,6 +116,14 @@ mod tests {
 
         let files = source_files(temp.path()).unwrap();
 
-        assert_eq!(files, vec![PathBuf::from("kept.ts")]);
+        assert_eq!(
+            files,
+            vec![
+                PathBuf::from(".github/workflows/ci.yml"),
+                PathBuf::from("Cargo.toml"),
+                PathBuf::from("README.md"),
+                PathBuf::from("kept.ts"),
+            ]
+        );
     }
 }

@@ -15,6 +15,9 @@ use crate::{
     store::{CodeIndex, FileRecord, ReferenceRecord, SymbolRecord},
 };
 
+const MAX_CONTEXT_SYMBOLS_PER_FILE: usize = 8;
+const MAX_CONTEXT_GRAPH_SCORE: i32 = 240;
+
 #[derive(Debug, Serialize)]
 pub struct SymbolsOutput {
     root: String,
@@ -385,6 +388,7 @@ impl ContextCandidate {
         self.best_score = self.best_score.max(score);
 
         if let Some(symbol_id) = symbol_id
+            && self.symbol_ids.len() < MAX_CONTEXT_SYMBOLS_PER_FILE
             && !self.symbol_ids.iter().any(|existing| existing == symbol_id)
         {
             self.symbol_ids.push(symbol_id.to_string());
@@ -399,7 +403,7 @@ impl ContextCandidate {
 
     fn add_graph_boost(&mut self, score: i32, why: String) {
         if self.seen_why.insert(why.clone()) {
-            self.graph_score += score;
+            self.graph_score = (self.graph_score + score).min(MAX_CONTEXT_GRAPH_SCORE);
             self.why.push(why);
         }
     }
@@ -567,7 +571,7 @@ pub fn build_context(
     snippets_per_file: usize,
     include_snippets: bool,
 ) -> Result<ContextOutput> {
-    let candidate_limit = limit.saturating_mul(4);
+    let candidate_limit = limit.saturating_mul(16);
     let ranked = ranker::rank(index, task, candidate_limit);
     let mut grouped: BTreeMap<String, ContextCandidate> = BTreeMap::new();
 

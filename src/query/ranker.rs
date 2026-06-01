@@ -108,6 +108,11 @@ fn score_symbol(
         why.push("config file heuristic".to_string());
     }
 
+    if file.is_config && has_config_intent(query_tokens) {
+        score += 45;
+        why.push("config/dependency intent".to_string());
+    }
+
     if file.size_bytes > 250_000 {
         score -= 20;
         why.push("large file penalty".to_string());
@@ -143,6 +148,28 @@ fn score_file(file: &FileRecord, query: &str, query_tokens: &[String]) -> Option
         why.push(format!("path keyword overlap: {}", overlap.join(", ")));
     }
 
+    let content_terms: BTreeSet<&str> = file.content_terms.iter().map(String::as_str).collect();
+    let content_overlap: Vec<String> = query_tokens
+        .iter()
+        .filter(|token| content_terms.contains(token.as_str()))
+        .take(content_overlap_limit(file))
+        .cloned()
+        .collect();
+    if !content_overlap.is_empty() {
+        let weight = if file.is_config {
+            14
+        } else if file.language.is_code() {
+            8
+        } else {
+            10
+        };
+        score += weight * content_overlap.len() as i32;
+        why.push(format!(
+            "content keyword overlap: {}",
+            content_overlap.join(", ")
+        ));
+    }
+
     if file.is_test
         && query_tokens
             .iter()
@@ -157,6 +184,16 @@ fn score_file(file: &FileRecord, query: &str, query_tokens: &[String]) -> Option
         why.push("config file heuristic".to_string());
     }
 
+    if file.is_config && has_config_intent(query_tokens) {
+        score += 45;
+        why.push("config/dependency intent".to_string());
+    }
+
+    if is_dependency_manifest(file) && has_dependency_manifest_intent(query_tokens) {
+        score += 80;
+        why.push("dependency manifest intent".to_string());
+    }
+
     if file.size_bytes > 250_000 {
         score -= 20;
         why.push("large file penalty".to_string());
@@ -168,6 +205,61 @@ fn score_file(file: &FileRecord, query: &str, query_tokens: &[String]) -> Option
         score,
         why,
     })
+}
+
+const CONFIG_INTENT: &[&str] = &[
+    "build",
+    "ci",
+    "dependencies",
+    "dependency",
+    "package",
+    "setup",
+    "toolchain",
+    "workflow",
+];
+
+const DEPENDENCY_MANIFEST_INTENT: &[&str] = &[
+    "dependencies",
+    "dependency",
+    "package",
+    "setup",
+    "toolchain",
+];
+
+const DEPENDENCY_MANIFESTS: &[&str] = &[
+    "cargo.toml",
+    "package.json",
+    "pyproject.toml",
+    "requirements.txt",
+    "rust-toolchain.toml",
+];
+
+fn has_config_intent(query_tokens: &[String]) -> bool {
+    query_tokens
+        .iter()
+        .any(|token| CONFIG_INTENT.contains(&token.as_str()))
+}
+
+fn has_dependency_manifest_intent(query_tokens: &[String]) -> bool {
+    query_tokens
+        .iter()
+        .any(|token| DEPENDENCY_MANIFEST_INTENT.contains(&token.as_str()))
+}
+
+fn is_dependency_manifest(file: &FileRecord) -> bool {
+    let lower = file.path.to_ascii_lowercase();
+    let name = lower.rsplit('/').next().unwrap_or(lower.as_str());
+    DEPENDENCY_MANIFESTS.contains(&name)
+}
+
+fn content_overlap_limit(file: &FileRecord) -> usize {
+    if file.language.is_code() {
+        6
+    } else if file.is_config {
+        5
+    } else {
+        4
+    }
 }
 
 fn symbol_terms(symbol: &SymbolRecord, file: &FileRecord) -> BTreeSet<String> {

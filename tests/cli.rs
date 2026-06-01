@@ -91,6 +91,77 @@ fn index_writes_local_json_and_stats_cover_languages() {
 }
 
 #[test]
+fn index_includes_docs_configs_and_benchmark_files() {
+    let repo = tempfile::tempdir().unwrap();
+    let root = repo.path();
+    write(
+        root.join("README.md"),
+        "# Agent setup\n\nUse MCP context tools before grep for coding agents.\n",
+    );
+    write(
+        root.join("Cargo.toml"),
+        "[package]\nname = \"demo\"\n\n[dependencies]\ntree-sitter-rust = \"0.24\"\n",
+    );
+    write(
+        root.join("benchmarks/tasks.json"),
+        r#"{"tasks":[{"task":"benchmark suite evidence"}]}"#,
+    );
+    write(root.join(".github/workflows/ci.yml"), "name: CI\n");
+    write(root.join("Cargo.lock"), "# ignored lockfile\n");
+    write(
+        root.join("src/lib.rs"),
+        "pub fn handler() -> bool { true }\n",
+    );
+    let root = root.to_str().unwrap();
+
+    let index = json(&run(&["index", root]));
+    assert_eq!(index["files"], 5);
+
+    let stats = json(&run(&["stats", root]));
+    assert_eq!(stats["languages"]["markdown"], 1);
+    assert_eq!(stats["languages"]["toml"], 1);
+    assert_eq!(stats["languages"]["json"], 1);
+    assert_eq!(stats["languages"]["yaml"], 1);
+    assert_eq!(stats["languages"]["rust"], 1);
+
+    let mcp_context = json(&run(&[
+        "context",
+        root,
+        "add MCP context setup docs for agents",
+        "--limit",
+        "5",
+    ]));
+    assert!(
+        mcp_context["read_first"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|file| file["file"] == "README.md")
+    );
+
+    let dependency_context = json(&run(&[
+        "context",
+        root,
+        "change tree-sitter rust dependency config",
+        "--limit",
+        "5",
+    ]));
+    let cargo_file = dependency_context["read_first"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|file| file["file"] == "Cargo.toml")
+        .expect("dependency manifest should be selected");
+    assert!(
+        cargo_file["why"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|reason| reason == "dependency manifest intent")
+    );
+}
+
+#[test]
 fn symbols_and_symbol_commands_return_indexed_symbols() {
     let repo = fixture_repo();
     let root = repo.path().to_str().unwrap();

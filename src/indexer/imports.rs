@@ -13,6 +13,11 @@ pub fn extract_imports(content: &str, language: Language) -> Vec<RawImport> {
             Language::Rust => extract_rust_import(line, &mut imports),
             Language::Python => extract_python_import(line, &mut imports),
             Language::TypeScript | Language::JavaScript => extract_js_import(line, &mut imports),
+            Language::Markdown
+            | Language::Json
+            | Language::Toml
+            | Language::Yaml
+            | Language::Text => {}
         }
     }
 

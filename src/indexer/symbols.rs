@@ -13,6 +13,10 @@ pub struct RawSymbol {
 }
 
 pub fn extract_symbols(content: &str, language: Language) -> Vec<RawSymbol> {
+    if !language.is_code() {
+        return Vec::new();
+    }
+
     if let Some(symbols) = tree_sitter_symbols::extract_symbols(content, language)
         && !symbols.is_empty()
     {
@@ -51,6 +55,9 @@ fn parse_line(line: &str, language: Language) -> Option<(String, String, String)
         Language::Rust => parse_rust_line(line),
         Language::TypeScript | Language::JavaScript => parse_js_line(line),
         Language::Python => parse_python_line(line),
+        Language::Markdown | Language::Json | Language::Toml | Language::Yaml | Language::Text => {
+            None
+        }
     }
 }
 
@@ -218,6 +225,9 @@ fn estimate_end_line(lines: &[&str], start_index: usize, language: Language) -> 
         Language::Python => estimate_python_end_line(lines, start_index),
         Language::Rust | Language::TypeScript | Language::JavaScript => {
             estimate_curly_end_line(lines, start_index)
+        }
+        Language::Markdown | Language::Json | Language::Toml | Language::Yaml | Language::Text => {
+            start_index + 1
         }
     }
 }

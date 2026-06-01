@@ -18,12 +18,15 @@ pub fn extract_symbols(content: &str, language: Language) -> Option<Vec<RawSymbo
 }
 
 fn parser_language(language: Language) -> Option<tree_sitter::Language> {
-    Some(match language {
-        Language::JavaScript => tree_sitter_javascript::LANGUAGE.into(),
-        Language::TypeScript => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
-        Language::Python => tree_sitter_python::LANGUAGE.into(),
-        Language::Rust => tree_sitter_rust::LANGUAGE.into(),
-    })
+    match language {
+        Language::JavaScript => Some(tree_sitter_javascript::LANGUAGE.into()),
+        Language::TypeScript => Some(tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()),
+        Language::Python => Some(tree_sitter_python::LANGUAGE.into()),
+        Language::Rust => Some(tree_sitter_rust::LANGUAGE.into()),
+        Language::Markdown | Language::Json | Language::Toml | Language::Yaml | Language::Text => {
+            None
+        }
+    }
 }
 
 fn collect_symbols(
@@ -47,6 +50,9 @@ fn symbol_for_node(node: Node<'_>, content: &str, language: Language) -> Option<
         Language::TypeScript | Language::JavaScript => js_symbol_for_node(node, content),
         Language::Python => python_symbol_for_node(node, content),
         Language::Rust => rust_symbol_for_node(node, content),
+        Language::Markdown | Language::Json | Language::Toml | Language::Yaml | Language::Text => {
+            None
+        }
     }
 }
 

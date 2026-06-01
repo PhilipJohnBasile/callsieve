@@ -17,12 +17,12 @@
         "src/cli.rs",
         "src/query/mod.rs",
         "tests/cli.rs",
-        "README.md"
+        "docs/MCP.md"
       ]
     },
     {
       "id": "tree-sitter-symbol-parsing",
-      "task": "improve TypeScript Python and Rust symbol parsing with tree-sitter",
+      "task": "improve TypeScript Python and Rust symbol parsing with tree-sitter dependency setup",
       "expected_files": [
         "src/indexer/tree_sitter_symbols.rs",
         "src/indexer/symbols.rs",

@@ -6,6 +6,7 @@ pub mod tree_sitter_symbols;
 pub mod walker;
 
 use std::{
+    collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
     time::UNIX_EPOCH,
@@ -17,7 +18,7 @@ use crate::store::{CodeIndex, FileRecord, ImportRecord, ReferenceRecord, SymbolR
 
 use self::language::Language;
 
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 
 pub fn build_index(root: &Path) -> Result<CodeIndex> {
     let root = root
@@ -61,31 +62,39 @@ pub fn build_index(root: &Path) -> Result<CodeIndex> {
             is_test: is_test_file(&path_string),
             is_config: is_config_file(&path_string),
             module_path: module_path(&relative_path),
+            content_terms: content_terms(&content, language),
         };
 
-        for symbol in symbols::extract_symbols(&content, language) {
-            symbols.push(SymbolRecord {
-                id: symbol_id(&path_string, symbol.start_line, &symbol.name),
-                file_id: file_id.clone(),
-                name: symbol.name,
-                kind: symbol.kind,
-                language,
-                start_line: symbol.start_line,
-                end_line: symbol.end_line,
-                visibility: symbol.visibility,
-                parent: symbol.parent,
-                signature: symbol.signature,
-                doc: symbol.doc,
-            });
-        }
+        if language.is_code() {
+            for symbol in symbols::extract_symbols(&content, language) {
+                symbols.push(SymbolRecord {
+                    id: symbol_id(&path_string, symbol.start_line, &symbol.name),
+                    file_id: file_id.clone(),
+                    name: symbol.name,
+                    kind: symbol.kind,
+                    language,
+                    start_line: symbol.start_line,
+                    end_line: symbol.end_line,
+                    visibility: symbol.visibility,
+                    parent: symbol.parent,
+                    signature: symbol.signature,
+                    doc: symbol.doc,
+                });
+            }
 
-        for import in imports::extract_imports(&content, language) {
-            imports.push(ImportRecord {
-                file_id: file_id.clone(),
-                source_path: path_string.clone(),
-                resolved_path: resolve_import(&root, &relative_path, language, &import.imported),
-                imported: import.imported,
-            });
+            for import in imports::extract_imports(&content, language) {
+                imports.push(ImportRecord {
+                    file_id: file_id.clone(),
+                    source_path: path_string.clone(),
+                    resolved_path: resolve_import(
+                        &root,
+                        &relative_path,
+                        language,
+                        &import.imported,
+                    ),
+                    imported: import.imported,
+                });
+            }
         }
 
         files.push(file);
@@ -169,8 +178,69 @@ fn is_test_file(path: &str) -> bool {
 }
 
 fn is_config_file(path: &str) -> bool {
-    let file = path.rsplit('/').next().unwrap_or(path).to_ascii_lowercase();
-    file.contains("config") || file == "build.rs"
+    let lower = path.to_ascii_lowercase();
+    let file = lower.rsplit('/').next().unwrap_or(lower.as_str());
+    lower.starts_with(".github/workflows/")
+        || file.contains("config")
+        || matches!(
+            file,
+            "build.rs"
+                | "cargo.toml"
+                | "package.json"
+                | "pyproject.toml"
+                | "requirements.txt"
+                | "rust-toolchain.toml"
+                | "rustfmt.toml"
+                | "clippy.toml"
+        )
+}
+
+fn content_terms(content: &str, language: Language) -> Vec<String> {
+    if language.is_code() {
+        return Vec::new();
+    }
+
+    let mut counts = BTreeMap::new();
+    for token in tokenize_content(content) {
+        *counts.entry(token).or_insert(0usize) += 1;
+    }
+
+    let mut ranked_terms: Vec<(String, usize)> = counts.into_iter().collect();
+    ranked_terms.sort_by(|left, right| right.1.cmp(&left.1).then(left.0.cmp(&right.0)));
+    ranked_terms
+        .into_iter()
+        .take(120)
+        .map(|(term, _)| term)
+        .collect()
+}
+
+fn tokenize_content(input: &str) -> Vec<String> {
+    const STOP_WORDS: &[&str] = &[
+        "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "how", "in", "is", "it",
+        "of", "on", "or", "that", "the", "this", "to", "with",
+    ];
+
+    split_camel_case(input)
+        .split(|character: char| !character.is_ascii_alphanumeric())
+        .map(|token| token.trim().to_ascii_lowercase())
+        .filter(|token| token.len() > 1)
+        .filter(|token| !STOP_WORDS.contains(&token.as_str()))
+        .collect()
+}
+
+fn split_camel_case(input: &str) -> String {
+    let mut output = String::with_capacity(input.len() + 8);
+    let mut previous_lowercase = false;
+
+    for character in input.chars() {
+        if previous_lowercase && character.is_ascii_uppercase() {
+            output.push(' ');
+        }
+        previous_lowercase = character.is_ascii_lowercase() || character.is_ascii_digit();
+        output.push(character);
+    }
+
+    output
 }
 
 fn resolve_import(
@@ -190,6 +260,9 @@ fn resolve_import(
         Language::JavaScript => &["js", "jsx", "ts", "tsx"],
         Language::Python => &["py"],
         Language::Rust => &["rs"],
+        Language::Markdown | Language::Json | Language::Toml | Language::Yaml | Language::Text => {
+            &[]
+        }
     };
 
     resolve_candidate(root, &candidate, extensions).map(|path| path_to_string(&path))
@@ -341,10 +414,15 @@ mod tests {
             "export const token = 'x';\n",
         )
         .unwrap();
+        fs::write(
+            temp.path().join("README.md"),
+            "# Session docs\n\nThe createSession token flow lives in src/session.ts.\n",
+        )
+        .unwrap();
 
         let index = build_index(temp.path()).unwrap();
 
-        assert_eq!(index.files.len(), 2);
+        assert_eq!(index.files.len(), 3);
         assert!(
             index
                 .symbols
@@ -361,5 +439,12 @@ mod tests {
             reference.target_name == "token"
                 && reference.target_path.as_deref() == Some("src/token.ts")
         }));
+        let readme = index
+            .files
+            .iter()
+            .find(|file| file.path == "README.md")
+            .unwrap();
+        assert_eq!(readme.language, Language::Markdown);
+        assert!(readme.content_terms.contains(&"session".to_string()));
     }
 }

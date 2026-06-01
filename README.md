@@ -49,13 +49,15 @@ cargo run -- mcp
 ## What The MVP Does
 
 - walks a repository while respecting common ignore rules
-- detects TypeScript, JavaScript, Python, and Rust source files
+- detects TypeScript, JavaScript, Python, and Rust source files plus agent-relevant docs and config files
 - extracts practical symbols with tree-sitter-backed parsing and deterministic fallbacks
 - extracts imports, references, and calls
+- indexes bounded content terms for Markdown, JSON, TOML, YAML, and text without returning full files
 - stores a local JSON index at `.callsieve/index.json`
 - returns compact JSON for agent consumption
 - ranks matches with deterministic, explainable scoring
 - builds compact read-first context packets for coding tasks
+- boosts package manifests for dependency and setup tasks
 - boosts context with import, caller, and callee proximity
 - provides an `agent-context` wrapper agents can call before grep
 - exposes a minimal MCP stdio server so agents can call CallSieve before grep

@@ -9,6 +9,14 @@ cargo run -- index .
 cargo run -- benchmark-suite . benchmarks/callsieve-real-repo.json
 ```
 
+Latest local run on this repository:
+
+- expected-file recall: `16/16` (`100%`)
+- total estimated token savings: `164864`
+- average estimated token reduction: `82.0%`
+- avoided grep commands: `34`
+- avoided file reads: `53`
+
 The suite output includes:
 
 - `expected_file_recall`: fraction of expected files selected by `callsieve context`

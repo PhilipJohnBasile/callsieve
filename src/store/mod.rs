@@ -29,6 +29,8 @@ pub struct FileRecord {
     pub is_test: bool,
     pub is_config: bool,
     pub module_path: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub content_terms: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
