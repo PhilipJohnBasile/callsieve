@@ -1,0 +1,50 @@
+{
+  "tasks": [
+    {
+      "id": "example-real-session",
+      "task": "change the read-first context packet ranking and selected file output",
+      "expected_files": [
+        "src/query/mod.rs",
+        "src/query/ranker.rs",
+        "tests/cli.rs"
+      ],
+      "session": {
+        "baseline": {
+          "grep_commands": 7,
+          "file_reads": 12,
+          "tokens": 28000,
+          "commands": [
+            "rg context",
+            "rg read_first",
+            "rg ranker",
+            "rg snippet"
+          ],
+          "files_read": [
+            "src/query/mod.rs",
+            "src/query/ranker.rs",
+            "tests/cli.rs"
+          ],
+          "notes": [
+            "Replace these numbers with an actual baseline agent trace."
+          ]
+        },
+        "callsieve": {
+          "grep_commands": 1,
+          "file_reads": 5,
+          "tokens": 9000,
+          "commands": [
+            "callsieve context . \"change the read-first context packet ranking and selected file output\""
+          ],
+          "files_read": [
+            "src/query/mod.rs",
+            "src/query/ranker.rs",
+            "tests/cli.rs"
+          ],
+          "notes": [
+            "Replace these numbers with the matching CallSieve-assisted trace."
+          ]
+        }
+      }
+    }
+  ]
+}

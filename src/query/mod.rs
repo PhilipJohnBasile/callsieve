@@ -245,6 +245,8 @@ struct BenchmarkSuiteTaskInput {
     #[serde(default)]
     expected_files: Vec<String>,
     observed: Option<ObservedSessionComparison>,
+    #[serde(default, alias = "trace")]
+    session: Option<ObservedSessionComparison>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -258,6 +260,12 @@ struct ObservedSessionMetrics {
     grep_commands: usize,
     file_reads: usize,
     tokens: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    commands: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    files_read: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    notes: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -278,6 +286,8 @@ struct BenchmarkSuiteTaskOutput {
     selected_files: Vec<String>,
     expected_files_found: Vec<String>,
     expected_files_missing: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    miss_reasons: Vec<String>,
     expected_file_recall: f64,
     benchmark: BenchmarkOutput,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -288,13 +298,28 @@ struct BenchmarkSuiteTaskOutput {
 struct BenchmarkSuiteSummary {
     task_count: usize,
     tasks_with_all_expected_files: usize,
+    tasks_with_misses: usize,
     expected_files: usize,
     expected_files_found: usize,
+    missed_expected_files: usize,
     expected_file_recall: f64,
     total_estimated_token_savings: isize,
     average_estimated_token_reduction_percent: f64,
+    total_estimated_avoided_grep_commands: usize,
+    total_estimated_avoided_file_reads: usize,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    misses: Vec<BenchmarkSuiteMiss>,
     #[serde(skip_serializing_if = "Option::is_none")]
     observed_session: Option<ObservedSessionSummary>,
+}
+
+#[derive(Debug, Serialize)]
+struct BenchmarkSuiteMiss {
+    id: Option<String>,
+    task: String,
+    missing_files: Vec<String>,
+    selected_files: Vec<String>,
+    reasons: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -725,18 +750,28 @@ pub fn benchmark_suite(
     include_snippets: bool,
 ) -> Result<BenchmarkSuiteOutput> {
     let mut task_outputs = Vec::new();
-    let mut expected_files = 0;
-    let mut expected_files_found = 0;
+    let mut total_expected_files = 0;
+    let mut total_expected_files_found = 0;
     let mut tasks_with_all_expected_files = 0;
     let mut total_estimated_token_savings = 0;
     let mut total_estimated_reduction_percent = 0.0;
+    let mut total_estimated_avoided_grep_commands = 0;
+    let mut total_estimated_avoided_file_reads = 0;
+    let mut misses = Vec::new();
     let mut observed_summary = ObservedSessionAccumulator::default();
 
     for task in suite.tasks {
+        let BenchmarkSuiteTaskInput {
+            id,
+            task,
+            expected_files: task_expected_files,
+            observed,
+            session,
+        } = task;
         let benchmark = benchmark_context(
             root,
             index,
-            &task.task,
+            &task,
             limit,
             snippets_per_file,
             include_snippets,
@@ -748,43 +783,56 @@ pub fn benchmark_suite(
             .map(|file| file.file.clone())
             .collect();
         let selected_set: BTreeSet<&str> = selected_files.iter().map(String::as_str).collect();
-        let expected_files_for_task = task.expected_files.len();
-        let expected_files_found_for_task: Vec<String> = task
-            .expected_files
+        let expected_files_for_task = task_expected_files.len();
+        let expected_files_found_for_task: Vec<String> = task_expected_files
             .iter()
             .filter(|file| selected_set.contains(file.as_str()))
             .cloned()
             .collect();
-        let expected_files_missing: Vec<String> = task
-            .expected_files
+        let expected_files_missing: Vec<String> = task_expected_files
             .iter()
             .filter(|file| !selected_set.contains(file.as_str()))
             .cloned()
             .collect();
         let expected_file_recall =
             recall(expected_files_found_for_task.len(), expected_files_for_task);
+        let miss_reasons =
+            miss_reasons_for(index, &expected_files_missing, &selected_files, &benchmark);
 
-        expected_files += expected_files_for_task;
-        expected_files_found += expected_files_found_for_task.len();
+        total_expected_files += expected_files_for_task;
+        total_expected_files_found += expected_files_found_for_task.len();
         if expected_files_for_task > 0 && expected_files_missing.is_empty() {
             tasks_with_all_expected_files += 1;
         }
         total_estimated_token_savings += benchmark.savings.estimated_token_savings;
         total_estimated_reduction_percent += benchmark.savings.estimated_token_reduction_percent;
+        total_estimated_avoided_grep_commands += benchmark.savings.avoided_grep_commands;
+        total_estimated_avoided_file_reads += benchmark.savings.avoided_file_reads;
 
-        let observed_session = task.observed.map(|observed| {
+        if !expected_files_missing.is_empty() {
+            misses.push(BenchmarkSuiteMiss {
+                id: id.clone(),
+                task: task.clone(),
+                missing_files: expected_files_missing.clone(),
+                selected_files: selected_files.clone(),
+                reasons: miss_reasons.clone(),
+            });
+        }
+
+        let observed_session = session.or(observed).map(|observed| {
             let output = observed_session_output(observed);
             observed_summary.add(&output);
             output
         });
 
         task_outputs.push(BenchmarkSuiteTaskOutput {
-            id: task.id,
-            task: task.task,
-            expected_files: task.expected_files,
+            id,
+            task,
+            expected_files: task_expected_files,
             selected_files,
             expected_files_found: expected_files_found_for_task,
             expected_files_missing,
+            miss_reasons,
             expected_file_recall,
             benchmark,
             observed_session,
@@ -795,15 +843,20 @@ pub fn benchmark_suite(
     let summary = BenchmarkSuiteSummary {
         task_count,
         tasks_with_all_expected_files,
-        expected_files,
-        expected_files_found,
-        expected_file_recall: recall(expected_files_found, expected_files),
+        tasks_with_misses: misses.len(),
+        expected_files: total_expected_files,
+        expected_files_found: total_expected_files_found,
+        missed_expected_files: total_expected_files.saturating_sub(total_expected_files_found),
+        expected_file_recall: recall(total_expected_files_found, total_expected_files),
         total_estimated_token_savings,
         average_estimated_token_reduction_percent: if task_count == 0 {
             0.0
         } else {
             total_estimated_reduction_percent / task_count as f64
         },
+        total_estimated_avoided_grep_commands,
+        total_estimated_avoided_file_reads,
+        misses,
         observed_session: observed_summary.finish(),
     };
 
@@ -833,6 +886,59 @@ pub fn stats(root: &Path, index: &CodeIndex) -> Result<StatsOutput> {
         languages,
         warnings: stale_warnings(root, index),
     })
+}
+
+fn miss_reasons_for(
+    index: &CodeIndex,
+    missing_files: &[String],
+    selected_files: &[String],
+    benchmark: &BenchmarkOutput,
+) -> Vec<String> {
+    if missing_files.is_empty() {
+        return Vec::new();
+    }
+
+    let mut reasons = Vec::new();
+    let indexed_paths: BTreeSet<&str> = index.files.iter().map(|file| file.path.as_str()).collect();
+    let unindexed_files: Vec<&str> = missing_files
+        .iter()
+        .map(String::as_str)
+        .filter(|file| !indexed_paths.contains(file))
+        .collect();
+
+    if !unindexed_files.is_empty() {
+        reasons.push(format!(
+            "expected files are not in the index: {}",
+            unindexed_files.join(", ")
+        ));
+    }
+
+    if selected_files.is_empty() {
+        reasons.push("no CallSieve files were selected".to_string());
+    } else if unindexed_files.len() < missing_files.len()
+        && benchmark.baseline.matched_files > selected_files.len()
+    {
+        reasons.push(format!(
+            "expected file fell outside the selected context limit; selected {} of {} grep-matched files",
+            selected_files.len(),
+            benchmark.baseline.matched_files
+        ));
+    } else if unindexed_files.len() < missing_files.len() {
+        reasons.push(
+            "expected file did not match deterministic symbol, path, keyword, or graph signals"
+                .to_string(),
+        );
+    }
+
+    if benchmark.baseline.matched_files == 0 {
+        reasons.push("baseline grep terms did not match any indexed files".to_string());
+    }
+
+    if benchmark.callsieve.selected_symbols == 0 {
+        reasons.push("selected files had no matching indexed symbols".to_string());
+    }
+
+    reasons
 }
 
 fn file_by_id<'a>(index: &'a CodeIndex, file_id: &str) -> Option<&'a FileRecord> {
@@ -1768,13 +1874,20 @@ mod tests {
                         grep_commands: 6,
                         file_reads: 9,
                         tokens: 12_000,
+                        commands: vec!["rg createSession".to_string()],
+                        files_read: vec!["src/auth/session.ts".to_string()],
+                        notes: Vec::new(),
                     },
                     callsieve: ObservedSessionMetrics {
                         grep_commands: 1,
                         file_reads: 3,
                         tokens: 4_000,
+                        commands: vec!["callsieve context".to_string()],
+                        files_read: vec!["src/auth/session.ts".to_string()],
+                        notes: Vec::new(),
                     },
                 }),
+                session: None,
             }],
         };
 
@@ -1785,6 +1898,8 @@ mod tests {
         assert_eq!(output.summary.expected_files_found, 2);
         assert_eq!(output.summary.expected_file_recall, 1.0);
         assert_eq!(output.summary.tasks_with_all_expected_files, 1);
+        assert_eq!(output.summary.tasks_with_misses, 0);
+        assert!(output.summary.total_estimated_avoided_grep_commands > 0);
 
         let observed = output.summary.observed_session.unwrap();
         assert_eq!(observed.sessions, 1);

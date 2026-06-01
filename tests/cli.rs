@@ -398,9 +398,21 @@ fn benchmark_suite_reports_recall_and_observed_session_savings() {
       "id": "auth-session",
       "task": "change createSession token behavior",
       "expected_files": ["src/auth/session.ts", "src/auth/token.ts"],
-      "observed": {
-        "baseline": { "grep_commands": 6, "file_reads": 9, "tokens": 12000 },
-        "callsieve": { "grep_commands": 1, "file_reads": 3, "tokens": 4000 }
+      "session": {
+        "baseline": {
+          "grep_commands": 6,
+          "file_reads": 9,
+          "tokens": 12000,
+          "commands": ["rg createSession", "rg token"],
+          "files_read": ["src/auth/session.ts", "src/auth/token.ts"]
+        },
+        "callsieve": {
+          "grep_commands": 1,
+          "file_reads": 3,
+          "tokens": 4000,
+          "commands": ["callsieve context"],
+          "files_read": ["src/auth/session.ts"]
+        }
       }
     }
   ]
@@ -419,13 +431,66 @@ fn benchmark_suite_reports_recall_and_observed_session_savings() {
     assert_eq!(suite["summary"]["expected_files"], 2);
     assert_eq!(suite["summary"]["expected_files_found"], 2);
     assert_eq!(suite["summary"]["expected_file_recall"], 1.0);
+    assert_eq!(suite["summary"]["tasks_with_misses"], 0);
+    assert!(
+        suite["summary"]["total_estimated_avoided_grep_commands"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
     assert_eq!(suite["summary"]["observed_session"]["token_savings"], 8000);
+    assert_eq!(
+        suite["tasks"][0]["observed_session"]["baseline"]["commands"][0],
+        "rg createSession"
+    );
     assert_eq!(
         suite["tasks"][0]["expected_files_found"]
             .as_array()
             .unwrap()
             .len(),
         2
+    );
+}
+
+#[test]
+fn benchmark_suite_reports_missed_expected_files() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+    json(&run(&["index", root]));
+
+    let suite_path = repo.path().join("tasks-with-miss.json");
+    write(
+        &suite_path,
+        r#"{
+  "tasks": [
+    {
+      "id": "missing-auth-helper",
+      "task": "change createSession token behavior",
+      "expected_files": ["src/auth/session.ts", "src/auth/missing.ts"]
+    }
+  ]
+}"#,
+    );
+
+    let suite = json(&run(&[
+        "benchmark-suite",
+        root,
+        suite_path.to_str().unwrap(),
+        "--limit",
+        "5",
+    ]));
+
+    assert_eq!(suite["summary"]["tasks_with_misses"], 1);
+    assert_eq!(suite["summary"]["missed_expected_files"], 1);
+    assert_eq!(
+        suite["summary"]["misses"][0]["missing_files"][0],
+        "src/auth/missing.ts"
+    );
+    assert!(
+        !suite["tasks"][0]["miss_reasons"]
+            .as_array()
+            .unwrap()
+            .is_empty()
     );
 }
 

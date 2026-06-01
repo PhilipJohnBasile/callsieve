@@ -1,0 +1,44 @@
+{
+  "tasks": [
+    {
+      "id": "context-packet-ranking",
+      "task": "change the read-first context packet ranking and selected file output",
+      "expected_files": [
+        "src/query/mod.rs",
+        "src/query/ranker.rs",
+        "tests/cli.rs"
+      ]
+    },
+    {
+      "id": "mcp-context-tool",
+      "task": "add an MCP tool that exposes CallSieve context packets to coding agents",
+      "expected_files": [
+        "src/mcp.rs",
+        "src/cli.rs",
+        "src/query/mod.rs",
+        "tests/cli.rs",
+        "README.md"
+      ]
+    },
+    {
+      "id": "tree-sitter-symbol-parsing",
+      "task": "improve TypeScript Python and Rust symbol parsing with tree-sitter",
+      "expected_files": [
+        "src/indexer/tree_sitter_symbols.rs",
+        "src/indexer/symbols.rs",
+        "src/indexer/mod.rs",
+        "Cargo.toml"
+      ]
+    },
+    {
+      "id": "benchmark-suite-evidence",
+      "task": "measure benchmark suite recall token savings and missed expected files",
+      "expected_files": [
+        "src/query/mod.rs",
+        "tests/cli.rs",
+        "README.md",
+        "benchmarks/callsieve-real-repo.json"
+      ]
+    }
+  ]
+}

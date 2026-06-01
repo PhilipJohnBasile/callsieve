@@ -42,6 +42,7 @@ cargo run -- context . "change login token expiry behavior"
 cargo run -- agent-context . "change login token expiry behavior"
 cargo run -- benchmark . "change login token expiry behavior"
 cargo run -- benchmark-suite . benchmarks/tasks.json
+cargo run -- benchmark-suite . benchmarks/callsieve-real-repo.json
 cargo run -- mcp
 ```
 
@@ -205,6 +206,8 @@ cargo run -- mcp
 
 `benchmark-suite` reports expected-file recall, aggregate estimated token savings, and optional observed session savings when real agent trace numbers are supplied.
 
+See [docs/BENCHMARKS.md](docs/BENCHMARKS.md) for the real-repo benchmark pack, session trace format, and miss analysis fields.
+
 ## MCP Integration
 
 `callsieve mcp` runs a stdio JSON-RPC server with these tools:
@@ -215,6 +218,8 @@ cargo run -- mcp
 - `callsieve_benchmark`: estimate grep/read-loop token savings
 
 The MCP server requires an existing `.callsieve/index.json`; it does not rebuild or mutate the index.
+
+See [docs/MCP.md](docs/MCP.md) for Codex, Claude Code, Claude Desktop, Cursor, and Cline setup examples.
 
 ## Local-First Guarantees
 
