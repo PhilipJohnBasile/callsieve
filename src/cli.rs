@@ -60,6 +60,21 @@ pub enum Command {
         no_snippets: bool,
     },
 
+    /// Build a compact read-first packet for a coding task.
+    Context {
+        path: PathBuf,
+        task: String,
+
+        #[arg(long, default_value_t = 8)]
+        limit: usize,
+
+        #[arg(long, default_value_t = 2)]
+        snippets_per_file: usize,
+
+        #[arg(long)]
+        no_snippets: bool,
+    },
+
     /// Show index statistics.
     Stats { path: PathBuf },
 }
@@ -118,6 +133,18 @@ pub fn run() -> Result<()> {
             let output = query::run_query(&path, &index, &question, limit, !no_snippets)?;
             output::json::print(&output)?;
         }
+        Command::Context {
+            path,
+            task,
+            limit,
+            snippets_per_file,
+            no_snippets,
+        } => {
+            let index = store::json_store::load_index(&path)?;
+            let output =
+                query::build_context(&path, &index, &task, limit, snippets_per_file, !no_snippets)?;
+            output::json::print(&output)?;
+        }
         Command::Stats { path } => {
             let index = store::json_store::load_index(&path)?;
             let output = query::stats(&path, &index)?;
@@ -166,6 +193,7 @@ mod tests {
         Cli::try_parse_from(["callsieve", "symbols", "."]).unwrap();
         Cli::try_parse_from(["callsieve", "symbol", ".", "UserService"]).unwrap();
         Cli::try_parse_from(["callsieve", "query", ".", "where is auth handled?"]).unwrap();
+        Cli::try_parse_from(["callsieve", "context", ".", "change token expiry"]).unwrap();
         Cli::try_parse_from(["callsieve", "stats", "."]).unwrap();
     }
 }

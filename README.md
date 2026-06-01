@@ -25,6 +25,7 @@ callsieve index <path>
 callsieve symbols <path>
 callsieve symbol <path> <symbol_name>
 callsieve query <path> "<question>"
+callsieve context <path> "<task>" [--limit <n>] [--snippets-per-file <n>] [--no-snippets]
 callsieve stats <path>
 ```
 
@@ -33,6 +34,7 @@ Example:
 ```bash
 cargo run -- index .
 cargo run -- query . "where is auth handled?"
+cargo run -- context . "change login token expiry behavior"
 ```
 
 ## What The MVP Does
@@ -43,6 +45,7 @@ cargo run -- query . "where is auth handled?"
 - stores a local JSON index at `.callsieve/index.json`
 - returns compact JSON for agent consumption
 - ranks matches with deterministic, explainable scoring
+- builds compact read-first context packets for coding tasks
 
 ## Example Query Output
 
@@ -70,6 +73,51 @@ cargo run -- query . "where is auth handled?"
     "searched_files": 182,
     "matched_files": 7,
     "matched_symbols": 12
+  }
+}
+```
+
+## Example Context Output
+
+```json
+{
+  "task": "change login token expiry behavior",
+  "root": ".",
+  "read_first": [
+    {
+      "rank": 1,
+      "score": 140,
+      "file": "src/auth/session.ts",
+      "language": "typescript",
+      "symbols": [
+        {
+          "name": "createSession",
+          "kind": "function",
+          "lines": [12, 48],
+          "visibility": "exported",
+          "signature": "export function createSession(...)"
+        }
+      ],
+      "snippets": [
+        {
+          "lines": [12, 30],
+          "text": "export function createSession(...) { ... }"
+        }
+      ],
+      "related_tests": [
+        {
+          "file": "src/auth/session.test.ts",
+          "symbols": ["createSession returns token-backed session"]
+        }
+      ],
+      "why": ["exact symbol match: createSession", "keyword overlap: auth, session"]
+    }
+  ],
+  "stats": {
+    "candidate_matches": 30,
+    "selected_files": 5,
+    "selected_symbols": 8,
+    "related_tests": 2
   }
 }
 ```
@@ -110,4 +158,5 @@ Embeddings, richer call graphs, MCP, LSP, Git history, and long-term memory are 
 ```bash
 cargo fmt --check
 cargo test
+cargo clippy --all-targets -- -D warnings
 ```

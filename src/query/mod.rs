@@ -107,6 +107,86 @@ struct QueryStats {
 }
 
 #[derive(Debug, Serialize)]
+pub struct ContextOutput {
+    task: String,
+    root: String,
+    read_first: Vec<ContextFile>,
+    stats: ContextStats,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    warnings: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct ContextFile {
+    rank: usize,
+    score: i32,
+    file: String,
+    language: Language,
+    symbols: Vec<QuerySymbol>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    snippets: Vec<Snippet>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    related_tests: Vec<RelatedTest>,
+    why: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct ContextStats {
+    candidate_matches: usize,
+    selected_files: usize,
+    selected_symbols: usize,
+    related_tests: usize,
+}
+
+#[derive(Debug)]
+struct ContextCandidate {
+    file_id: String,
+    best_score: i32,
+    first_rank: usize,
+    symbol_ids: Vec<String>,
+    why: Vec<String>,
+    seen_why: BTreeSet<String>,
+}
+
+impl ContextCandidate {
+    fn new(file_id: String, score: i32, first_rank: usize) -> Self {
+        Self {
+            file_id,
+            best_score: score,
+            first_rank,
+            symbol_ids: Vec::new(),
+            why: Vec::new(),
+            seen_why: BTreeSet::new(),
+        }
+    }
+
+    fn score(&self) -> i32 {
+        let bonus_count = self
+            .symbol_ids
+            .len()
+            .saturating_sub(1)
+            .min((i32::MAX / 5) as usize) as i32;
+        self.best_score + (bonus_count * 5)
+    }
+
+    fn add_match(&mut self, score: i32, symbol_id: Option<&str>, why: &[String]) {
+        self.best_score = self.best_score.max(score);
+
+        if let Some(symbol_id) = symbol_id
+            && !self.symbol_ids.iter().any(|existing| existing == symbol_id)
+        {
+            self.symbol_ids.push(symbol_id.to_string());
+        }
+
+        for reason in why {
+            if self.seen_why.insert(reason.clone()) {
+                self.why.push(reason.clone());
+            }
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
 pub struct StatsOutput {
     root: String,
     files: usize,
@@ -256,6 +336,104 @@ pub fn run_query(
     })
 }
 
+pub fn build_context(
+    root: &Path,
+    index: &CodeIndex,
+    task: &str,
+    limit: usize,
+    snippets_per_file: usize,
+    include_snippets: bool,
+) -> Result<ContextOutput> {
+    let candidate_limit = limit.saturating_mul(4);
+    let ranked = ranker::rank(index, task, candidate_limit);
+    let mut grouped: BTreeMap<String, ContextCandidate> = BTreeMap::new();
+
+    for (rank_index, ranked_match) in ranked.iter().enumerate() {
+        let entry = grouped
+            .entry(ranked_match.file_id.clone())
+            .or_insert_with(|| {
+                ContextCandidate::new(ranked_match.file_id.clone(), ranked_match.score, rank_index)
+            });
+        entry.add_match(
+            ranked_match.score,
+            ranked_match.symbol_id.as_deref(),
+            &ranked_match.why,
+        );
+    }
+
+    let mut candidates: Vec<ContextCandidate> = grouped.into_values().collect();
+    candidates.sort_by(|left, right| {
+        right
+            .score()
+            .cmp(&left.score())
+            .then(left.first_rank.cmp(&right.first_rank))
+            .then(left.file_id.cmp(&right.file_id))
+    });
+
+    let mut selected_symbols = 0;
+    let mut selected_related_tests = 0;
+    let read_first: Vec<ContextFile> = candidates
+        .into_iter()
+        .take(limit)
+        .enumerate()
+        .filter_map(|(rank_index, candidate)| {
+            let file = file_by_id(index, &candidate.file_id)?;
+            let symbol_records: Vec<&SymbolRecord> = candidate
+                .symbol_ids
+                .iter()
+                .filter_map(|symbol_id| symbol_by_id(index, symbol_id))
+                .collect();
+
+            let symbols: Vec<QuerySymbol> = symbol_records
+                .iter()
+                .map(|symbol| QuerySymbol {
+                    name: symbol.name.clone(),
+                    kind: symbol.kind.clone(),
+                    lines: [symbol.start_line, symbol.end_line],
+                    visibility: symbol.visibility.clone(),
+                    signature: symbol.signature.clone(),
+                })
+                .collect();
+
+            let snippets = context_snippets(
+                root,
+                file,
+                &symbol_records,
+                snippets_per_file,
+                include_snippets,
+            );
+            let related_tests = related_tests(index, file);
+
+            selected_symbols += symbols.len();
+            selected_related_tests += related_tests.len();
+
+            Some(ContextFile {
+                rank: rank_index + 1,
+                score: candidate.score(),
+                file: file.path.clone(),
+                language: file.language,
+                symbols,
+                snippets,
+                related_tests,
+                why: candidate.why,
+            })
+        })
+        .collect();
+
+    Ok(ContextOutput {
+        task: task.to_string(),
+        root: root_label(root),
+        stats: ContextStats {
+            candidate_matches: ranked.len(),
+            selected_files: read_first.len(),
+            selected_symbols,
+            related_tests: selected_related_tests,
+        },
+        read_first,
+        warnings: stale_warnings(root, index),
+    })
+}
+
 pub fn stats(root: &Path, index: &CodeIndex) -> Result<StatsOutput> {
     let mut languages = BTreeMap::new();
     for file in &index.files {
@@ -276,6 +454,10 @@ pub fn stats(root: &Path, index: &CodeIndex) -> Result<StatsOutput> {
 
 fn file_by_id<'a>(index: &'a CodeIndex, file_id: &str) -> Option<&'a FileRecord> {
     index.files.iter().find(|file| file.id == file_id)
+}
+
+fn symbol_by_id<'a>(index: &'a CodeIndex, symbol_id: &str) -> Option<&'a SymbolRecord> {
+    index.symbols.iter().find(|symbol| symbol.id == symbol_id)
 }
 
 fn imports_for_file(index: &CodeIndex, path: &str) -> Vec<String> {
@@ -325,6 +507,32 @@ fn snippet_for(root: &Path, file: &FileRecord, symbol: Option<&SymbolRecord>) ->
         lines: [start, end],
         text,
     })
+}
+
+fn context_snippets(
+    root: &Path,
+    file: &FileRecord,
+    symbols: &[&SymbolRecord],
+    snippets_per_file: usize,
+    include_snippets: bool,
+) -> Vec<Snippet> {
+    if !include_snippets || snippets_per_file == 0 {
+        return Vec::new();
+    }
+
+    let mut snippets: Vec<Snippet> = symbols
+        .iter()
+        .take(snippets_per_file)
+        .filter_map(|symbol| snippet_for(root, file, Some(*symbol)))
+        .collect();
+
+    if snippets.is_empty()
+        && let Some(snippet) = snippet_for(root, file, None)
+    {
+        snippets.push(snippet);
+    }
+
+    snippets
 }
 
 fn related_tests(index: &CodeIndex, file: &FileRecord) -> Vec<RelatedTest> {
@@ -402,6 +610,33 @@ mod tests {
     use crate::indexer;
     use std::fs;
 
+    fn write(path: impl AsRef<Path>, content: &str) {
+        let path = path.as_ref();
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(path, content).unwrap();
+    }
+
+    fn fixture_index() -> (tempfile::TempDir, CodeIndex) {
+        let temp = tempfile::tempdir().unwrap();
+        write(
+            temp.path().join("src/auth/session.ts"),
+            "import { tokenFor } from './token';\n\nexport function createSession(userId: string) {\n  return tokenFor(userId);\n}\n\nexport function refreshSession(userId: string) {\n  return createSession(userId);\n}\n",
+        );
+        write(
+            temp.path().join("src/auth/token.ts"),
+            "export function tokenFor(userId: string) {\n  return `token:${userId}`;\n}\n",
+        );
+        write(
+            temp.path().join("src/auth/session.test.ts"),
+            "import { createSession } from './session';\n\ntest('createSession returns token-backed session', () => {\n  createSession('demo');\n});\n",
+        );
+
+        let index = indexer::build_index(temp.path()).unwrap();
+        (temp, index)
+    }
+
     #[test]
     fn query_ranks_exact_symbol_above_keyword_match() {
         let temp = tempfile::tempdir().unwrap();
@@ -422,6 +657,65 @@ mod tests {
         assert_eq!(
             output.matches[0].symbol.as_ref().unwrap().name,
             "createSession"
+        );
+    }
+
+    #[test]
+    fn context_groups_symbol_matches_by_file_and_deduplicates_why() {
+        let (temp, index) = fixture_index();
+        let output = build_context(
+            temp.path(),
+            &index,
+            "change createSession refreshSession session token behavior",
+            8,
+            2,
+            true,
+        )
+        .unwrap();
+
+        let first = &output.read_first[0];
+        assert_eq!(first.file, "src/auth/session.ts");
+        assert!(first.symbols.len() >= 2);
+
+        let unique_why: BTreeSet<&String> = first.why.iter().collect();
+        assert_eq!(first.why.len(), unique_why.len());
+    }
+
+    #[test]
+    fn context_respects_limit_and_snippets_per_file() {
+        let (temp, index) = fixture_index();
+        let output = build_context(
+            temp.path(),
+            &index,
+            "change createSession refreshSession token behavior",
+            1,
+            1,
+            true,
+        )
+        .unwrap();
+
+        assert_eq!(output.read_first.len(), 1);
+        assert_eq!(output.read_first[0].snippets.len(), 1);
+    }
+
+    #[test]
+    fn context_includes_related_tests_for_matching_fixture_names() {
+        let (temp, index) = fixture_index();
+        let output = build_context(
+            temp.path(),
+            &index,
+            "change createSession token behavior",
+            8,
+            2,
+            true,
+        )
+        .unwrap();
+
+        assert!(
+            output.read_first[0]
+                .related_tests
+                .iter()
+                .any(|test| test.file == "src/auth/session.test.ts")
         );
     }
 }

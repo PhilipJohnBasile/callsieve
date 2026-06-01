@@ -144,18 +144,73 @@ fn query_ranks_exact_code_context_and_returns_snippet() {
 }
 
 #[test]
+fn context_returns_read_first_packet_for_agent_task() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+    json(&run(&["index", root]));
+
+    let context = json(&run(&[
+        "context",
+        root,
+        "change createSession token behavior",
+        "--limit",
+        "5",
+    ]));
+
+    let first = &context["read_first"][0];
+    assert_eq!(first["file"], "src/auth/session.ts");
+    assert!(!first["symbols"].as_array().unwrap().is_empty());
+    assert!(
+        first["snippets"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("createSession")
+    );
+    assert!(
+        first["related_tests"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|test| test["file"] == "src/auth/session.test.ts")
+    );
+    assert!(!first["why"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn context_no_snippets_omits_snippets() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+    json(&run(&["index", root]));
+
+    let context = json(&run(&[
+        "context",
+        root,
+        "change createSession token behavior",
+        "--no-snippets",
+    ]));
+
+    assert!(context["read_first"][0].get("snippets").is_none());
+}
+
+#[test]
 fn missing_index_returns_json_error() {
     let repo = tempfile::tempdir().unwrap();
     let root = repo.path().to_str().unwrap();
 
-    let output = run(&["stats", root]);
+    for args in [
+        vec!["stats", root],
+        vec!["query", root, "where is auth handled?"],
+        vec!["context", root, "change createSession token behavior"],
+    ] {
+        let output = run(&args);
 
-    assert!(!output.status.success());
-    let error: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert!(
-        error["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("run `callsieve index")
-    );
+        assert!(!output.status.success());
+        let error: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert!(
+            error["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("run `callsieve index")
+        );
+    }
 }
