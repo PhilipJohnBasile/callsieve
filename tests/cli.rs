@@ -107,11 +107,13 @@ fn symbols_and_symbol_commands_return_indexed_symbols() {
     let symbol = json(&run(&["symbol", root, "createSession", "--limit", "3"]));
     assert_eq!(symbol["matches"][0]["name"], "createSession");
     assert_eq!(symbol["matches"][0]["file"], "src/auth/session.ts");
-    assert!(symbol["matches"][0]["imports"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|import| import == "src/auth/token.ts"));
+    assert!(
+        symbol["matches"][0]["imports"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|import| import == "src/auth/token.ts")
+    );
 }
 
 #[test]
@@ -132,10 +134,12 @@ fn query_ranks_exact_code_context_and_returns_snippet() {
     assert_eq!(first["file"], "src/auth/session.ts");
     assert_eq!(first["symbol"]["name"], "createSession");
     assert!(first["score"].as_i64().unwrap() > 0);
-    assert!(first["snippet"]["text"]
-        .as_str()
-        .unwrap()
-        .contains("createSession"));
+    assert!(
+        first["snippet"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("createSession")
+    );
     assert!(!first["why"].as_array().unwrap().is_empty());
 }
 
@@ -148,8 +152,10 @@ fn missing_index_returns_json_error() {
 
     assert!(!output.status.success());
     let error: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert!(error["error"]["message"]
-        .as_str()
-        .unwrap()
-        .contains("run `callsieve index"));
+    assert!(
+        error["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("run `callsieve index")
+    );
 }

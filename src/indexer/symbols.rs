@@ -73,10 +73,10 @@ fn strip_rust_visibility(line: &str) -> &str {
         return rest.trim_start();
     }
 
-    if line.starts_with("pub(") {
-        if let Some(end) = line.find(')') {
-            return line[end + 1..].trim_start();
-        }
+    if line.starts_with("pub(")
+        && let Some(end) = line.find(')')
+    {
+        return line[end + 1..].trim_start();
     }
 
     line
@@ -112,14 +112,14 @@ fn parse_js_line(line: &str) -> Option<(String, String, String)> {
     }
 
     for prefix in ["const ", "let ", "var "] {
-        if let Some(after_prefix) = rest.strip_prefix(prefix) {
-            if after_prefix.contains("=>") || after_prefix.contains("function") {
-                return Some((
-                    take_identifier(after_prefix)?,
-                    "function".to_string(),
-                    visibility.to_string(),
-                ));
-            }
+        if let Some(after_prefix) = rest.strip_prefix(prefix)
+            && (after_prefix.contains("=>") || after_prefix.contains("function"))
+        {
+            return Some((
+                take_identifier(after_prefix)?,
+                "function".to_string(),
+                visibility.to_string(),
+            ));
         }
     }
 

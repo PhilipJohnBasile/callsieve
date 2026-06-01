@@ -1,7 +1,8 @@
 [package]
 name = "callsieve"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
+rust-version = "1.96"
 description = "Local-first codebase retrieval for AI coding agents"
 license = "MIT"
 

@@ -67,10 +67,10 @@ fn extract_js_import(line: &str, imports: &mut Vec<RawImport>) {
         }
     }
 
-    if let Some(require_index) = trimmed.find("require(") {
-        if let Some(imported) = first_quoted(&trimmed[require_index..]) {
-            imports.push(RawImport { imported });
-        }
+    if let Some(require_index) = trimmed.find("require(")
+        && let Some(imported) = first_quoted(&trimmed[require_index..])
+    {
+        imports.push(RawImport { imported });
     }
 }
 

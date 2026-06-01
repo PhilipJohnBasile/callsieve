@@ -241,13 +241,17 @@ mod tests {
         let index = build_index(temp.path()).unwrap();
 
         assert_eq!(index.files.len(), 2);
-        assert!(index
-            .symbols
-            .iter()
-            .any(|symbol| symbol.name == "createSession"));
-        assert!(index
-            .imports
-            .iter()
-            .any(|import| import.resolved_path.as_deref() == Some("src/token.ts")));
+        assert!(
+            index
+                .symbols
+                .iter()
+                .any(|symbol| symbol.name == "createSession")
+        );
+        assert!(
+            index
+                .imports
+                .iter()
+                .any(|import| import.resolved_path.as_deref() == Some("src/token.ts"))
+        );
     }
 }
