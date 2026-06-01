@@ -1,4 +1,4 @@
-use super::language::Language;
+use super::{language::Language, tree_sitter_symbols};
 
 #[derive(Debug, Clone)]
 pub struct RawSymbol {
@@ -13,6 +13,16 @@ pub struct RawSymbol {
 }
 
 pub fn extract_symbols(content: &str, language: Language) -> Vec<RawSymbol> {
+    if let Some(symbols) = tree_sitter_symbols::extract_symbols(content, language)
+        && !symbols.is_empty()
+    {
+        return symbols;
+    }
+
+    extract_symbols_fallback(content, language)
+}
+
+fn extract_symbols_fallback(content: &str, language: Language) -> Vec<RawSymbol> {
     let lines: Vec<&str> = content.lines().collect();
     let mut symbols = Vec::new();
 

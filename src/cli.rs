@@ -120,6 +120,9 @@ pub enum Command {
         no_snippets: bool,
     },
 
+    /// Run a minimal MCP stdio server exposing CallSieve tools.
+    Mcp,
+
     /// Show index statistics.
     Stats { path: PathBuf },
 }
@@ -253,6 +256,9 @@ pub fn run() -> Result<()> {
             )?;
             output::json::print(&output)?;
         }
+        Command::Mcp => {
+            crate::mcp::run()?;
+        }
         Command::Stats { path } => {
             let index = store::json_store::load_index(&path)?;
             let output = query::stats(&path, &index)?;
@@ -306,6 +312,7 @@ mod tests {
         Cli::try_parse_from(["callsieve", "benchmark", ".", "change token expiry"]).unwrap();
         Cli::try_parse_from(["callsieve", "benchmark-suite", ".", "benchmarks/tasks.json"])
             .unwrap();
+        Cli::try_parse_from(["callsieve", "mcp"]).unwrap();
         Cli::try_parse_from(["callsieve", "stats", "."]).unwrap();
     }
 }

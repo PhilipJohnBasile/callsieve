@@ -2,6 +2,7 @@ pub mod imports;
 pub mod language;
 pub mod references;
 pub mod symbols;
+pub mod tree_sitter_symbols;
 pub mod walker;
 
 use std::{

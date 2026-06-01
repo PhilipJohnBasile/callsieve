@@ -1,5 +1,6 @@
 mod cli;
 mod indexer;
+mod mcp;
 mod output;
 mod query;
 mod store;

@@ -29,6 +29,7 @@ callsieve context <path> "<task>" [--limit <n>] [--snippets-per-file <n>] [--no-
 callsieve agent-context <path> "<task>" [--limit <n>] [--snippets-per-file <n>]
 callsieve benchmark <path> "<task>" [--limit <n>] [--snippets-per-file <n>] [--no-snippets]
 callsieve benchmark-suite <path> <tasks.json> [--limit <n>] [--snippets-per-file <n>] [--no-snippets]
+callsieve mcp
 callsieve stats <path>
 ```
 
@@ -41,19 +42,22 @@ cargo run -- context . "change login token expiry behavior"
 cargo run -- agent-context . "change login token expiry behavior"
 cargo run -- benchmark . "change login token expiry behavior"
 cargo run -- benchmark-suite . benchmarks/tasks.json
+cargo run -- mcp
 ```
 
 ## What The MVP Does
 
 - walks a repository while respecting common ignore rules
 - detects TypeScript, JavaScript, Python, and Rust source files
-- extracts practical first-pass symbols, imports, references, and calls
+- extracts practical symbols with tree-sitter-backed parsing and deterministic fallbacks
+- extracts imports, references, and calls
 - stores a local JSON index at `.callsieve/index.json`
 - returns compact JSON for agent consumption
 - ranks matches with deterministic, explainable scoring
 - builds compact read-first context packets for coding tasks
 - boosts context with import, caller, and callee proximity
 - provides an `agent-context` wrapper agents can call before grep
+- exposes a minimal MCP stdio server so agents can call CallSieve before grep
 - estimates context-packet token savings versus a naive grep/read loop
 
 ## Example Query Output
@@ -201,12 +205,23 @@ cargo run -- benchmark-suite . benchmarks/tasks.json
 
 `benchmark-suite` reports expected-file recall, aggregate estimated token savings, and optional observed session savings when real agent trace numbers are supplied.
 
+## MCP Integration
+
+`callsieve mcp` runs a stdio JSON-RPC server with these tools:
+
+- `callsieve_context`: build the compact read-first packet for a coding task
+- `callsieve_symbol`: find indexed symbols with import and reference hints
+- `callsieve_stats`: inspect index coverage
+- `callsieve_benchmark`: estimate grep/read-loop token savings
+
+The MCP server requires an existing `.callsieve/index.json`; it does not rebuild or mutate the index.
+
 ## Local-First Guarantees
 
 - no cloud services
 - no API keys
 - no proprietary code leaves the machine
-- no SaaS app, auth system, web dashboard, vector DB, or MCP server in the MVP
+- no SaaS app, auth system, web dashboard, or vector DB in the MVP
 
 ## Retrieval Model
 
@@ -230,7 +245,7 @@ The MVP uses deterministic ranking first:
 - likely related tests
 - direct import neighbors where available
 
-Embeddings, richer call graphs, MCP, LSP, Git history, and long-term memory are later phases.
+Embeddings, richer call graphs, LSP, Git history, and long-term memory are later phases.
 
 ## Development
 
