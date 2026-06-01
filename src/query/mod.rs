@@ -154,6 +154,59 @@ struct ContextStats {
     related_tests: usize,
 }
 
+#[derive(Debug, Serialize)]
+pub struct BenchmarkOutput {
+    task: String,
+    root: String,
+    estimator: String,
+    baseline: BaselineBenchmark,
+    callsieve: CallsieveBenchmark,
+    savings: SavingsBenchmark,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    warnings: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct BaselineBenchmark {
+    strategy: String,
+    grep_terms: Vec<String>,
+    grep_commands: usize,
+    matched_files: usize,
+    matched_lines: usize,
+    estimated_search_result_tokens: usize,
+    estimated_read_tokens: usize,
+    estimated_total_tokens: usize,
+    matched_files_sample: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct CallsieveBenchmark {
+    strategy: String,
+    selected_files: usize,
+    selected_symbols: usize,
+    related_tests: usize,
+    packet_bytes: usize,
+    estimated_packet_tokens: usize,
+    top_files: Vec<BenchmarkContextFile>,
+}
+
+#[derive(Debug, Serialize)]
+struct BenchmarkContextFile {
+    file: String,
+    score: i32,
+    risk: String,
+    why: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct SavingsBenchmark {
+    avoided_grep_commands: usize,
+    avoided_file_reads: usize,
+    estimated_token_savings: isize,
+    estimated_token_reduction_percent: f64,
+    notes: Vec<String>,
+}
+
 #[derive(Debug)]
 struct ContextCandidate {
     file_id: String,
@@ -466,6 +519,77 @@ pub fn build_context(
     })
 }
 
+pub fn benchmark_context(
+    root: &Path,
+    index: &CodeIndex,
+    task: &str,
+    limit: usize,
+    snippets_per_file: usize,
+    include_snippets: bool,
+) -> Result<BenchmarkOutput> {
+    let baseline = baseline_benchmark(root, index, task);
+    let context = build_context(
+        root,
+        index,
+        task,
+        limit,
+        snippets_per_file,
+        include_snippets,
+    )?;
+    let packet = serde_json::to_string(&context)?;
+    let packet_tokens = estimate_tokens(&packet);
+    let top_files = context
+        .read_first
+        .iter()
+        .map(|file| BenchmarkContextFile {
+            file: file.file.clone(),
+            score: file.score,
+            risk: file.blast_radius.risk.clone(),
+            why: file.why.iter().take(3).cloned().collect(),
+        })
+        .collect();
+    let callsieve = CallsieveBenchmark {
+        strategy: "callsieve context packet".to_string(),
+        selected_files: context.stats.selected_files,
+        selected_symbols: context.stats.selected_symbols,
+        related_tests: context.stats.related_tests,
+        packet_bytes: packet.len(),
+        estimated_packet_tokens: packet_tokens,
+        top_files,
+    };
+
+    let token_savings =
+        baseline.estimated_total_tokens as isize - callsieve.estimated_packet_tokens as isize;
+    let reduction_percent = if baseline.estimated_total_tokens == 0 {
+        0.0
+    } else {
+        (token_savings as f64 / baseline.estimated_total_tokens as f64) * 100.0
+    };
+    let savings = SavingsBenchmark {
+        avoided_grep_commands: baseline.grep_commands.saturating_sub(1),
+        avoided_file_reads: baseline
+            .matched_files
+            .saturating_sub(callsieve.selected_files),
+        estimated_token_savings: token_savings,
+        estimated_token_reduction_percent: reduction_percent,
+        notes: vec![
+            "Estimates use one token per four UTF-8 bytes.".to_string(),
+            "Baseline simulates grepping task terms, then reading every matched file.".to_string(),
+            "Callsieve cost is the serialized context packet for the same task.".to_string(),
+        ],
+    };
+
+    Ok(BenchmarkOutput {
+        task: task.to_string(),
+        root: root_label(root),
+        estimator: "local deterministic token estimate".to_string(),
+        baseline,
+        callsieve,
+        savings,
+        warnings: context.warnings,
+    })
+}
+
 pub fn stats(root: &Path, index: &CodeIndex) -> Result<StatsOutput> {
     let mut languages = BTreeMap::new();
     for file in &index.files {
@@ -602,6 +726,103 @@ fn blast_radius_for(
         referenced_by: referenced_by.to_vec(),
         tests,
         risk: risk.to_string(),
+    }
+}
+
+fn baseline_benchmark(root: &Path, index: &CodeIndex, task: &str) -> BaselineBenchmark {
+    let terms = benchmark_terms(task);
+    let mut matched_files = Vec::new();
+    let mut matched_lines = 0;
+    let mut search_result_tokens = 0;
+    let mut read_tokens = 0;
+
+    for file in &index.files {
+        let Ok(content) = fs::read_to_string(root.join(&file.path)) else {
+            continue;
+        };
+        let mut file_matched_lines = 0;
+        let mut file_search_tokens = 0;
+
+        for (line_index, line) in content.lines().enumerate() {
+            let line_lower = line.to_ascii_lowercase();
+            if terms.iter().any(|term| line_lower.contains(term)) {
+                file_matched_lines += 1;
+                let result_line = format!("{}:{}:{}", file.path, line_index + 1, line.trim());
+                file_search_tokens += estimate_tokens(&result_line);
+            }
+        }
+
+        if file_matched_lines > 0 {
+            matched_files.push(file.path.clone());
+            matched_lines += file_matched_lines;
+            search_result_tokens += file_search_tokens;
+            read_tokens += estimate_tokens(&content);
+        }
+    }
+
+    matched_files.sort();
+    let matched_files_sample = matched_files.iter().take(10).cloned().collect();
+
+    BaselineBenchmark {
+        strategy: "naive grep term scan plus full matched-file reads".to_string(),
+        grep_terms: terms.clone(),
+        grep_commands: terms.len(),
+        matched_files: matched_files.len(),
+        matched_lines,
+        estimated_search_result_tokens: search_result_tokens,
+        estimated_read_tokens: read_tokens,
+        estimated_total_tokens: search_result_tokens + read_tokens,
+        matched_files_sample,
+    }
+}
+
+fn benchmark_terms(task: &str) -> Vec<String> {
+    let stopwords = BTreeSet::from([
+        "about",
+        "behavior",
+        "change",
+        "code",
+        "file",
+        "find",
+        "fix",
+        "for",
+        "from",
+        "handled",
+        "how",
+        "implement",
+        "make",
+        "the",
+        "this",
+        "update",
+        "what",
+        "where",
+        "with",
+    ]);
+    let mut terms: Vec<String> = formatter::tokenize(task)
+        .into_iter()
+        .filter(|term| term.len() >= 3 && !stopwords.contains(term.as_str()))
+        .collect();
+
+    terms.sort();
+    terms.dedup();
+
+    if terms.is_empty() {
+        terms = formatter::tokenize(task)
+            .into_iter()
+            .filter(|term| term.len() >= 2)
+            .collect();
+        terms.sort();
+        terms.dedup();
+    }
+
+    terms
+}
+
+fn estimate_tokens(text: &str) -> usize {
+    if text.is_empty() {
+        0
+    } else {
+        text.len().div_ceil(4)
     }
 }
 
@@ -998,6 +1219,50 @@ mod tests {
 
         assert_eq!(shared_file.blast_radius.risk, "high");
         assert_eq!(shared_file.blast_radius.referenced_by.len(), 5);
+    }
+
+    #[test]
+    fn benchmark_estimates_token_savings_against_grep_read_loop() {
+        let temp = tempfile::tempdir().unwrap();
+        write(
+            temp.path().join("src/auth/session.ts"),
+            "import { tokenFor } from './token';\n\nexport function createSession(userId: string) {\n  return tokenFor(userId);\n}\n",
+        );
+        write(
+            temp.path().join("src/auth/token.ts"),
+            "export function tokenFor(userId: string) {\n  return `token:${userId}`;\n}\n",
+        );
+        for index in 0..6 {
+            write(
+                temp.path().join(format!("src/noise{index}.ts")),
+                &format!(
+                    "export const unrelated{index} = true;\n// {}\n",
+                    "token ".repeat(1_000)
+                ),
+            );
+        }
+
+        let index = indexer::build_index(temp.path()).unwrap();
+        let output = benchmark_context(
+            temp.path(),
+            &index,
+            "change createSession token behavior",
+            8,
+            2,
+            true,
+        )
+        .unwrap();
+
+        assert!(output.baseline.matched_files > output.callsieve.selected_files);
+        assert!(output.baseline.estimated_total_tokens > output.callsieve.estimated_packet_tokens);
+        assert!(output.savings.estimated_token_savings > 0);
+        assert!(
+            output
+                .callsieve
+                .top_files
+                .iter()
+                .any(|file| file.file == "src/auth/session.ts")
+        );
     }
 
     #[test]

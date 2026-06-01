@@ -26,6 +26,7 @@ callsieve symbols <path>
 callsieve symbol <path> <symbol_name>
 callsieve query <path> "<question>"
 callsieve context <path> "<task>" [--limit <n>] [--snippets-per-file <n>] [--no-snippets]
+callsieve benchmark <path> "<task>" [--limit <n>] [--snippets-per-file <n>] [--no-snippets]
 callsieve stats <path>
 ```
 
@@ -35,6 +36,7 @@ Example:
 cargo run -- index .
 cargo run -- query . "where is auth handled?"
 cargo run -- context . "change login token expiry behavior"
+cargo run -- benchmark . "change login token expiry behavior"
 ```
 
 ## What The MVP Does
@@ -46,6 +48,7 @@ cargo run -- context . "change login token expiry behavior"
 - returns compact JSON for agent consumption
 - ranks matches with deterministic, explainable scoring
 - builds compact read-first context packets for coding tasks
+- estimates context-packet token savings versus a naive grep/read loop
 
 ## Example Query Output
 
@@ -130,6 +133,33 @@ cargo run -- context . "change login token expiry behavior"
     "selected_files": 5,
     "selected_symbols": 8,
     "related_tests": 2
+  }
+}
+```
+
+## Example Benchmark Output
+
+```json
+{
+  "task": "change login token expiry behavior",
+  "estimator": "local deterministic token estimate",
+  "baseline": {
+    "strategy": "naive grep term scan plus full matched-file reads",
+    "grep_terms": ["login", "token", "expiry"],
+    "grep_commands": 3,
+    "matched_files": 18,
+    "estimated_total_tokens": 24000
+  },
+  "callsieve": {
+    "strategy": "callsieve context packet",
+    "selected_files": 6,
+    "estimated_packet_tokens": 4200
+  },
+  "savings": {
+    "avoided_grep_commands": 2,
+    "avoided_file_reads": 12,
+    "estimated_token_savings": 19800,
+    "estimated_token_reduction_percent": 82.5
   }
 }
 ```

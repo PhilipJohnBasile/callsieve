@@ -229,6 +229,51 @@ fn context_includes_graph_neighbor_when_limit_allows() {
 }
 
 #[test]
+fn benchmark_returns_grep_vs_context_savings_estimate() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+    json(&run(&["index", root]));
+
+    let benchmark = json(&run(&[
+        "benchmark",
+        root,
+        "change createSession token behavior",
+        "--limit",
+        "5",
+    ]));
+
+    assert_eq!(
+        benchmark["baseline"]["strategy"],
+        "naive grep term scan plus full matched-file reads"
+    );
+    assert!(
+        benchmark["baseline"]["grep_terms"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|term| term == "token")
+    );
+    assert!(
+        benchmark["callsieve"]["estimated_packet_tokens"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
+    assert!(
+        benchmark["callsieve"]["top_files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|file| file["file"] == "src/auth/session.ts")
+    );
+    assert!(
+        benchmark["savings"]["avoided_grep_commands"]
+            .as_u64()
+            .is_some()
+    );
+}
+
+#[test]
 fn context_no_snippets_omits_snippets() {
     let repo = fixture_repo();
     let root = repo.path().to_str().unwrap();
@@ -253,6 +298,7 @@ fn missing_index_returns_json_error() {
         vec!["stats", root],
         vec!["query", root, "where is auth handled?"],
         vec!["context", root, "change createSession token behavior"],
+        vec!["benchmark", root, "change createSession token behavior"],
     ] {
         let output = run(&args);
 
