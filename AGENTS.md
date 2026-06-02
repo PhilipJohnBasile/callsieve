@@ -44,8 +44,11 @@ callsieve agent-context <path> "<task>"
 callsieve context <path> "<task>"
 callsieve query <path> "<natural language question>"
 callsieve symbol <path> <symbol_name>
+callsieve demo <path> [--task "<task>"]
+callsieve memory-clear <path>
 callsieve status <path>
 callsieve mcp
+callsieve mcp-config <path> [--format json|toml]
 callsieve proof-report <manifest.json>
 callsieve enterprise-proof-report <manifest.json>
 ```

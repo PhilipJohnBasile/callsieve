@@ -8,7 +8,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -23,6 +23,12 @@ const MAX_CONTEXT_GRAPH_EDGES: usize = 1;
 const MAX_CONTEXT_RELATED_TESTS: usize = 3;
 const MAX_CONTEXT_RELATED_TEST_SYMBOLS: usize = 5;
 const MAX_CONTEXT_GRAPH_SCORE: i32 = 240;
+const TASK_MEMORY_SCHEMA_VERSION: u32 = 1;
+const TASK_MEMORY_FILE: &str = "task-memory.json";
+const MAX_TASK_MEMORY_ENTRIES: usize = 50;
+const MAX_TASK_MEMORY_SIMILAR_TASKS: usize = 3;
+const MAX_TASK_MEMORY_RECOMMENDED_FILES: usize = 8;
+const MAX_TASK_MEMORY_RECOMMENDED_SYMBOLS: usize = 12;
 
 #[derive(Debug, Serialize)]
 pub struct SymbolsOutput {
@@ -224,6 +230,55 @@ impl ContextOutput {
         self.timing.index_load_ms = index_load_ms;
         self.timing.total_ms = self.timing.total_ms.saturating_add(index_load_ms);
     }
+}
+
+#[derive(Debug, Serialize)]
+pub struct TaskMemoryOutput {
+    cache_hit: bool,
+    path: String,
+    policy: &'static str,
+    similar_tasks: Vec<TaskMemorySimilarTask>,
+    recommended_files: Vec<String>,
+    recommended_symbols: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct TaskMemorySimilarTask {
+    task: String,
+    score: f64,
+    shared_terms: Vec<String>,
+    read_first_files: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct TaskMemoryStore {
+    schema_version: u32,
+    entries: Vec<TaskMemoryEntry>,
+}
+
+impl Default for TaskMemoryStore {
+    fn default() -> Self {
+        Self {
+            schema_version: TASK_MEMORY_SCHEMA_VERSION,
+            entries: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct TaskMemoryEntry {
+    task: String,
+    task_terms: Vec<String>,
+    created_at: u64,
+    read_first_files: Vec<String>,
+    symbols: Vec<String>,
+    tests: Vec<String>,
+}
+
+struct ScoredTaskMemoryEntry<'a> {
+    entry: &'a TaskMemoryEntry,
+    score: f64,
+    shared_terms: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1338,6 +1393,9 @@ pub struct TraceCheckOutput {
     strict: bool,
     sessions: usize,
     violations: usize,
+    grep_before_context: usize,
+    grep_after_context: usize,
+    context_first_compliant: bool,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     violation_details: Vec<TraceCheckViolation>,
 }
@@ -1711,6 +1769,220 @@ pub fn build_context_with_options(
         read_first,
         warnings: stale_warnings(root, index),
     })
+}
+
+pub fn context_read_first_files(context: &ContextOutput) -> Vec<String> {
+    context
+        .read_first
+        .iter()
+        .map(|file| file.file.clone())
+        .collect()
+}
+
+pub fn benchmark_context_payload_reduction_value(
+    benchmark: &BenchmarkOutput,
+) -> Result<serde_json::Value> {
+    serde_json::to_value(&benchmark.context_payload_reduction)
+        .context("failed to serialize context payload reduction")
+}
+
+pub fn task_memory_path(root: &Path) -> PathBuf {
+    root.join(store::json_store::INDEX_DIR)
+        .join(TASK_MEMORY_FILE)
+}
+
+pub fn clear_task_memory(root: &Path) -> Result<bool> {
+    let path = task_memory_path(root);
+    if !path.is_file() {
+        return Ok(false);
+    }
+    fs::remove_file(&path).with_context(|| format!("failed to remove {}", path.display()))?;
+    Ok(true)
+}
+
+pub fn task_memory_for_context(
+    root: &Path,
+    context: &ContextOutput,
+    created_at: u64,
+) -> Result<TaskMemoryOutput> {
+    let path = task_memory_path(root);
+    let mut memory = load_task_memory(&path);
+    let current_terms = task_memory_terms(&context.task);
+    let similar = similar_task_memory_entries(&memory.entries, &current_terms);
+    let similar_tasks: Vec<TaskMemorySimilarTask> = similar
+        .iter()
+        .map(|scored| TaskMemorySimilarTask {
+            task: scored.entry.task.clone(),
+            score: rounded_score(scored.score),
+            shared_terms: scored.shared_terms.clone(),
+            read_first_files: scored
+                .entry
+                .read_first_files
+                .iter()
+                .take(MAX_TASK_MEMORY_RECOMMENDED_FILES)
+                .cloned()
+                .collect(),
+        })
+        .collect();
+    let recommended_files = recommended_task_memory_files(&similar);
+    let recommended_symbols = recommended_task_memory_symbols(&similar);
+
+    let entry = task_memory_entry_from_context(context, current_terms, created_at);
+    if !entry.read_first_files.is_empty() {
+        memory.entries.retain(|existing| {
+            existing.task != entry.task || existing.read_first_files != entry.read_first_files
+        });
+        memory.entries.push(entry);
+        if memory.entries.len() > MAX_TASK_MEMORY_ENTRIES {
+            let excess = memory.entries.len() - MAX_TASK_MEMORY_ENTRIES;
+            memory.entries.drain(0..excess);
+        }
+        save_task_memory(&path, &memory)?;
+    }
+
+    Ok(TaskMemoryOutput {
+        cache_hit: !similar_tasks.is_empty(),
+        path: path.display().to_string(),
+        policy: "local_project_memory_only; use as hints, not proof",
+        similar_tasks,
+        recommended_files,
+        recommended_symbols,
+    })
+}
+
+fn load_task_memory(path: &Path) -> TaskMemoryStore {
+    let Ok(data) = fs::read(path) else {
+        return TaskMemoryStore::default();
+    };
+    serde_json::from_slice(&data).unwrap_or_default()
+}
+
+fn save_task_memory(path: &Path, memory: &TaskMemoryStore) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    fs::write(path, serde_json::to_vec_pretty(memory)?)
+        .with_context(|| format!("failed to write task memory {}", path.display()))
+}
+
+fn task_memory_entry_from_context(
+    context: &ContextOutput,
+    task_terms: Vec<String>,
+    created_at: u64,
+) -> TaskMemoryEntry {
+    let mut read_first_files = Vec::new();
+    let mut symbols = Vec::new();
+    let mut tests = Vec::new();
+
+    for file in &context.read_first {
+        push_unique(
+            &mut read_first_files,
+            file.file.clone(),
+            MAX_TASK_MEMORY_RECOMMENDED_FILES,
+        );
+        for symbol in &file.symbols {
+            push_unique(
+                &mut symbols,
+                symbol.name.clone(),
+                MAX_TASK_MEMORY_RECOMMENDED_SYMBOLS * 2,
+            );
+        }
+        for test in &file.related_tests {
+            push_unique(&mut tests, test.file.clone(), MAX_CONTEXT_RELATED_TESTS * 2);
+        }
+    }
+
+    TaskMemoryEntry {
+        task: context.task.clone(),
+        task_terms,
+        created_at,
+        read_first_files,
+        symbols,
+        tests,
+    }
+}
+
+fn task_memory_terms(task: &str) -> Vec<String> {
+    let mut terms = formatter::tokenize(task);
+    terms.sort();
+    terms.dedup();
+    terms
+}
+
+fn similar_task_memory_entries<'a>(
+    entries: &'a [TaskMemoryEntry],
+    current_terms: &[String],
+) -> Vec<ScoredTaskMemoryEntry<'a>> {
+    let current_set: BTreeSet<&str> = current_terms.iter().map(String::as_str).collect();
+    let mut scored: Vec<ScoredTaskMemoryEntry<'a>> = entries
+        .iter()
+        .filter_map(|entry| {
+            if entry.read_first_files.is_empty() {
+                return None;
+            }
+            let entry_set: BTreeSet<&str> = entry.task_terms.iter().map(String::as_str).collect();
+            let shared_terms: Vec<String> = current_set
+                .intersection(&entry_set)
+                .map(|term| (*term).to_string())
+                .collect();
+            let denominator = current_set.len().max(entry_set.len()).max(1);
+            let score = shared_terms.len() as f64 / denominator as f64;
+            if shared_terms.len() >= 2 || score >= 0.4 {
+                Some(ScoredTaskMemoryEntry {
+                    entry,
+                    score,
+                    shared_terms,
+                })
+            } else {
+                None
+            }
+        })
+        .collect();
+    scored.sort_by(|left, right| {
+        right
+            .score
+            .total_cmp(&left.score)
+            .then_with(|| right.entry.created_at.cmp(&left.entry.created_at))
+            .then_with(|| left.entry.task.cmp(&right.entry.task))
+    });
+    scored.truncate(MAX_TASK_MEMORY_SIMILAR_TASKS);
+    scored
+}
+
+fn recommended_task_memory_files(similar: &[ScoredTaskMemoryEntry<'_>]) -> Vec<String> {
+    let mut files = Vec::new();
+    for scored in similar {
+        for file in &scored.entry.read_first_files {
+            push_unique(&mut files, file.clone(), MAX_TASK_MEMORY_RECOMMENDED_FILES);
+        }
+    }
+    files
+}
+
+fn recommended_task_memory_symbols(similar: &[ScoredTaskMemoryEntry<'_>]) -> Vec<String> {
+    let mut symbols = Vec::new();
+    for scored in similar {
+        for symbol in &scored.entry.symbols {
+            push_unique(
+                &mut symbols,
+                symbol.clone(),
+                MAX_TASK_MEMORY_RECOMMENDED_SYMBOLS,
+            );
+        }
+    }
+    symbols
+}
+
+fn push_unique(values: &mut Vec<String>, value: String, limit: usize) {
+    if values.len() >= limit || values.iter().any(|existing| existing == &value) {
+        return;
+    }
+    values.push(value);
+}
+
+fn rounded_score(score: f64) -> f64 {
+    (score * 1000.0).round() / 1000.0
 }
 
 pub fn benchmark_context(
@@ -2476,6 +2748,8 @@ pub fn pilot_report(
 
         let mut repo_trace_violations = 0usize;
         let mut repo_trace_sessions = 0usize;
+        let mut repo_grep_before_context = 0usize;
+        let mut repo_grep_after_context = 0usize;
         let mut repo_violation_details = Vec::new();
         let mut repo_mislabeled_controlled_replay = false;
         for trace_path in repo.trace_paths() {
@@ -2531,6 +2805,8 @@ pub fn pilot_report(
             let check = trace_check_from_str_with_options(&trace_json, true)?;
             repo_trace_sessions += check.sessions;
             repo_trace_violations += check.violations;
+            repo_grep_before_context += check.grep_before_context;
+            repo_grep_after_context += check.grep_after_context;
             repo_violation_details.extend(check.violation_details);
         }
         trace_policy_violations += repo_trace_violations;
@@ -2544,6 +2820,9 @@ pub fn pilot_report(
             strict: true,
             sessions: repo_trace_sessions,
             violations: repo_trace_violations,
+            grep_before_context: repo_grep_before_context,
+            grep_after_context: repo_grep_after_context,
+            context_first_compliant: repo_trace_violations == 0,
             violation_details: repo_violation_details,
         };
 
@@ -3513,6 +3792,8 @@ pub fn trace_check_from_str_with_options(
     let value: serde_json::Value = serde_json::from_str(trace_json)?;
     let tasks = trace_tasks_from_value(value);
     let mut sessions = 0;
+    let mut grep_before_context = 0;
+    let mut grep_after_context = 0;
     let mut violation_details = Vec::new();
 
     for task in tasks {
@@ -3531,20 +3812,26 @@ pub fn trace_check_from_str_with_options(
             .enumerate()
             .find(|(_, command)| is_callsieve_context_command(command));
 
-        if let Some((grep_index, grep_command)) = first_grep
-            && first_context.is_none_or(|(context_index, _)| grep_index < context_index)
-        {
-            violation_details.push(TraceCheckViolation {
-                id: optional_string(task.get("id")),
-                task: optional_string(task.get("task")),
-                event_kind: "grep_before_context".to_string(),
-                first_violation_command: grep_command.clone(),
-                first_grep_command: grep_command.clone(),
-                first_file_read_command: None,
-                first_callsieve_context_command: first_context.map(|(_, command)| command.clone()),
-                reason: "grep or broad search happened before callsieve_context".to_string(),
-            });
-            continue;
+        if let Some((grep_index, grep_command)) = first_grep {
+            if first_context.is_none_or(|(context_index, _)| grep_index < context_index) {
+                grep_before_context += 1;
+                violation_details.push(TraceCheckViolation {
+                    id: optional_string(task.get("id")),
+                    task: optional_string(task.get("task")),
+                    event_kind: "grep_before_context".to_string(),
+                    first_violation_command: grep_command.clone(),
+                    first_grep_command: grep_command.clone(),
+                    first_file_read_command: None,
+                    first_callsieve_context_command: first_context
+                        .map(|(_, command)| command.clone()),
+                    reason: "grep or broad search happened before callsieve_context".to_string(),
+                });
+                continue;
+            }
+
+            if first_context.is_some_and(|(context_index, _)| grep_index > context_index) {
+                grep_after_context += 1;
+            }
         }
 
         if strict {
@@ -3577,6 +3864,9 @@ pub fn trace_check_from_str_with_options(
         strict,
         sessions,
         violations,
+        grep_before_context,
+        grep_after_context,
+        context_first_compliant: violations == 0,
         violation_details,
     })
 }

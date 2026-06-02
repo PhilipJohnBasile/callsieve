@@ -64,7 +64,7 @@ The first implementation should use deterministic ranking:
 - test proximity
 - keyword overlap
 
-Later versions can add semantic reranking, embeddings, richer call graphs, and long-term agent memory.
+Later versions can add semantic reranking, embeddings, richer call graphs, and durable cross-repo agent memory.
 
 ## Current Product
 
@@ -77,7 +77,9 @@ The current app includes:
 - symbol, import, reference, call, and related-test extraction
 - optional local LSP enrichment when language servers are already installed
 - deterministic query and `agent-context` ranking with optional scoring debug output
+- local task-memory hints for repeated task families
 - MCP tools for context, symbols, stats, status, trace checks, and benchmark estimates
+- portable MCP config output for generic AI CLIs
 - watcher and daemon paths for index freshness
 - first-class adoption automation with `bootstrap`, `doctor`, `begin`, agent setup, Codex bootstrap, editor hooks, and opt-in grep shims
 - benchmark, retrieval-eval, perf-report, observed trace, pilot, evidence-pack, proof-report, and enterprise-proof-report workflows
@@ -87,9 +89,12 @@ The current app includes:
 ```bash
 callsieve index <path> [--lsp]
 callsieve agent-context <path> "<task>"
+callsieve demo <path> [--task "<task>"]
+callsieve memory-clear <path>
 callsieve symbol <path> <symbol_name>
 callsieve status <path>
 callsieve mcp
+callsieve mcp-config <path> [--format json|toml]
 callsieve bootstrap <path> --client <client> [--strict] [--force] [--lsp]
 callsieve doctor <path> --client <client> [--fix] [--strict]
 callsieve begin <path> "<task>" --client <client> [--trace-out <trace.json>]

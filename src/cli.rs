@@ -161,6 +161,22 @@ pub enum Command {
         why_debug: bool,
     },
 
+    /// Build an index, return a sample context packet, and report context reduction.
+    Demo {
+        path: PathBuf,
+
+        #[arg(long, default_value = "find where CLI commands are defined")]
+        task: String,
+
+        /// Enrich the demo index with installed Language Server Protocol servers.
+        #[arg(long)]
+        lsp: bool,
+    },
+
+    /// Clear the local task-memory hints used by agent-context.
+    #[command(name = "memory-clear")]
+    MemoryClear { path: PathBuf },
+
     /// Estimate token savings versus a naive grep/read loop.
     Benchmark {
         path: PathBuf,
@@ -558,6 +574,15 @@ pub enum Command {
     /// Run a minimal MCP stdio server exposing CallSieve tools.
     Mcp,
 
+    /// Print a portable MCP server configuration for any AI CLI that supports MCP.
+    #[command(name = "mcp-config")]
+    McpConfig {
+        path: PathBuf,
+
+        #[arg(long, value_enum, default_value_t = McpConfigFormat::Json)]
+        format: McpConfigFormat,
+    },
+
     /// Show index freshness, watch, schema, and LSP-enrichment status.
     Status { path: PathBuf },
 
@@ -871,6 +896,12 @@ pub enum AgentClient {
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum McpConfigFormat {
+    Json,
+    Toml,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
 pub enum SessionPhase {
     Baseline,
     Callsieve,
@@ -906,6 +937,7 @@ struct IndexOutput {
 #[derive(Debug, Serialize)]
 struct AgentContextOutput {
     instruction: AgentContextInstruction,
+    memory: query::TaskMemoryOutput,
     context: query::ContextOutput,
 }
 
@@ -914,6 +946,48 @@ struct AgentContextInstruction {
     action: &'static str,
     guidance: &'static str,
     grep_policy: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+struct MemoryClearOutput {
+    command: &'static str,
+    root: String,
+    path: String,
+    removed: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct McpConfigOutput {
+    command: &'static str,
+    root: String,
+    format: &'static str,
+    instructions: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    config: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    config_text: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct DemoOutput {
+    command: &'static str,
+    root: String,
+    task: String,
+    index: DemoIndexSummary,
+    read_first: Vec<String>,
+    context_payload_reduction: serde_json::Value,
+    next_commands: Vec<String>,
+    warnings: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct DemoIndexSummary {
+    path: String,
+    files: usize,
+    symbols: usize,
+    imports: usize,
+    references: usize,
+    lsp_enriched: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -1657,13 +1731,30 @@ pub fn run() -> Result<()> {
                 why_debug,
             )?;
             context.add_index_load_time(index_load_ms);
+            let memory = query::task_memory_for_context(&path, &context, now_unix_seconds())?;
             let output = AgentContextOutput {
                 instruction: AgentContextInstruction {
                     action: "read_first_before_grep",
                     guidance: "Read these files first; grep only if insufficient.",
                     grep_policy: "grep_only_if_context_is_insufficient",
                 },
+                memory,
                 context,
+            };
+            output::json::print(&output)?;
+        }
+        Command::Demo { path, task, lsp } => {
+            let output = demo(&path, &task, lsp)?;
+            output::json::print(&output)?;
+        }
+        Command::MemoryClear { path } => {
+            let memory_path = query::task_memory_path(&path);
+            let removed = query::clear_task_memory(&path)?;
+            let output = MemoryClearOutput {
+                command: "memory-clear",
+                root: root_label(&path),
+                path: repo_relative_display(&path, &memory_path),
+                removed,
             };
             output::json::print(&output)?;
         }
@@ -2145,6 +2236,10 @@ pub fn run() -> Result<()> {
         Command::Mcp => {
             crate::mcp::run()?;
         }
+        Command::McpConfig { path, format } => {
+            let output = mcp_config_output(&path, format);
+            output::json::print(&output)?;
+        }
         Command::Status { path } => {
             let index = store::json_store::load_index(&path).ok();
             let output = query::index_status(&path, index.as_ref());
@@ -2442,6 +2537,94 @@ fn load_index_timed(path: &Path) -> Result<(store::CodeIndex, u64)> {
     let started = Instant::now();
     let index = store::json_store::load_index(path)?;
     Ok((index, duration_ms(started.elapsed())))
+}
+
+fn demo(path: &Path, task: &str, lsp: bool) -> Result<DemoOutput> {
+    let index = indexer::build_index_with_options(
+        path,
+        indexer::IndexOptions {
+            lsp,
+            ..indexer::IndexOptions::default()
+        },
+    )?;
+    let index_path = store::json_store::save_index(path, &index)?;
+    let context = query::build_context(path, &index, task, 8, 2, true)?;
+    let benchmark = query::benchmark_context(path, &index, task, 8, 2, true)?;
+    let context_payload_reduction = query::benchmark_context_payload_reduction_value(&benchmark)?;
+
+    Ok(DemoOutput {
+        command: "demo",
+        root: root_label(path),
+        task: task.to_string(),
+        index: DemoIndexSummary {
+            path: repo_relative_display(path, &index_path),
+            files: index.files.len(),
+            symbols: index.symbols.len(),
+            imports: index.imports.len(),
+            references: index.references.len(),
+            lsp_enriched: index.metadata.lsp_enriched,
+        },
+        read_first: query::context_read_first_files(&context),
+        context_payload_reduction,
+        next_commands: vec![
+            format!("callsieve agent-context {} {:?}", path.display(), task),
+            format!("callsieve mcp-config {} --format json", path.display()),
+            "callsieve proof-rehearsal --preflight".to_string(),
+        ],
+        warnings: index.warnings.clone(),
+    })
+}
+
+fn mcp_config_output(root: &Path, format: McpConfigFormat) -> McpConfigOutput {
+    let callsieve_command = callsieve_executable_display();
+    let instructions = vec![
+        "Register this config with any AI CLI that supports MCP stdio servers.".to_string(),
+        format!(
+            "First task command remains: callsieve agent-context {} \"<task>\"",
+            root.display()
+        ),
+        "Use callsieve_context before broad grep, repository search, or repeated file reads."
+            .to_string(),
+    ];
+
+    match format {
+        McpConfigFormat::Json => McpConfigOutput {
+            command: "mcp-config",
+            root: root_label(root),
+            format: "json",
+            instructions,
+            config: Some(mcp_config_json(&callsieve_command)),
+            config_text: None,
+        },
+        McpConfigFormat::Toml => McpConfigOutput {
+            command: "mcp-config",
+            root: root_label(root),
+            format: "toml",
+            instructions,
+            config: None,
+            config_text: Some(mcp_config_toml(&callsieve_command)),
+        },
+    }
+}
+
+fn mcp_config_json(callsieve_command: &str) -> serde_json::Value {
+    serde_json::json!({
+        "mcpServers": {
+            "callsieve": {
+                "type": "stdio",
+                "command": callsieve_command,
+                "args": ["mcp"],
+                "env": {}
+            }
+        }
+    })
+}
+
+fn mcp_config_toml(callsieve_command: &str) -> String {
+    format!(
+        "[mcp_servers.callsieve]\ncommand = {}\nargs = [\"mcp\"]\nstartup_timeout_sec = 20\ntool_timeout_sec = 60\n",
+        toml_basic_string(callsieve_command)
+    )
 }
 
 fn retrieval_manifest_root(value: &serde_json::Value) -> PathBuf {
@@ -6564,12 +6747,23 @@ fn agent_files(client: AgentClient, root: &Path) -> Vec<(PathBuf, String)> {
             ),
             (root.join(".roo/rules/callsieve.md"), policy.clone()),
         ],
-        AgentClient::Generic => vec![(
-            root.join(".callsieve/agent-policy.md"),
-            format!(
-                "{policy}\nUse `callsieve mcp` for MCP clients, or the first command above before broad search.\n"
+        AgentClient::Generic => vec![
+            (
+                root.join(".callsieve/mcp.json"),
+                serde_json::to_string_pretty(&mcp_config_json(&callsieve_command))
+                    .unwrap_or_else(|_| "{}".to_string()),
             ),
-        )],
+            (
+                root.join(".callsieve/mcp.toml"),
+                mcp_config_toml(&callsieve_command),
+            ),
+            (
+                root.join(".callsieve/agent-policy.md"),
+                format!(
+                    "{policy}\nUse `.callsieve/mcp.json` or `.callsieve/mcp.toml` for MCP clients, or the first command above before broad search.\n"
+                ),
+            ),
+        ],
     }
 }
 
@@ -7398,6 +7592,9 @@ mod tests {
             "--why-debug",
         ])
         .unwrap();
+        Cli::try_parse_from(["callsieve", "demo", ".", "--task", "change token expiry"]).unwrap();
+        Cli::try_parse_from(["callsieve", "demo", ".", "--lsp"]).unwrap();
+        Cli::try_parse_from(["callsieve", "memory-clear", "."]).unwrap();
         Cli::try_parse_from(["callsieve", "benchmark", ".", "change token expiry"]).unwrap();
         Cli::try_parse_from(["callsieve", "benchmark-suite", ".", "benchmarks/tasks.json"])
             .unwrap();
@@ -7611,6 +7808,8 @@ mod tests {
         ])
         .unwrap();
         Cli::try_parse_from(["callsieve", "mcp"]).unwrap();
+        Cli::try_parse_from(["callsieve", "mcp-config", ".", "--format", "json"]).unwrap();
+        Cli::try_parse_from(["callsieve", "mcp-config", ".", "--format", "toml"]).unwrap();
         Cli::try_parse_from(["callsieve", "status", "."]).unwrap();
         Cli::try_parse_from(["callsieve", "daemon", ".", "--once"]).unwrap();
         Cli::try_parse_from(["callsieve", "daemon", ".", "--background", "--lsp"]).unwrap();

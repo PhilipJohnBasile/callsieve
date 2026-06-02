@@ -99,6 +99,13 @@ Use `--why-debug` only when diagnosing ranking behavior. It adds scoring detail 
     "guidance": "Read these files first; grep only if insufficient.",
     "grep_policy": "grep_only_if_context_is_insufficient"
   },
+  "memory": {
+    "cache_hit": false,
+    "policy": "local_project_memory_only; use as hints, not proof",
+    "similar_tasks": [],
+    "recommended_files": [],
+    "recommended_symbols": []
+  },
   "context": {
     "task": "...",
     "root": "...",
@@ -108,6 +115,12 @@ Use `--why-debug` only when diagnosing ranking behavior. It adds scoring detail 
     "warnings": []
   }
 }
+```
+
+Use `memory.recommended_files` and `memory.recommended_symbols` as hints from previous local tasks. They can reduce repeated search, but they do not replace `context.read_first` and they are not proof evidence. If the user asks for a cold run, execute:
+
+```bash
+callsieve memory-clear <repo>
 ```
 
 For each `context.read_first[]` item, prioritize:
@@ -157,6 +170,8 @@ Safe local repair commands:
 ```bash
 callsieve index <repo> --lsp
 callsieve doctor <repo> --client generic --fix --strict
+callsieve mcp-config <repo> --format json
+callsieve mcp-config <repo> --format toml
 callsieve proof-rehearsal --preflight
 callsieve proof-rehearsal --fix --resume
 ```
@@ -263,6 +278,13 @@ If `agent-context` fails because the index is missing:
 ```bash
 callsieve index <repo> --lsp
 callsieve agent-context <repo> "<task>" --limit 8 --snippets-per-file 2
+```
+
+If an MCP client needs config:
+
+```bash
+callsieve mcp-config <repo> --format json
+callsieve mcp-config <repo> --format toml
 ```
 
 If `proof-rehearsal --preflight` fails:

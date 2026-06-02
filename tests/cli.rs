@@ -683,6 +683,81 @@ fn benchmark_returns_grep_vs_context_savings_estimate() {
 }
 
 #[test]
+fn demo_indexes_repo_and_reports_context_reduction() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+
+    let demo = json(&run(&[
+        "demo",
+        root,
+        "--task",
+        "change createSession token behavior",
+    ]));
+
+    assert_eq!(demo["command"], "demo");
+    assert_eq!(demo["index"]["files"], 5);
+    assert!(
+        demo["read_first"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|file| file == "src/auth/session.ts")
+    );
+    assert_eq!(
+        demo["context_payload_reduction"]["label"],
+        "context_payload_reduction"
+    );
+    assert!(
+        demo["next_commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|command| command.as_str().unwrap().contains("mcp-config"))
+    );
+}
+
+#[test]
+fn agent_context_reuses_local_task_memory_hints() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+    json(&run(&["index", root]));
+
+    let first = json(&run(&[
+        "agent-context",
+        root,
+        "change createSession token behavior",
+    ]));
+    assert_eq!(first["memory"]["cache_hit"], false);
+    assert!(repo.path().join(".callsieve/task-memory.json").is_file());
+
+    let second = json(&run(&[
+        "agent-context",
+        root,
+        "update createSession token behavior",
+    ]));
+    assert_eq!(second["memory"]["cache_hit"], true);
+    assert!(
+        second["memory"]["recommended_files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|file| file == "src/auth/session.ts")
+    );
+
+    let cleared = json(&run(&["memory-clear", root]));
+    assert_eq!(cleared["command"], "memory-clear");
+    assert_eq!(cleared["removed"], true);
+    assert!(!repo.path().join(".callsieve/task-memory.json").is_file());
+
+    let after_clear = json(&run(&[
+        "agent-context",
+        root,
+        "update createSession token behavior",
+    ]));
+    assert_eq!(after_clear["memory"]["cache_hit"], false);
+}
+
+#[test]
 fn benchmark_suite_reports_recall_and_observed_session_savings() {
     let repo = fixture_repo();
     let root = repo.path().to_str().unwrap();
@@ -2576,6 +2651,9 @@ fn trace_check_flags_grep_before_callsieve_context() {
 
     assert_eq!(check["status"], "fail");
     assert_eq!(check["violations"], 1);
+    assert_eq!(check["grep_before_context"], 1);
+    assert_eq!(check["grep_after_context"], 0);
+    assert_eq!(check["context_first_compliant"], false);
     assert_eq!(
         check["violation_details"][0]["first_grep_command"],
         "rg createSession"
@@ -2614,6 +2692,7 @@ fn strict_trace_check_flags_file_reads_before_callsieve_context() {
 
     let non_strict = json(&run(&["trace-check", trace_path.to_str().unwrap()]));
     assert_eq!(non_strict["status"], "pass");
+    assert_eq!(non_strict["context_first_compliant"], true);
 
     let strict = json(&run(&[
         "trace-check",
@@ -2630,6 +2709,39 @@ fn strict_trace_check_flags_file_reads_before_callsieve_context() {
         strict["violation_details"][0]["first_file_read_command"],
         "Get-Content src/auth/session.ts"
     );
+}
+
+#[test]
+fn trace_check_counts_grep_after_context_as_compliant() {
+    let repo = fixture_repo();
+    let trace_path = repo.path().join("good-trace.json");
+    write(
+        &trace_path,
+        r#"{
+  "tasks": [
+    {
+      "id": "good-session",
+      "task": "change auth",
+      "session": {
+        "callsieve": {
+          "grep_commands": 1,
+          "file_reads": 2,
+          "tokens": 3000,
+          "commands": ["callsieve agent-context . \"change auth\"", "rg createSession"]
+        }
+      }
+    }
+  ]
+}"#,
+    );
+
+    let check = json(&run(&["trace-check", trace_path.to_str().unwrap()]));
+
+    assert_eq!(check["status"], "pass");
+    assert_eq!(check["violations"], 0);
+    assert_eq!(check["grep_before_context"], 0);
+    assert_eq!(check["grep_after_context"], 1);
+    assert_eq!(check["context_first_compliant"], true);
 }
 
 #[test]
@@ -2932,6 +3044,51 @@ fn setup_agent_generates_policy_files() {
         fs::read_to_string(repo.path().join(".roo/rules/callsieve.md"))
             .unwrap()
             .contains("grep only if the context packet is insufficient")
+    );
+
+    let repo = tempfile::tempdir().unwrap();
+    let root = repo.path().to_str().unwrap();
+    let setup = json(&run(&["agent-setup", root, "--client", "generic"]));
+    assert_eq!(setup["client"], "generic");
+    assert!(repo.path().join(".callsieve/mcp.json").is_file());
+    assert!(repo.path().join(".callsieve/mcp.toml").is_file());
+    assert!(
+        serde_json::from_str::<Value>(
+            &fs::read_to_string(repo.path().join(".callsieve/mcp.json")).unwrap()
+        )
+        .unwrap()["mcpServers"]["callsieve"]["args"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|arg| arg == "mcp")
+    );
+    assert!(
+        fs::read_to_string(repo.path().join(".callsieve/mcp.toml"))
+            .unwrap()
+            .contains("[mcp_servers.callsieve]")
+    );
+}
+
+#[test]
+fn mcp_config_prints_portable_json_and_toml() {
+    let repo = tempfile::tempdir().unwrap();
+    let root = repo.path().to_str().unwrap();
+
+    let json_config = json(&run(&["mcp-config", root, "--format", "json"]));
+    assert_eq!(json_config["command"], "mcp-config");
+    assert_eq!(json_config["format"], "json");
+    assert_eq!(
+        json_config["config"]["mcpServers"]["callsieve"]["args"][0],
+        "mcp"
+    );
+
+    let toml_config = json(&run(&["mcp-config", root, "--format", "toml"]));
+    assert_eq!(toml_config["format"], "toml");
+    assert!(
+        toml_config["config_text"]
+            .as_str()
+            .unwrap()
+            .contains("[mcp_servers.callsieve]")
     );
 }
 

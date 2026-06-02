@@ -19,6 +19,25 @@ Recommended:
 
 Language servers are optional. CallSieve falls back to tree-sitter and deterministic heuristics when they are missing.
 
+## Install From GitHub Releases
+
+Download the archive for your OS and CPU from:
+
+```text
+https://github.com/PhilipJohnBasile/callsieve/releases
+```
+
+Each release asset includes the `callsieve` binary plus this install guide, the AI CLI runbook, and a `.sha256` checksum file.
+
+Recommended first check after unpacking:
+
+```bash
+callsieve --help
+callsieve demo /path/to/repo --task "find where login sessions are created"
+```
+
+`demo` builds the local index, returns the first files an agent should read, and reports platform-neutral `context_payload_reduction` so you can verify the core loop before configuring an AI tool.
+
 ## Install From Source
 
 Clone and install:
@@ -58,6 +77,7 @@ Use without installing while developing CallSieve itself:
 cargo run -- --help
 cargo run -- index . --lsp
 cargo run -- agent-context . "find the code that handles login"
+cargo run -- demo . --task "find the code that handles login"
 ```
 
 ## First Repo Setup
@@ -68,6 +88,7 @@ From any repo you want an AI agent to work in:
 callsieve index /path/to/repo --lsp
 callsieve status /path/to/repo
 callsieve agent-context /path/to/repo "find the code that handles login"
+callsieve demo /path/to/repo --task "find the code that handles login"
 ```
 
 If the output includes `read_first`, CallSieve is ready for that repo.
@@ -205,7 +226,14 @@ Roo should use `callsieve_context` before broad search tools and repeated file r
 
 ## Gemini CLI, Kimi CLI, And Other AI CLIs
 
-If the tool supports stdio MCP, configure a local MCP server:
+If the tool supports stdio MCP, ask CallSieve for a portable config:
+
+```bash
+callsieve mcp-config /path/to/repo --format json
+callsieve mcp-config /path/to/repo --format toml
+```
+
+Use the format your AI CLI accepts. The JSON shape is:
 
 ```json
 {
@@ -219,6 +247,18 @@ If the tool supports stdio MCP, configure a local MCP server:
 }
 ```
 
+`agent-setup --client generic` writes the same reusable config files under the repo:
+
+```bash
+callsieve agent-setup /path/to/repo --client generic --force
+```
+
+Generated files:
+
+- `.callsieve/mcp.json`
+- `.callsieve/mcp.toml`
+- `.callsieve/agent-policy.md`
+
 If the tool does not support MCP, add this policy to its project instructions:
 
 ```text
@@ -229,16 +269,6 @@ Read the returned read_first files and snippets first.
 Use grep only when that packet is insufficient.
 When reporting savings, call context_payload_reduction an estimated context payload reduction, not observed session token savings.
 ```
-
-Generate a generic policy file:
-
-```bash
-callsieve agent-setup /path/to/repo --client generic --force
-```
-
-Generated file:
-
-- `.callsieve/agent-policy.md`
 
 ## Strict Grep Shims
 
@@ -283,7 +313,9 @@ Expected healthy signals:
 Smoke test the agent-facing command:
 
 ```bash
+callsieve demo /path/to/repo --task "find where login sessions are created"
 callsieve agent-context /path/to/repo "find where login sessions are created" --limit 8 --snippets-per-file 2
+callsieve mcp-config /path/to/repo --format json
 ```
 
 Smoke test MCP:
@@ -308,6 +340,12 @@ Before handing a task to an AI:
 
 ```bash
 callsieve agent-context /path/to/repo "<task>"
+```
+
+`agent-context` keeps a small local `.callsieve/task-memory.json` hint cache so repeated task families can reuse prior read-first files and symbols. Clear it when you want a cold run:
+
+```bash
+callsieve memory-clear /path/to/repo
 ```
 
 After a task, audit whether the session followed CallSieve-first policy if you have a trace:

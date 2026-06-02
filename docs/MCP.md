@@ -58,6 +58,13 @@ callsieve agent-setup /path/to/repo --client generic
 Pass `--force` to replace existing generated files.
 Generated MCP configs use the resolved CallSieve executable path so client startup does not depend on the agent shell PATH. Generated policy files also include the first command agents should run for every task: `callsieve agent-context <repo> "<task>"`. Manual examples below use `callsieve` for readability; replace it with an absolute path when the client shell cannot resolve the binary.
 
+For AI CLIs without a dedicated setup command, print a portable MCP config:
+
+```bash
+callsieve mcp-config /path/to/repo --format json
+callsieve mcp-config /path/to/repo --format toml
+```
+
 Audit generated setup with:
 
 ```bash

@@ -14,7 +14,7 @@ CallSieve is not another coding agent. It is the context and retrieval layer und
 
 CallSieve is now a local Rust CLI with a JSON index, deterministic retrieval, optional LSP reference enrichment, MCP tools, context-first guardrails, daemon/watch freshness support, agent adoption automation, benchmark reports, observed-session traces, and gated proof reports. The product is still local-first and CLI-first, but it has moved beyond the original bootstrap into an agent-context and evidence collection layer.
 
-For human installation and client setup, see [docs/INSTALL.md](docs/INSTALL.md). For AI CLI and wrapper behavior, see [docs/AGENT_CLI.md](docs/AGENT_CLI.md).
+For human installation and client setup, see [docs/INSTALL.md](docs/INSTALL.md). For AI CLI and wrapper behavior, see [docs/AGENT_CLI.md](docs/AGENT_CLI.md). For dogfooding and less-grep measurement, see [docs/DOGFOOD.md](docs/DOGFOOD.md).
 
 The core workflow is:
 
@@ -31,6 +31,8 @@ callsieve symbol <path> <symbol_name>
 callsieve query <path> "<question>" [--why-debug]
 callsieve context <path> "<task>" [--limit <n>] [--snippets-per-file <n>] [--no-snippets] [--why-debug]
 callsieve agent-context <path> "<task>" [--limit <n>] [--snippets-per-file <n>] [--why-debug]
+callsieve demo <path> [--task "<task>"] [--lsp]
+callsieve memory-clear <path>
 callsieve benchmark <path> "<task>" [--limit <n>] [--snippets-per-file <n>] [--no-snippets]
 callsieve benchmark-suite <path> <tasks.json> [--limit <n>] [--snippets-per-file <n>] [--no-snippets]
 callsieve eval-retrieval <manifest.json> [--limit <n>] [--snippets-per-file <n>] [--no-snippets] [--json]
@@ -57,6 +59,7 @@ callsieve pilot-doctor <manifest.json>
 callsieve evidence-pack <manifest.json> [--anonymize]
 callsieve policy-check <trace.json> [--strict]
 callsieve mcp
+callsieve mcp-config <path> [--format json|toml]
 callsieve status <path>
 callsieve daemon <path> [--background] [--foreground] [--once] [--lsp]
 callsieve daemon-status <path>
@@ -84,9 +87,11 @@ Example:
 ```bash
 cargo run -- index .
 cargo run -- index . --lsp
+cargo run -- demo . --task "change login token expiry behavior"
 cargo run -- query . "where is auth handled?"
 cargo run -- context . "change login token expiry behavior"
 cargo run -- agent-context . "change login token expiry behavior"
+cargo run -- memory-clear .
 cargo run -- benchmark . "change login token expiry behavior"
 cargo run -- benchmark-suite . benchmarks/tasks.json
 cargo run -- benchmark-suite . benchmarks/callsieve-real-repo.json
@@ -116,6 +121,7 @@ cargo run -- pilot-doctor benchmarks/pilot-manifest.example.json
 cargo run -- evidence-pack benchmarks/pilot-manifest.example.json --anonymize
 cargo run -- policy-check benchmarks/session-trace.example.json --strict
 cargo run -- mcp
+cargo run -- mcp-config . --format json
 cargo run -- status .
 cargo run -- daemon . --once
 cargo run -- daemon-status .
@@ -174,7 +180,11 @@ The Rust rehearsal command is self-healing for local-safe issues. `--preflight` 
 - boosts package manifests for dependency and setup tasks
 - boosts context with import, caller, and callee proximity
 - provides an `agent-context` wrapper agents can call before grep
+- keeps a small local task-memory hint cache for repeated task families
+- clears local task memory with `memory-clear` for cold-run testing
+- runs a `demo` command that indexes, returns read-first files, and reports context payload reduction
 - exposes a minimal MCP stdio server so agents can call CallSieve before grep
+- prints portable JSON/TOML MCP configs for generic AI CLIs with `mcp-config`
 - reports platform-neutral `context_payload_reduction` versus a naive grep/read loop
 - evaluates retrieval recall against expected and critical file fixtures with `eval-retrieval`
 - reports local p50/p95 context latency with `perf-report`
@@ -577,6 +587,8 @@ If a server is missing or fails, CallSieve keeps the tree-sitter and heuristic g
 
 `callsieve_context` self-heals a missing or stale `.callsieve/index.json` by rebuilding the local index before returning context. MCP responses include freshness and timing metadata. The MCP server does not install shims, mutate client config, start the daemon, or send code to a remote service.
 
+Use `callsieve mcp-config <repo> --format json` or `--format toml` for Gemini CLI, Kimi CLI, or any AI CLI that supports stdio MCP but does not have a dedicated CallSieve setup command.
+
 See [docs/INSTALL.md](docs/INSTALL.md) for human install and client setup, [docs/AGENT_CLI.md](docs/AGENT_CLI.md) for AI CLI behavior, and [docs/MCP.md](docs/MCP.md) for Codex, Claude Code, Claude Desktop, Cursor, Cline, and Roo MCP examples.
 
 ## Local-First Guarantees
@@ -608,7 +620,7 @@ The current retrieval model uses deterministic ranking first:
 - likely related tests
 - direct import neighbors where available
 
-Embeddings, Git history, editor-specific extensions, and long-term memory are later phases.
+Embeddings, Git history, editor-specific extensions, and durable cross-repo memory are later phases.
 
 ## Development
 

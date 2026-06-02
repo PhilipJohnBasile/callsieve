@@ -2,6 +2,8 @@
 
 CallSieve benchmark suites are JSON task packs that measure whether the context packet selects the files an agent should read first.
 
+For dogfooding across AI CLIs and interpreting the task-memory hints, see [DOGFOOD.md](DOGFOOD.md).
+
 Run the real-repo CallSieve suite:
 
 ```bash
@@ -147,7 +149,7 @@ cargo run -- trace-check benchmarks/session-trace.example.json --strict
 cargo run -- policy-check benchmarks/session-trace.example.json --strict
 ```
 
-`trace-check` fails when an observed CallSieve-assisted session runs `rg`, `grep`, or `ripgrep` before `callsieve context`, `agent-context`, `begin`, `guard`, `grep`, or the MCP `callsieve_context` tool. With `--strict`, it also fails common file reads such as `cat`, `sed`, `nl`, `Get-Content`, and `read_file` before CallSieve context.
+`trace-check` fails when an observed CallSieve-assisted session runs `rg`, `grep`, or `ripgrep` before `callsieve context`, `agent-context`, `begin`, `guard`, `grep`, or the MCP `callsieve_context` tool. With `--strict`, it also fails common file reads such as `cat`, `sed`, `nl`, `Get-Content`, and `read_file` before CallSieve context. The JSON output includes `grep_before_context`, `grep_after_context`, and `context_first_compliant` so audits can distinguish policy failures from focused search after CallSieve.
 
 `policy-check` prints the same JSON check result but exits nonzero on violations, which makes it suitable for CI or scripted pilot audits.
 
