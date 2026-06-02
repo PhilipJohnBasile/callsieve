@@ -1,6 +1,66 @@
-target/
-.callsieve/
-benchmarks/github-*/
-benchmarks/evidence/*.local*.json
-benchmarks/evidence/suites/
-benchmarks/evidence/tasks/
+# Rust build output
+/target/
+**/*.rs.bk
+
+# CallSieve local indexes, daemon state, task memory, traces, and shims
+/.callsieve/
+**/.callsieve/
+
+# Local benchmark fixture clones
+/benchmarks/github-*/
+
+# Local evidence, transcripts, manifests, and rehearsal outputs
+/benchmarks/**/*.local*.json
+/benchmarks/**/*.local*.jsonl
+/benchmarks/**/*.local*.ndjson
+/benchmarks/**/*.local*.toml
+/benchmarks/**/*.local*.yaml
+/benchmarks/**/*.local*.yml
+/benchmarks/**/*.local*.md
+/benchmarks/evidence/suites/
+/benchmarks/evidence/tasks/
+
+# Secrets and machine-local environment
+.env
+.env.*
+!.env.example
+!.env.sample
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.der
+
+# Logs and temporary files
+*.log
+*.tmp
+*.temp
+*.bak
+*.orig
+*.rej
+*.swp
+*.swo
+
+# OS and editor noise
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.code-workspace
+
+# Node, Python, and coverage caches from fixture experiments
+node_modules/
+.pnpm-store/
+dist/
+build/
+coverage/
+.coverage
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+__pycache__/
+*.py[cod]
+.venv/
+venv/
