@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     env, fs,
     path::{Path, PathBuf},
     process::{Command as ProcessCommand, Stdio},
@@ -8,7 +9,7 @@ use std::{
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
@@ -148,6 +149,9 @@ pub enum Command {
 
         #[arg(long = "expected-file")]
         expected_files: Vec<String>,
+
+        #[arg(long = "critical-file")]
+        critical_files: Vec<String>,
     },
 
     /// Append a command/read event to an observed session trace.
@@ -216,6 +220,61 @@ pub enum Command {
 
     /// Validate a benchmark-report manifest before running evidence collection.
     BenchmarkDoctor { manifest: PathBuf },
+
+    /// Create a 50-session observed pilot harness manifest.
+    PilotInit {
+        manifest: PathBuf,
+
+        #[arg(long, default_value_t = 50)]
+        sessions: usize,
+    },
+
+    /// Manage observed pilot harness tasks.
+    #[command(name = "pilot-task")]
+    PilotTask {
+        #[command(subcommand)]
+        command: PilotTaskCommand,
+    },
+
+    /// Append a measured baseline or CallSieve event to a pilot task.
+    PilotRun {
+        manifest: PathBuf,
+
+        #[arg(long = "task-id")]
+        task_id: String,
+
+        #[arg(long, value_enum)]
+        mode: PilotSessionMode,
+
+        #[arg(long = "command")]
+        event_command: String,
+
+        #[arg(long = "files-read")]
+        files_read: Vec<String>,
+
+        #[arg(long)]
+        tokens: usize,
+    },
+
+    /// Validate paired observed pilot evidence before final proof generation.
+    PilotQa { manifest: PathBuf },
+
+    /// Write final proof manifest and proof-report JSON from pilot evidence.
+    PilotFinalize {
+        manifest: PathBuf,
+
+        #[arg(long)]
+        out: PathBuf,
+
+        #[arg(long, default_value_t = 8)]
+        limit: usize,
+
+        #[arg(long, default_value_t = 2)]
+        snippets_per_file: usize,
+
+        #[arg(long)]
+        no_snippets: bool,
+    },
 
     /// Build a pilot proof artifact across local repos, suites, traces, status, and thresholds.
     PilotReport {
@@ -462,6 +521,37 @@ pub enum ShimCommand {
     Uninstall { path: PathBuf },
 }
 
+#[derive(Debug, Subcommand)]
+pub enum PilotTaskCommand {
+    /// Add a measured task to a pilot harness manifest.
+    Add {
+        manifest: PathBuf,
+        repo: PathBuf,
+        task: String,
+
+        #[arg(long)]
+        id: Option<String>,
+
+        #[arg(long = "expected-file")]
+        expected_files: Vec<String>,
+
+        #[arg(long = "critical-file")]
+        critical_files: Vec<String>,
+
+        #[arg(long)]
+        external: bool,
+
+        #[arg(long, value_enum, default_value_t = AgentClient::Codex)]
+        client: AgentClient,
+
+        #[arg(long, default_value = "gpt-5-codex")]
+        model: String,
+
+        #[arg(long = "suite-path")]
+        suite_path: Option<PathBuf>,
+    },
+}
+
 #[derive(Debug, Clone, Copy, ValueEnum)]
 pub enum AgentClient {
     Codex,
@@ -474,6 +564,13 @@ pub enum AgentClient {
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 pub enum SessionPhase {
+    Baseline,
+    Callsieve,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PilotSessionMode {
     Baseline,
     Callsieve,
 }
@@ -623,6 +720,93 @@ struct SessionFinishOutput {
     trace: String,
     out: String,
     summary: query::TraceSummaryOutput,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct PilotHarnessManifest {
+    schema_version: u32,
+    target_sessions: usize,
+    thresholds: serde_json::Value,
+    #[serde(default)]
+    tasks: Vec<PilotHarnessTask>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct PilotHarnessTask {
+    id: String,
+    repo: String,
+    task: String,
+    client: String,
+    model: String,
+    #[serde(default)]
+    expected_files: Vec<String>,
+    #[serde(default)]
+    critical_files: Vec<String>,
+    #[serde(default)]
+    external: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    suite_path: Option<String>,
+    baseline_trace_path: String,
+    callsieve_trace_path: String,
+    trace_path: String,
+    summary_path: String,
+    status: String,
+}
+
+#[derive(Debug, Serialize)]
+struct PilotInitOutput {
+    command: &'static str,
+    manifest: String,
+    target_sessions: usize,
+    status: String,
+}
+
+#[derive(Debug, Serialize)]
+struct PilotTaskAddOutput {
+    command: &'static str,
+    manifest: String,
+    task: PilotHarnessTask,
+}
+
+#[derive(Debug, Serialize)]
+struct PilotRunOutput {
+    command: &'static str,
+    manifest: String,
+    task_id: String,
+    mode: PilotSessionMode,
+    trace: String,
+    mode_trace: String,
+    summary: query::TraceSummaryOutput,
+}
+
+#[derive(Debug, Serialize)]
+struct PilotQaOutput {
+    command: &'static str,
+    manifest: String,
+    status: String,
+    target_sessions: usize,
+    observed_sessions: usize,
+    tasks: usize,
+    failures: usize,
+    results: Vec<PilotQaCheck>,
+}
+
+#[derive(Debug, Serialize)]
+struct PilotQaCheck {
+    task_id: String,
+    check: String,
+    status: String,
+    message: String,
+}
+
+#[derive(Debug, Serialize)]
+struct PilotFinalizeOutput {
+    command: &'static str,
+    manifest: String,
+    proof_manifest: String,
+    out: String,
+    qa: PilotQaOutput,
+    proof: query::ProofReportOutput,
 }
 
 #[derive(Debug, Serialize)]
@@ -851,8 +1035,17 @@ pub fn run() -> Result<()> {
             model,
             trace,
             expected_files,
+            critical_files,
         } => {
-            let output = session_start(&path, &task, client, &model, &trace, expected_files)?;
+            let output = session_start(
+                &path,
+                &task,
+                client,
+                &model,
+                &trace,
+                expected_files,
+                critical_files,
+            )?;
             output::json::print(&output)?;
         }
         Command::SessionEvent {
@@ -931,6 +1124,70 @@ pub fn run() -> Result<()> {
             let output = query::benchmark_doctor_from_str(&manifest_json).with_context(|| {
                 format!("failed to check benchmark manifest: {}", manifest.display())
             })?;
+            output::json::print(&output)?;
+        }
+        Command::PilotInit { manifest, sessions } => {
+            let output = pilot_init(&manifest, sessions)?;
+            output::json::print(&output)?;
+        }
+        Command::PilotTask { command } => match command {
+            PilotTaskCommand::Add {
+                manifest,
+                repo,
+                task,
+                id,
+                expected_files,
+                critical_files,
+                external,
+                client,
+                model,
+                suite_path,
+            } => {
+                let output = pilot_task_add(
+                    &manifest,
+                    &repo,
+                    &task,
+                    id,
+                    expected_files,
+                    critical_files,
+                    external,
+                    client,
+                    &model,
+                    suite_path,
+                )?;
+                output::json::print(&output)?;
+            }
+        },
+        Command::PilotRun {
+            manifest,
+            task_id,
+            mode,
+            event_command,
+            files_read,
+            tokens,
+        } => {
+            let output = pilot_run(
+                &manifest,
+                &task_id,
+                mode,
+                &event_command,
+                files_read,
+                tokens,
+            )?;
+            output::json::print(&output)?;
+        }
+        Command::PilotQa { manifest } => {
+            let output = pilot_qa(&manifest)?;
+            output::json::print(&output)?;
+        }
+        Command::PilotFinalize {
+            manifest,
+            out,
+            limit,
+            snippets_per_file,
+            no_snippets,
+        } => {
+            let output = pilot_finalize(&manifest, &out, limit, snippets_per_file, !no_snippets)?;
             output::json::print(&output)?;
         }
         Command::PilotReport {
@@ -1326,6 +1583,7 @@ fn session_start(
     model: &str,
     trace: &Path,
     expected_files: Vec<String>,
+    critical_files: Vec<String>,
 ) -> Result<SessionStartOutput> {
     if let Some(parent) = trace
         .parent()
@@ -1347,6 +1605,7 @@ fn session_start(
         },
         "task": task,
         "expected_files": expected_files,
+        "critical_files": critical_files,
         "baseline": empty_session_metrics(),
         "callsieve": empty_session_metrics(),
         "session": {
@@ -1463,6 +1722,560 @@ fn session_finish(trace: &Path, out: &Path) -> Result<SessionFinishOutput> {
         out: out.display().to_string(),
         summary,
     })
+}
+
+fn pilot_init(manifest: &Path, sessions: usize) -> Result<PilotInitOutput> {
+    if manifest.exists() {
+        anyhow::bail!(
+            "refusing to overwrite {}; remove it first or choose another manifest",
+            manifest.display()
+        );
+    }
+    if let Some(parent) = manifest
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    let manifest_value = PilotHarnessManifest {
+        schema_version: 1,
+        target_sessions: sessions,
+        thresholds: serde_json::json!({
+            "minimum_recall": 1.0,
+            "minimum_token_reduction_percent": 0.0,
+            "minimum_observed_sessions": sessions,
+            "minimum_observed_token_reduction_percent": 50.0,
+            "minimum_external_repos": 0,
+            "maximum_controlled_replay_ratio": 0.0,
+            "maximum_trace_violations": 0,
+            "maximum_critical_misses": 0,
+            "require_fresh_index": true,
+            "require_lsp_where_available": false,
+            "require_codex_bootstrap": false
+        }),
+        tasks: Vec::new(),
+    };
+    write_pilot_manifest(manifest, &manifest_value)?;
+
+    Ok(PilotInitOutput {
+        command: "pilot-init",
+        manifest: manifest.display().to_string(),
+        target_sessions: sessions,
+        status: "created".to_string(),
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn pilot_task_add(
+    manifest_path: &Path,
+    repo: &Path,
+    task: &str,
+    id: Option<String>,
+    expected_files: Vec<String>,
+    critical_files: Vec<String>,
+    external: bool,
+    client: AgentClient,
+    model: &str,
+    suite_path: Option<PathBuf>,
+) -> Result<PilotTaskAddOutput> {
+    let mut manifest = read_pilot_manifest(manifest_path)?;
+    let id = id.unwrap_or_else(|| next_pilot_task_id(&manifest));
+    if manifest.tasks.iter().any(|task| task.id == id) {
+        anyhow::bail!("pilot task id already exists: {id}");
+    }
+    let critical_files = if critical_files.is_empty() {
+        expected_files.clone()
+    } else {
+        critical_files
+    };
+    let task_dir = pilot_artifact_root(manifest_path).join("tasks").join(&id);
+    let trace_path = task_dir.join("combined-observed.json");
+    let baseline_trace_path = task_dir.join("baseline-observed.json");
+    let callsieve_trace_path = task_dir.join("callsieve-observed.json");
+    let summary_path = task_dir.join("summary.json");
+    let task_entry = PilotHarnessTask {
+        id,
+        repo: repo.display().to_string(),
+        task: task.to_string(),
+        client: agent_client_name(client).to_string(),
+        model: model.to_string(),
+        expected_files,
+        critical_files,
+        external,
+        suite_path: suite_path.map(|path| path.display().to_string()),
+        baseline_trace_path: baseline_trace_path.display().to_string(),
+        callsieve_trace_path: callsieve_trace_path.display().to_string(),
+        trace_path: trace_path.display().to_string(),
+        summary_path: summary_path.display().to_string(),
+        status: "pending".to_string(),
+    };
+    manifest.tasks.push(task_entry.clone());
+    write_pilot_manifest(manifest_path, &manifest)?;
+
+    Ok(PilotTaskAddOutput {
+        command: "pilot-task add",
+        manifest: manifest_path.display().to_string(),
+        task: task_entry,
+    })
+}
+
+fn pilot_run(
+    manifest_path: &Path,
+    task_id: &str,
+    mode: PilotSessionMode,
+    command: &str,
+    files_read: Vec<String>,
+    tokens: usize,
+) -> Result<PilotRunOutput> {
+    let mut manifest = read_pilot_manifest(manifest_path)?;
+    let index = manifest
+        .tasks
+        .iter()
+        .position(|task| task.id == task_id)
+        .with_context(|| format!("pilot task not found: {task_id}"))?;
+    let task = manifest.tasks[index].clone();
+    ensure_pilot_trace(&task, Path::new(&task.trace_path))?;
+    let mode_trace = match mode {
+        PilotSessionMode::Baseline => Path::new(&task.baseline_trace_path),
+        PilotSessionMode::Callsieve => Path::new(&task.callsieve_trace_path),
+    };
+    ensure_pilot_trace(&task, mode_trace)?;
+    let phase = match mode {
+        PilotSessionMode::Baseline => SessionPhase::Baseline,
+        PilotSessionMode::Callsieve => SessionPhase::Callsieve,
+    };
+    session_event(
+        Path::new(&task.trace_path),
+        command,
+        files_read.clone(),
+        Some(tokens),
+        Some(phase),
+    )?;
+    session_event(mode_trace, command, files_read, Some(tokens), Some(phase))?;
+    let finish = session_finish(Path::new(&task.trace_path), Path::new(&task.summary_path))?;
+    let summary_value = serde_json::to_value(&finish.summary)?;
+    manifest.tasks[index].status = pilot_task_status(&summary_value);
+    write_pilot_manifest(manifest_path, &manifest)?;
+
+    Ok(PilotRunOutput {
+        command: "pilot-run",
+        manifest: manifest_path.display().to_string(),
+        task_id: task_id.to_string(),
+        mode,
+        trace: task.trace_path,
+        mode_trace: mode_trace.display().to_string(),
+        summary: finish.summary,
+    })
+}
+
+fn pilot_qa(manifest_path: &Path) -> Result<PilotQaOutput> {
+    let manifest = read_pilot_manifest(manifest_path)?;
+    let mut results = Vec::new();
+    let mut complete_observed_sessions = 0usize;
+
+    for task in &manifest.tasks {
+        let trace_path = Path::new(&task.trace_path);
+        let trace_exists = trace_path.is_file();
+        push_qa(
+            &mut results,
+            &task.id,
+            "combined_trace_exists",
+            trace_exists,
+            format!("combined trace exists at {}", task.trace_path),
+            format!("combined trace is missing at {}", task.trace_path),
+        );
+        push_qa(
+            &mut results,
+            &task.id,
+            "baseline_trace_exists",
+            Path::new(&task.baseline_trace_path).is_file(),
+            format!("baseline trace exists at {}", task.baseline_trace_path),
+            format!("baseline trace is missing at {}", task.baseline_trace_path),
+        );
+        push_qa(
+            &mut results,
+            &task.id,
+            "callsieve_trace_exists",
+            Path::new(&task.callsieve_trace_path).is_file(),
+            format!("CallSieve trace exists at {}", task.callsieve_trace_path),
+            format!(
+                "CallSieve trace is missing at {}",
+                task.callsieve_trace_path
+            ),
+        );
+        if !trace_exists {
+            continue;
+        }
+
+        let trace_json = fs::read_to_string(trace_path)
+            .with_context(|| format!("failed to read trace: {}", trace_path.display()))?;
+        let trace_value: serde_json::Value = serde_json::from_str(&trace_json)
+            .with_context(|| format!("failed to parse trace: {}", trace_path.display()))?;
+        let summary = query::trace_summary_from_str(&trace_json)?;
+        let summary_value = serde_json::to_value(&summary)?;
+        let task_text_matches = trace_value
+            .get("task")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|trace_task| trace_task == task.task);
+        push_qa(
+            &mut results,
+            &task.id,
+            "task_text_matches",
+            task_text_matches,
+            "trace task text matches manifest task".to_string(),
+            "trace task text does not match manifest task".to_string(),
+        );
+        let observed = summary_number(&summary_value, "observed_sessions");
+        let controlled = summary_number(&summary_value, "controlled_replay_sessions");
+        let baseline_tokens = summary_number(&summary_value, "baseline_tokens");
+        let callsieve_tokens = summary_number(&summary_value, "callsieve_tokens");
+        let critical_misses = summary_number(&summary_value, "critical_files_still_missed");
+        let complete =
+            observed == 1 && controlled == 0 && baseline_tokens > 0 && callsieve_tokens > 0;
+        if complete {
+            complete_observed_sessions += 1;
+        }
+        push_qa(
+            &mut results,
+            &task.id,
+            "paired_observed_session",
+            complete,
+            "paired observed baseline and CallSieve phases are complete".to_string(),
+            format!(
+                "expected one observed pair with baseline and CallSieve tokens; observed={observed}, controlled={controlled}, baseline_tokens={baseline_tokens}, callsieve_tokens={callsieve_tokens}"
+            ),
+        );
+        push_qa(
+            &mut results,
+            &task.id,
+            "critical_misses",
+            critical_misses == 0,
+            "critical files were selected/read by CallSieve".to_string(),
+            format!("critical misses: {critical_misses}"),
+        );
+        let violations = if Path::new(&task.callsieve_trace_path).is_file() {
+            let callsieve_trace_json = fs::read_to_string(&task.callsieve_trace_path)
+                .with_context(|| format!("failed to read trace: {}", task.callsieve_trace_path))?;
+            let policy = query::trace_check_from_str_with_options(&callsieve_trace_json, true)?;
+            let policy_value = serde_json::to_value(policy)?;
+            summary_number(&policy_value, "violations")
+        } else {
+            1
+        };
+        push_qa(
+            &mut results,
+            &task.id,
+            "strict_trace_policy",
+            violations == 0,
+            "strict trace policy passed".to_string(),
+            format!("strict trace policy violations: {violations}"),
+        );
+        push_qa(
+            &mut results,
+            &task.id,
+            "observed_collection",
+            trace_value
+                .get("metadata")
+                .and_then(|metadata| metadata.get("collection"))
+                .and_then(serde_json::Value::as_str)
+                == Some("observed_session"),
+            "trace metadata collection is observed_session".to_string(),
+            "trace metadata collection is not observed_session".to_string(),
+        );
+        push_qa(
+            &mut results,
+            &task.id,
+            "controlled_replay_markers",
+            !trace_has_controlled_replay_marker(&trace_json),
+            "trace contains no controlled replay markers".to_string(),
+            "trace contains controlled replay markers".to_string(),
+        );
+    }
+
+    push_qa(
+        &mut results,
+        "pilot",
+        "minimum_observed_sessions",
+        complete_observed_sessions >= manifest.target_sessions,
+        format!(
+            "observed paired sessions {} meet target {}",
+            complete_observed_sessions, manifest.target_sessions
+        ),
+        format!(
+            "observed paired sessions {} are below target {}",
+            complete_observed_sessions, manifest.target_sessions
+        ),
+    );
+
+    let failures = results
+        .iter()
+        .filter(|result| result.status == "fail")
+        .count();
+    Ok(PilotQaOutput {
+        command: "pilot-qa",
+        manifest: manifest_path.display().to_string(),
+        status: if failures == 0 { "pass" } else { "fail" }.to_string(),
+        target_sessions: manifest.target_sessions,
+        observed_sessions: complete_observed_sessions,
+        tasks: manifest.tasks.len(),
+        failures,
+        results,
+    })
+}
+
+fn pilot_finalize(
+    manifest_path: &Path,
+    out: &Path,
+    limit: usize,
+    snippets_per_file: usize,
+    include_snippets: bool,
+) -> Result<PilotFinalizeOutput> {
+    let qa = pilot_qa(manifest_path)?;
+    if qa.status != "pass" {
+        anyhow::bail!(
+            "pilot QA failed; run `callsieve pilot-qa {}`",
+            manifest_path.display()
+        );
+    }
+    let manifest = read_pilot_manifest(manifest_path)?;
+    let proof_manifest_path = proof_manifest_path(out);
+    let proof_manifest = build_proof_manifest(manifest_path, &manifest)?;
+    if let Some(parent) = proof_manifest_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    fs::write(
+        &proof_manifest_path,
+        serde_json::to_vec_pretty(&proof_manifest)?,
+    )
+    .with_context(|| format!("failed to write {}", proof_manifest_path.display()))?;
+    let proof_manifest: query::BenchmarkReportManifest =
+        serde_json::from_value(proof_manifest.clone())?;
+    let proof = query::proof_report(proof_manifest, limit, snippets_per_file, include_snippets)?;
+    if let Some(parent) = out.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    fs::write(out, serde_json::to_vec_pretty(&proof)?)
+        .with_context(|| format!("failed to write {}", out.display()))?;
+
+    Ok(PilotFinalizeOutput {
+        command: "pilot-finalize",
+        manifest: manifest_path.display().to_string(),
+        proof_manifest: proof_manifest_path.display().to_string(),
+        out: out.display().to_string(),
+        qa,
+        proof,
+    })
+}
+
+fn read_pilot_manifest(path: &Path) -> Result<PilotHarnessManifest> {
+    let json =
+        fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
+    serde_json::from_str(&json).with_context(|| format!("failed to parse {}", path.display()))
+}
+
+fn write_pilot_manifest(path: &Path, manifest: &PilotHarnessManifest) -> Result<()> {
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    fs::write(path, serde_json::to_vec_pretty(manifest)?)
+        .with_context(|| format!("failed to write {}", path.display()))
+}
+
+fn next_pilot_task_id(manifest: &PilotHarnessManifest) -> String {
+    let mut next = manifest.tasks.len() + 1;
+    loop {
+        let id = format!("task-{next:03}");
+        if !manifest.tasks.iter().any(|task| task.id == id) {
+            return id;
+        }
+        next += 1;
+    }
+}
+
+fn pilot_artifact_root(manifest_path: &Path) -> PathBuf {
+    manifest_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+        .to_path_buf()
+}
+
+fn ensure_pilot_trace(task: &PilotHarnessTask, trace_path: &Path) -> Result<()> {
+    if trace_path.exists() {
+        return Ok(());
+    }
+    let client = agent_client_from_name(&task.client);
+    session_start(
+        Path::new(&task.repo),
+        &task.task,
+        client,
+        &task.model,
+        trace_path,
+        task.expected_files.clone(),
+        task.critical_files.clone(),
+    )?;
+    Ok(())
+}
+
+fn agent_client_from_name(name: &str) -> AgentClient {
+    match name.to_ascii_lowercase().as_str() {
+        "codex" => AgentClient::Codex,
+        "claude" => AgentClient::Claude,
+        "cursor" => AgentClient::Cursor,
+        "cline" => AgentClient::Cline,
+        "roo" => AgentClient::Roo,
+        _ => AgentClient::Generic,
+    }
+}
+
+fn pilot_task_status(summary: &serde_json::Value) -> String {
+    let baseline_tokens = summary_number(summary, "baseline_tokens");
+    let callsieve_tokens = summary_number(summary, "callsieve_tokens");
+    let critical_misses = summary_number(summary, "critical_files_still_missed");
+
+    if baseline_tokens > 0 && callsieve_tokens > 0 && critical_misses == 0 {
+        "complete".to_string()
+    } else if baseline_tokens > 0 && callsieve_tokens == 0 {
+        "baseline_recorded".to_string()
+    } else if baseline_tokens == 0 && callsieve_tokens > 0 {
+        "callsieve_recorded".to_string()
+    } else {
+        "pending".to_string()
+    }
+}
+
+fn summary_number(summary: &serde_json::Value, key: &str) -> usize {
+    summary
+        .get(key)
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|value| usize::try_from(value).ok())
+        .unwrap_or_default()
+}
+
+fn push_qa(
+    results: &mut Vec<PilotQaCheck>,
+    task_id: &str,
+    check: &str,
+    pass: bool,
+    pass_message: String,
+    fail_message: String,
+) {
+    results.push(PilotQaCheck {
+        task_id: task_id.to_string(),
+        check: check.to_string(),
+        status: if pass { "pass" } else { "fail" }.to_string(),
+        message: if pass { pass_message } else { fail_message },
+    });
+}
+
+fn trace_has_controlled_replay_marker(trace_json: &str) -> bool {
+    let lower = trace_json.to_ascii_lowercase();
+    [
+        "controlled local replay",
+        "deterministic local grep/read replay",
+        "baseline simulates grepping",
+        "callsieve codex-session",
+    ]
+    .iter()
+    .any(|marker| lower.contains(marker))
+}
+
+fn proof_manifest_path(out: &Path) -> PathBuf {
+    let stem = out
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .filter(|stem| !stem.is_empty())
+        .unwrap_or("proof-report");
+    out.with_file_name(format!("{stem}.manifest.json"))
+}
+
+fn build_proof_manifest(
+    manifest_path: &Path,
+    manifest: &PilotHarnessManifest,
+) -> Result<serde_json::Value> {
+    let root = pilot_artifact_root(manifest_path);
+    let suite_root = root.join("suites");
+    let mut grouped: BTreeMap<String, Vec<&PilotHarnessTask>> = BTreeMap::new();
+    for task in &manifest.tasks {
+        grouped.entry(task.repo.clone()).or_default().push(task);
+    }
+
+    let mut repos = Vec::new();
+    for (repo, tasks) in grouped {
+        let label = safe_pilot_label(&repo);
+        let suite_path = suite_root.join(format!("{label}.json"));
+        if let Some(parent) = suite_path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("failed to create {}", parent.display()))?;
+        }
+        let suite_tasks: Vec<serde_json::Value> = tasks
+            .iter()
+            .map(|task| {
+                serde_json::json!({
+                    "id": task.id,
+                    "task": task.task,
+                    "expected_files": task.expected_files
+                })
+            })
+            .collect();
+        fs::write(
+            &suite_path,
+            serde_json::to_vec_pretty(&serde_json::json!({ "tasks": suite_tasks }))?,
+        )
+        .with_context(|| format!("failed to write {}", suite_path.display()))?;
+
+        let trace_paths: Vec<String> = tasks.iter().map(|task| task.trace_path.clone()).collect();
+        let policy_trace_paths: Vec<String> = tasks
+            .iter()
+            .map(|task| task.callsieve_trace_path.clone())
+            .collect();
+        repos.push(serde_json::json!({
+            "label": label,
+            "path": repo,
+            "external": tasks.iter().any(|task| task.external),
+            "suite_path": suite_path.display().to_string(),
+            "trace_paths": trace_paths,
+            "policy_trace_paths": policy_trace_paths
+        }));
+    }
+
+    Ok(serde_json::json!({
+        "thresholds": manifest.thresholds,
+        "repos": repos
+    }))
+}
+
+fn safe_pilot_label(value: &str) -> String {
+    let mut label = String::new();
+    let mut last_dash = false;
+    for ch in value.chars() {
+        if ch.is_ascii_alphanumeric() {
+            label.push(ch.to_ascii_lowercase());
+            last_dash = false;
+        } else if !last_dash {
+            label.push('-');
+            last_dash = true;
+        }
+    }
+    let trimmed = label.trim_matches('-');
+    if trimmed.is_empty() {
+        "repo".to_string()
+    } else {
+        trimmed.to_string()
+    }
 }
 
 fn read_trace_value(path: &Path) -> Result<serde_json::Value> {
@@ -2569,10 +3382,13 @@ fn anonymize_evidence(value: &mut serde_json::Value) {
             for (key, value) in object.iter_mut() {
                 if matches!(
                     key.as_str(),
-                    "path" | "root" | "suite_path" | "trace_path" | "label"
+                    "path" | "root" | "suite_path" | "trace_path" | "policy_trace_path" | "label"
                 ) {
                     *value = serde_json::Value::String("<redacted>".to_string());
-                } else if matches!(key.as_str(), "suite_paths" | "trace_paths") {
+                } else if matches!(
+                    key.as_str(),
+                    "suite_paths" | "trace_paths" | "policy_trace_paths"
+                ) {
                     if let Some(values) = value.as_array_mut() {
                         for item in values {
                             *item = serde_json::Value::String("<redacted>".to_string());
@@ -2691,6 +3507,55 @@ mod tests {
         .unwrap();
         Cli::try_parse_from(["callsieve", "benchmark-report", "benchmarks/manifest.json"]).unwrap();
         Cli::try_parse_from(["callsieve", "benchmark-doctor", "benchmarks/manifest.json"]).unwrap();
+        Cli::try_parse_from([
+            "callsieve",
+            "pilot-init",
+            "benchmarks/evidence/pilot.json",
+            "--sessions",
+            "50",
+        ])
+        .unwrap();
+        Cli::try_parse_from([
+            "callsieve",
+            "pilot-task",
+            "add",
+            "benchmarks/evidence/pilot.json",
+            ".",
+            "change token expiry",
+            "--id",
+            "auth",
+            "--expected-file",
+            "src/main.rs",
+            "--critical-file",
+            "src/main.rs",
+            "--external",
+        ])
+        .unwrap();
+        Cli::try_parse_from([
+            "callsieve",
+            "pilot-run",
+            "benchmarks/evidence/pilot.json",
+            "--task-id",
+            "auth",
+            "--mode",
+            "callsieve",
+            "--command",
+            "callsieve agent-context . \"change token expiry\"",
+            "--files-read",
+            "src/main.rs",
+            "--tokens",
+            "200",
+        ])
+        .unwrap();
+        Cli::try_parse_from(["callsieve", "pilot-qa", "benchmarks/evidence/pilot.json"]).unwrap();
+        Cli::try_parse_from([
+            "callsieve",
+            "pilot-finalize",
+            "benchmarks/evidence/pilot.json",
+            "--out",
+            "benchmarks/evidence/proof.json",
+        ])
+        .unwrap();
         Cli::try_parse_from(["callsieve", "pilot-report", "benchmarks/manifest.json"]).unwrap();
         Cli::try_parse_from(["callsieve", "proof-report", "benchmarks/manifest.json"]).unwrap();
         Cli::try_parse_from(["callsieve", "pilot-doctor", "benchmarks/manifest.json"]).unwrap();

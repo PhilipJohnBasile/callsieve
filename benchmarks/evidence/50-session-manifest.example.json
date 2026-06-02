@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "target_sessions": 50,
+  "thresholds": {
+    "minimum_recall": 1.0,
+    "minimum_token_reduction_percent": 0.0,
+    "minimum_observed_sessions": 50,
+    "minimum_observed_token_reduction_percent": 50.0,
+    "minimum_external_repos": 3,
+    "maximum_controlled_replay_ratio": 0.0,
+    "maximum_trace_violations": 0,
+    "maximum_critical_misses": 0,
+    "require_fresh_index": true,
+    "require_lsp_where_available": true,
+    "require_codex_bootstrap": true
+  },
+  "tasks": []
+}

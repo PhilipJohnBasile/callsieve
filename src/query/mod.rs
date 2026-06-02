@@ -260,6 +260,8 @@ struct BenchmarkSuiteTaskInput {
     task: String,
     #[serde(default)]
     expected_files: Vec<String>,
+    #[serde(default)]
+    critical_files: Vec<String>,
     observed: Option<ObservedSessionComparison>,
     #[serde(default, alias = "trace")]
     session: Option<ObservedSessionComparison>,
@@ -393,6 +395,10 @@ struct BenchmarkReportRepoInput {
     trace_path: Option<PathBuf>,
     #[serde(default, alias = "traces", alias = "trace_paths")]
     trace_paths: Vec<PathBuf>,
+    #[serde(default, alias = "policy_trace", alias = "policy_trace_path")]
+    policy_trace_path: Option<PathBuf>,
+    #[serde(default, alias = "policy_traces", alias = "policy_trace_paths")]
+    policy_trace_paths: Vec<PathBuf>,
     #[serde(default)]
     thresholds: Option<PilotThresholds>,
 }
@@ -413,6 +419,18 @@ impl BenchmarkReportRepoInput {
             paths.push(path.clone());
         }
         paths.extend(self.trace_paths.clone());
+        paths
+    }
+
+    fn policy_trace_paths(&self) -> Vec<PathBuf> {
+        let mut paths = Vec::new();
+        if let Some(path) = &self.policy_trace_path {
+            paths.push(path.clone());
+        }
+        paths.extend(self.policy_trace_paths.clone());
+        if paths.is_empty() {
+            return self.trace_paths();
+        }
         paths
     }
 
@@ -438,6 +456,8 @@ pub struct PilotThresholds {
     #[serde(default)]
     maximum_trace_violations: usize,
     #[serde(default)]
+    maximum_critical_misses: usize,
+    #[serde(default)]
     require_fresh_index: bool,
     #[serde(default)]
     require_lsp_where_available: bool,
@@ -456,6 +476,7 @@ impl Default for PilotThresholds {
             ),
             maximum_controlled_replay_ratio: default_maximum_controlled_replay_ratio(),
             maximum_trace_violations: 0,
+            maximum_critical_misses: 0,
             require_fresh_index: false,
             require_lsp_where_available: false,
             require_codex_bootstrap: false,
@@ -602,6 +623,7 @@ struct PilotProofSummary {
     avoided_grep_commands: usize,
     avoided_file_reads: usize,
     trace_policy_violations: usize,
+    critical_files_still_missed: usize,
     fresh_indexes: usize,
     daemon_fresh_repos: usize,
     lsp_enriched_repos: usize,
@@ -648,6 +670,8 @@ struct TraceTaskInput {
     task: Option<String>,
     #[serde(default)]
     expected_files: Vec<String>,
+    #[serde(default)]
+    critical_files: Vec<String>,
     observed: Option<ObservedSessionComparison>,
     #[serde(default, alias = "trace")]
     session: Option<ObservedSessionComparison>,
@@ -673,8 +697,11 @@ pub struct TraceSummaryOutput {
     avoided_grep_commands: usize,
     avoided_file_reads: usize,
     files_still_missed: usize,
+    critical_files_still_missed: usize,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     missed_files: Vec<TraceMiss>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    critical_missed_files: Vec<TraceMiss>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -707,6 +734,8 @@ struct TraceReplayTaskOutput {
     task: String,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     expected_files: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    critical_files: Vec<String>,
     session: ObservedSessionComparison,
 }
 
@@ -725,6 +754,7 @@ struct ContextFirstTraceInput {
     id: Option<String>,
     task: String,
     expected_files: Vec<String>,
+    critical_files: Vec<String>,
     limit: usize,
     snippets_per_file: usize,
     include_snippets: bool,
@@ -1232,6 +1262,7 @@ pub fn benchmark_suite(
             id,
             task,
             expected_files: task_expected_files,
+            critical_files: _,
             observed,
             session,
         } = task;
@@ -1351,6 +1382,7 @@ pub fn trace_replay(
             id,
             task,
             expected_files,
+            critical_files,
             observed: _,
             session: _,
         } = task;
@@ -1371,6 +1403,7 @@ pub fn trace_replay(
                 id,
                 task,
                 expected_files,
+                critical_files,
                 limit,
                 snippets_per_file,
                 include_snippets,
@@ -1424,6 +1457,7 @@ pub fn codex_session_trace(
             id: Some("codex-chatgpt-session".to_string()),
             task,
             expected_files,
+            critical_files: Vec::new(),
             limit,
             snippets_per_file,
             include_snippets,
@@ -1691,6 +1725,9 @@ pub fn pilot_report(
             {
                 repo_mislabeled_controlled_replay = true;
             }
+        }
+        for trace_path in repo.policy_trace_paths() {
+            let trace_json = fs::read_to_string(&trace_path)?;
             let check = trace_check_from_str_with_options(&trace_json, true)?;
             repo_trace_sessions += check.sessions;
             repo_trace_violations += check.violations;
@@ -1832,6 +1869,18 @@ pub fn pilot_report(
         .as_ref()
         .map(|summary| summary.token_reduction_percent)
         .unwrap_or_default();
+    let critical_files_still_missed = observed_summary
+        .as_ref()
+        .map(|summary| summary.critical_files_still_missed)
+        .unwrap_or_default()
+        + controlled_summary
+            .as_ref()
+            .map(|summary| summary.critical_files_still_missed)
+            .unwrap_or_default()
+        + unclassified_summary
+            .as_ref()
+            .map(|summary| summary.critical_files_still_missed)
+            .unwrap_or_default();
     let controlled_replay_ratio = if total_trace_sessions == 0 {
         0.0
     } else {
@@ -1854,6 +1903,7 @@ pub fn pilot_report(
         avoided_grep_commands: benchmark.summary.total_avoided_grep_commands,
         avoided_file_reads: benchmark.summary.total_avoided_file_reads,
         trace_policy_violations,
+        critical_files_still_missed,
         fresh_indexes,
         daemon_fresh_repos,
         lsp_enriched_repos,
@@ -1905,6 +1955,17 @@ pub fn pilot_report(
             message: format!(
                 "controlled replay ratio {:.3} exceeds threshold {:.3}",
                 proof.controlled_replay_ratio, manifest.thresholds.maximum_controlled_replay_ratio
+            ),
+        });
+    }
+    if proof.critical_files_still_missed > manifest.thresholds.maximum_critical_misses {
+        failures.push(PilotFailure {
+            label: None,
+            path: ".".to_string(),
+            check: "maximum_critical_misses".to_string(),
+            message: format!(
+                "critical misses {} exceed threshold {}",
+                proof.critical_files_still_missed, manifest.thresholds.maximum_critical_misses
             ),
         });
     }
@@ -2114,12 +2175,14 @@ pub fn trace_summary_from_str(trace_json: &str) -> Result<TraceSummaryOutput> {
 
     if value.get("baseline").is_some() && value.get("callsieve").is_some() {
         let expected_files = string_array(value.get("expected_files"));
+        let critical_files = string_array(value.get("critical_files"));
         let observed: ObservedSessionComparison = serde_json::from_value(value.clone())?;
         return Ok(trace_summary_from_tasks(
             vec![TraceTaskInput {
                 id: optional_string(value.get("id")),
                 task: optional_string(value.get("task")),
                 expected_files,
+                critical_files,
                 observed: Some(observed),
                 session: None,
             }],
@@ -2712,6 +2775,7 @@ fn trace_task_for_context_first_session(
         id,
         task,
         expected_files,
+        critical_files,
         limit,
         snippets_per_file,
         include_snippets,
@@ -2740,6 +2804,7 @@ fn trace_task_for_context_first_session(
         id,
         task,
         expected_files,
+        critical_files,
         session: ObservedSessionComparison {
             baseline: ObservedSessionMetrics {
                 grep_commands: baseline.benchmark.grep_commands,
@@ -2966,7 +3031,9 @@ struct TraceAccumulator {
     avoided_grep_commands: usize,
     avoided_file_reads: usize,
     files_still_missed: usize,
+    critical_files_still_missed: usize,
     missed_files: Vec<TraceMiss>,
+    critical_missed_files: Vec<TraceMiss>,
 }
 
 impl TraceAccumulator {
@@ -2975,6 +3042,7 @@ impl TraceAccumulator {
         id: Option<String>,
         task: Option<String>,
         expected_files: Vec<String>,
+        critical_files: Vec<String>,
         observed: ObservedSessionOutput,
         collection: TraceCollection,
     ) {
@@ -3002,9 +3070,21 @@ impl TraceAccumulator {
         if !missing.is_empty() {
             self.files_still_missed += missing.len();
             self.missed_files.push(TraceMiss {
+                id: id.clone(),
+                task: task.clone(),
+                files: missing,
+            });
+        }
+        let critical_missing: Vec<String> = critical_files
+            .into_iter()
+            .filter(|file| !read_files.contains(file.as_str()))
+            .collect();
+        if !critical_missing.is_empty() {
+            self.critical_files_still_missed += critical_missing.len();
+            self.critical_missed_files.push(TraceMiss {
                 id,
                 task,
-                files: missing,
+                files: critical_missing,
             });
         }
     }
@@ -3019,7 +3099,10 @@ impl TraceAccumulator {
         self.avoided_grep_commands += summary.avoided_grep_commands;
         self.avoided_file_reads += summary.avoided_file_reads;
         self.files_still_missed += summary.files_still_missed;
+        self.critical_files_still_missed += summary.critical_files_still_missed;
         self.missed_files.extend(summary.missed_files.clone());
+        self.critical_missed_files
+            .extend(summary.critical_missed_files.clone());
     }
 
     fn finish(self) -> Option<TraceSummaryOutput> {
@@ -3049,7 +3132,9 @@ impl TraceAccumulator {
             avoided_grep_commands: self.avoided_grep_commands,
             avoided_file_reads: self.avoided_file_reads,
             files_still_missed: self.files_still_missed,
+            critical_files_still_missed: self.critical_files_still_missed,
             missed_files: self.missed_files,
+            critical_missed_files: self.critical_missed_files,
         }
     }
 }
@@ -3065,6 +3150,7 @@ fn trace_summary_from_tasks(
             id,
             task,
             expected_files,
+            critical_files,
             observed,
             session,
         } = task;
@@ -3073,6 +3159,7 @@ fn trace_summary_from_tasks(
                 id,
                 task,
                 expected_files,
+                critical_files,
                 observed_session_output(observed),
                 collection,
             );
@@ -3838,6 +3925,7 @@ mod tests {
                     "src/auth/session.ts".to_string(),
                     "src/auth/token.ts".to_string(),
                 ],
+                critical_files: Vec::new(),
                 observed: Some(ObservedSessionComparison {
                     baseline: ObservedSessionMetrics {
                         grep_commands: 6,
@@ -3946,6 +4034,8 @@ mod tests {
                     suite_paths: Vec::new(),
                     trace_path: None,
                     trace_paths: Vec::new(),
+                    policy_trace_path: None,
+                    policy_trace_paths: Vec::new(),
                     thresholds: None,
                 },
                 BenchmarkReportRepoInput {
@@ -3957,6 +4047,8 @@ mod tests {
                     suite_paths: Vec::new(),
                     trace_path: None,
                     trace_paths: Vec::new(),
+                    policy_trace_path: None,
+                    policy_trace_paths: Vec::new(),
                     thresholds: None,
                 },
             ],

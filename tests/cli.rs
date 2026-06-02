@@ -848,6 +848,193 @@ fn observed_session_lifecycle_writes_summary_compatible_trace() {
 }
 
 #[test]
+fn pilot_harness_records_pair_and_finalizes_proof() {
+    let repo = fixture_repo();
+    for index in 0..8 {
+        write(
+            repo.path().join(format!("src/noise{index}.ts")),
+            &format!(
+                "export const unrelated{index} = true;\n// {}\n",
+                "token ".repeat(1_000)
+            ),
+        );
+    }
+    let root = repo.path().to_str().unwrap();
+    json(&run(&["index", root]));
+    let manifest_root = tempfile::tempdir().unwrap();
+    let manifest_path = manifest_root.path().join("pilot.json");
+
+    let init = json(&run(&[
+        "pilot-init",
+        manifest_path.to_str().unwrap(),
+        "--sessions",
+        "1",
+    ]));
+    assert_eq!(init["command"], "pilot-init");
+    assert_eq!(init["target_sessions"], 1);
+
+    let added = json(&run(&[
+        "pilot-task",
+        "add",
+        manifest_path.to_str().unwrap(),
+        root,
+        "change createSession token behavior",
+        "--id",
+        "auth",
+        "--expected-file",
+        "src/auth/session.ts",
+        "--expected-file",
+        "src/auth/token.ts",
+        "--critical-file",
+        "src/auth/session.ts",
+        "--critical-file",
+        "src/auth/token.ts",
+    ]));
+    assert_eq!(added["command"], "pilot-task add");
+    assert_eq!(added["task"]["status"], "pending");
+
+    let baseline = json(&run(&[
+        "pilot-run",
+        manifest_path.to_str().unwrap(),
+        "--task-id",
+        "auth",
+        "--mode",
+        "baseline",
+        "--command",
+        "rg createSession",
+        "--files-read",
+        "src/auth/session.ts",
+        "--tokens",
+        "10000",
+    ]));
+    assert_eq!(baseline["summary"]["baseline_tokens"], 10000);
+
+    let callsieve = json(&run(&[
+        "pilot-run",
+        manifest_path.to_str().unwrap(),
+        "--task-id",
+        "auth",
+        "--mode",
+        "callsieve",
+        "--command",
+        "callsieve agent-context . \"change createSession token behavior\"",
+        "--files-read",
+        "src/auth/session.ts",
+        "--files-read",
+        "src/auth/token.ts",
+        "--tokens",
+        "3000",
+    ]));
+    assert_eq!(callsieve["summary"]["critical_files_still_missed"], 0);
+
+    let qa = json(&run(&["pilot-qa", manifest_path.to_str().unwrap()]));
+    assert_eq!(qa["status"], "pass");
+    assert_eq!(qa["observed_sessions"], 1);
+    assert_eq!(qa["failures"], 0);
+
+    let proof_path = manifest_root.path().join("proof.json");
+    let finalized = json(&run(&[
+        "pilot-finalize",
+        manifest_path.to_str().unwrap(),
+        "--out",
+        proof_path.to_str().unwrap(),
+        "--limit",
+        "5",
+    ]));
+    assert_eq!(finalized["command"], "pilot-finalize");
+    assert_eq!(
+        finalized["proof"]["status"],
+        "pass",
+        "{}",
+        serde_json::to_string_pretty(&finalized).unwrap()
+    );
+    assert_eq!(finalized["proof"]["proof"]["observed_sessions"], 1);
+    assert_eq!(
+        finalized["proof"]["proof"]["critical_files_still_missed"],
+        0
+    );
+    assert!(proof_path.is_file());
+
+    let proof_manifest_path = manifest_root.path().join("proof.manifest.json");
+    assert!(proof_manifest_path.is_file());
+    let proof_manifest: Value =
+        serde_json::from_slice(&fs::read(proof_manifest_path).unwrap()).unwrap();
+    assert!(
+        proof_manifest["repos"][0]["policy_trace_paths"][0]
+            .as_str()
+            .unwrap()
+            .contains("callsieve-observed.json")
+    );
+}
+
+#[test]
+fn pilot_qa_fails_when_callsieve_misses_critical_file() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+    json(&run(&["index", root]));
+    let manifest_root = tempfile::tempdir().unwrap();
+    let manifest_path = manifest_root.path().join("pilot.json");
+
+    json(&run(&[
+        "pilot-init",
+        manifest_path.to_str().unwrap(),
+        "--sessions",
+        "1",
+    ]));
+    json(&run(&[
+        "pilot-task",
+        "add",
+        manifest_path.to_str().unwrap(),
+        root,
+        "change createSession token behavior",
+        "--id",
+        "auth",
+        "--expected-file",
+        "src/auth/session.ts",
+        "--critical-file",
+        "src/auth/token.ts",
+    ]));
+    json(&run(&[
+        "pilot-run",
+        manifest_path.to_str().unwrap(),
+        "--task-id",
+        "auth",
+        "--mode",
+        "baseline",
+        "--command",
+        "rg createSession",
+        "--files-read",
+        "src/auth/session.ts",
+        "--tokens",
+        "10000",
+    ]));
+    json(&run(&[
+        "pilot-run",
+        manifest_path.to_str().unwrap(),
+        "--task-id",
+        "auth",
+        "--mode",
+        "callsieve",
+        "--command",
+        "callsieve agent-context . \"change createSession token behavior\"",
+        "--files-read",
+        "src/auth/session.ts",
+        "--tokens",
+        "3000",
+    ]));
+
+    let qa = json(&run(&["pilot-qa", manifest_path.to_str().unwrap()]));
+    assert_eq!(qa["status"], "fail");
+    assert!(
+        qa["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|check| check["check"] == "critical_misses" && check["status"] == "fail")
+    );
+}
+
+#[test]
 fn proof_report_requires_observed_sessions_and_rejects_mislabeled_replay() {
     let repo = fixture_repo();
     let root = repo.path().to_str().unwrap();

@@ -30,13 +30,18 @@ callsieve agent-context <path> "<task>" [--limit <n>] [--snippets-per-file <n>]
 callsieve benchmark <path> "<task>" [--limit <n>] [--snippets-per-file <n>] [--no-snippets]
 callsieve benchmark-suite <path> <tasks.json> [--limit <n>] [--snippets-per-file <n>] [--no-snippets]
 callsieve trace-summary <trace.json>
-callsieve session-start <path> "<task>" --client codex --model <name> --trace <trace.json>
+callsieve session-start <path> "<task>" --client codex --model <name> --trace <trace.json> [--expected-file <path>] [--critical-file <path>]
 callsieve session-event <trace.json> --command <cmd> [--files-read <path>...] [--tokens <n>] [--phase baseline|callsieve]
 callsieve session-finish <trace.json> --out <summary.json>
 callsieve trace-replay <path> <tasks.json> <trace.json> [--limit <n>] [--snippets-per-file <n>] [--no-snippets]
 callsieve trace-check <trace.json> [--strict]
 callsieve benchmark-report <manifest.json> [--limit <n>] [--snippets-per-file <n>] [--no-snippets]
 callsieve benchmark-doctor <manifest.json>
+callsieve pilot-init <manifest.json> [--sessions <n>]
+callsieve pilot-task add <manifest.json> <repo> "<task>" [--id <id>] [--expected-file <path>] [--critical-file <path>] [--external]
+callsieve pilot-run <manifest.json> --task-id <id> --mode baseline|callsieve --command <cmd> [--files-read <path>...] --tokens <n>
+callsieve pilot-qa <manifest.json>
+callsieve pilot-finalize <manifest.json> --out <proof.json>
 callsieve pilot-report <manifest.json> [--limit <n>] [--snippets-per-file <n>] [--no-snippets]
 callsieve proof-report <manifest.json> [--limit <n>] [--snippets-per-file <n>] [--no-snippets]
 callsieve pilot-doctor <manifest.json>
@@ -81,6 +86,12 @@ cargo run -- trace-replay . benchmarks/callsieve-real-repo.json benchmarks/sessi
 cargo run -- trace-check benchmarks/session-trace.example.json --strict
 cargo run -- benchmark-report benchmarks/report-manifest.example.json
 cargo run -- benchmark-doctor benchmarks/report-manifest.example.json
+cargo run -- pilot-init benchmarks/evidence/pilot.local.json --sessions 50
+cargo run -- pilot-task add benchmarks/evidence/pilot.local.json . "change login token expiry behavior" --id auth-expiry --expected-file src/auth/session.ts --critical-file src/auth/session.ts
+cargo run -- pilot-run benchmarks/evidence/pilot.local.json --task-id auth-expiry --mode baseline --command "rg login token expiry" --files-read src/auth/session.ts --tokens 12000
+cargo run -- pilot-run benchmarks/evidence/pilot.local.json --task-id auth-expiry --mode callsieve --command "callsieve agent-context . \"change login token expiry behavior\"" --files-read src/auth/session.ts --tokens 3000
+cargo run -- pilot-qa benchmarks/evidence/pilot.local.json
+cargo run -- pilot-finalize benchmarks/evidence/pilot.local.json --out benchmarks/evidence/proof.local.json
 cargo run -- pilot-report benchmarks/pilot-manifest.example.json
 cargo run -- proof-report benchmarks/pilot-manifest.example.json
 cargo run -- pilot-doctor benchmarks/pilot-manifest.example.json
@@ -334,6 +345,7 @@ Use `benchmark-doctor` before a report to catch missing repos, missing indexes, 
     "minimum_external_repos": 0,
     "maximum_controlled_replay_ratio": 0.25,
     "maximum_trace_violations": 0,
+    "maximum_critical_misses": 0,
     "require_fresh_index": true,
     "require_lsp_where_available": false,
     "require_codex_bootstrap": false
@@ -344,7 +356,8 @@ Use `benchmark-doctor` before a report to catch missing repos, missing indexes, 
       "path": ".",
       "languages": ["typescript", "javascript", "python", "rust"],
       "suite_paths": ["benchmarks/callsieve-real-repo.json"],
-      "trace_paths": ["benchmarks/session-trace.example.json"]
+      "trace_paths": ["benchmarks/session-trace.example.json"],
+      "policy_trace_paths": ["benchmarks/session-trace.example.json"]
     }
   ]
 }
