@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     env, fs,
     path::{Path, PathBuf},
     process::{Command as ProcessCommand, Stdio},
@@ -221,11 +221,11 @@ pub enum Command {
     /// Validate a benchmark-report manifest before running evidence collection.
     BenchmarkDoctor { manifest: PathBuf },
 
-    /// Create a 50-session observed pilot harness manifest.
+    /// Create a 100-session observed pilot harness manifest.
     PilotInit {
         manifest: PathBuf,
 
-        #[arg(long, default_value_t = 50)]
+        #[arg(long, default_value_t = 100)]
         sessions: usize,
     },
 
@@ -522,6 +522,7 @@ pub enum ShimCommand {
 }
 
 #[derive(Debug, Subcommand)]
+#[allow(clippy::large_enum_variant)]
 pub enum PilotTaskCommand {
     /// Add a measured task to a pilot harness manifest.
     Add {
@@ -549,6 +550,32 @@ pub enum PilotTaskCommand {
 
         #[arg(long = "suite-path")]
         suite_path: Option<PathBuf>,
+
+        #[arg(long = "pair-id")]
+        pair_id: Option<String>,
+
+        #[arg(long = "task-category", default_value = "code_change")]
+        task_category: String,
+
+        #[arg(long, default_value = "unknown")]
+        difficulty: String,
+
+        #[arg(long, default_value = "paired_observed")]
+        condition: String,
+
+        #[arg(long = "token-source", default_value = "transcript_context_tokens")]
+        token_accounting_source: String,
+    },
+
+    /// Reject a pilot task while preserving its local audit trail.
+    Reject {
+        manifest: PathBuf,
+
+        #[arg(long = "task-id")]
+        task_id: String,
+
+        #[arg(long)]
+        reason: String,
     },
 }
 
@@ -726,9 +753,25 @@ struct SessionFinishOutput {
 struct PilotHarnessManifest {
     schema_version: u32,
     target_sessions: usize,
+    #[serde(default = "default_pilot_protocol")]
+    protocol: PilotEvidenceProtocol,
     thresholds: serde_json::Value,
     #[serde(default)]
     tasks: Vec<PilotHarnessTask>,
+    #[serde(default)]
+    rejected_sessions: Vec<PilotRejectedSession>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct PilotEvidenceProtocol {
+    evidence_standard: String,
+    collection: String,
+    pairing: String,
+    token_accounting: String,
+    controlled_replay_policy: String,
+    planned_task_buffer_ratio: f64,
+    minimum_planned_tasks: usize,
+    qa_batch_size: usize,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -746,11 +789,32 @@ struct PilotHarnessTask {
     external: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     suite_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pair_id: Option<String>,
+    #[serde(default = "default_pilot_task_category")]
+    task_category: String,
+    #[serde(default = "default_pilot_difficulty")]
+    difficulty: String,
+    #[serde(default = "default_pilot_condition")]
+    condition: String,
+    #[serde(default = "default_pilot_token_accounting_source")]
+    token_accounting_source: String,
+    #[serde(default = "default_true")]
+    preregistered: bool,
     baseline_trace_path: String,
     callsieve_trace_path: String,
     trace_path: String,
     summary_path: String,
     status: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct PilotRejectedSession {
+    task_id: String,
+    reason: String,
+    status_at_rejection: String,
+    trace_path: String,
+    rejected_at: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -766,6 +830,13 @@ struct PilotTaskAddOutput {
     command: &'static str,
     manifest: String,
     task: PilotHarnessTask,
+}
+
+#[derive(Debug, Serialize)]
+struct PilotTaskRejectOutput {
+    command: &'static str,
+    manifest: String,
+    rejected: PilotRejectedSession,
 }
 
 #[derive(Debug, Serialize)]
@@ -786,6 +857,7 @@ struct PilotQaOutput {
     status: String,
     target_sessions: usize,
     observed_sessions: usize,
+    rejected_sessions: usize,
     tasks: usize,
     failures: usize,
     results: Vec<PilotQaCheck>,
@@ -807,6 +879,39 @@ struct PilotFinalizeOutput {
     out: String,
     qa: PilotQaOutput,
     proof: query::ProofReportOutput,
+}
+
+fn default_pilot_protocol() -> PilotEvidenceProtocol {
+    PilotEvidenceProtocol {
+        evidence_standard: "observed_session_only".to_string(),
+        collection: "real_codex_chatgpt_developer_sessions".to_string(),
+        pairing: "paired_baseline_and_callsieve_phases".to_string(),
+        token_accounting: "transcript_context_tokens".to_string(),
+        controlled_replay_policy: "reported_separately_never_counted_as_observed".to_string(),
+        planned_task_buffer_ratio: 1.2,
+        minimum_planned_tasks: 0,
+        qa_batch_size: 10,
+    }
+}
+
+fn default_pilot_task_category() -> String {
+    "code_change".to_string()
+}
+
+fn default_pilot_difficulty() -> String {
+    "unknown".to_string()
+}
+
+fn default_pilot_condition() -> String {
+    "paired_observed".to_string()
+}
+
+fn default_pilot_token_accounting_source() -> String {
+    "transcript_context_tokens".to_string()
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Serialize)]
@@ -1142,6 +1247,11 @@ pub fn run() -> Result<()> {
                 client,
                 model,
                 suite_path,
+                pair_id,
+                task_category,
+                difficulty,
+                condition,
+                token_accounting_source,
             } => {
                 let output = pilot_task_add(
                     &manifest,
@@ -1154,7 +1264,20 @@ pub fn run() -> Result<()> {
                     client,
                     &model,
                     suite_path,
+                    pair_id,
+                    task_category,
+                    difficulty,
+                    condition,
+                    token_accounting_source,
                 )?;
+                output::json::print(&output)?;
+            }
+            PilotTaskCommand::Reject {
+                manifest,
+                task_id,
+                reason,
+            } => {
+                let output = pilot_task_reject(&manifest, &task_id, &reason)?;
                 output::json::print(&output)?;
             }
         },
@@ -1615,6 +1738,8 @@ fn session_start(
         "events": [],
         "misses": [],
         "token_accounting": {
+            "source": "transcript_context_tokens",
+            "fallback_policy": "local_estimator_allowed_only_when_labeled_separately",
             "baseline_tokens": 0,
             "callsieve_tokens": 0,
             "token_savings": 0,
@@ -1738,23 +1863,35 @@ fn pilot_init(manifest: &Path, sessions: usize) -> Result<PilotInitOutput> {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
+    let strict_claim = sessions >= 100;
+    let minimum_planned_tasks = if strict_claim {
+        sessions.saturating_mul(12).div_ceil(10)
+    } else {
+        sessions
+    };
+    let mut protocol = default_pilot_protocol();
+    protocol.minimum_planned_tasks = minimum_planned_tasks;
     let manifest_value = PilotHarnessManifest {
         schema_version: 1,
         target_sessions: sessions,
+        protocol,
         thresholds: serde_json::json!({
             "minimum_recall": 1.0,
             "minimum_token_reduction_percent": 0.0,
             "minimum_observed_sessions": sessions,
             "minimum_observed_token_reduction_percent": 50.0,
-            "minimum_external_repos": 0,
+            "minimum_external_repos": if strict_claim { 6 } else { 0 },
+            "minimum_planned_tasks": minimum_planned_tasks,
             "maximum_controlled_replay_ratio": 0.0,
             "maximum_trace_violations": 0,
             "maximum_critical_misses": 0,
             "require_fresh_index": true,
-            "require_lsp_where_available": false,
-            "require_codex_bootstrap": false
+            "require_lsp_where_available": strict_claim,
+            "require_codex_bootstrap": strict_claim,
+            "require_transcript_token_accounting": strict_claim
         }),
         tasks: Vec::new(),
+        rejected_sessions: Vec::new(),
     };
     write_pilot_manifest(manifest, &manifest_value)?;
 
@@ -1778,6 +1915,11 @@ fn pilot_task_add(
     client: AgentClient,
     model: &str,
     suite_path: Option<PathBuf>,
+    pair_id: Option<String>,
+    task_category: String,
+    difficulty: String,
+    condition: String,
+    token_accounting_source: String,
 ) -> Result<PilotTaskAddOutput> {
     let mut manifest = read_pilot_manifest(manifest_path)?;
     let id = id.unwrap_or_else(|| next_pilot_task_id(&manifest));
@@ -1794,6 +1936,7 @@ fn pilot_task_add(
     let baseline_trace_path = task_dir.join("baseline-observed.json");
     let callsieve_trace_path = task_dir.join("callsieve-observed.json");
     let summary_path = task_dir.join("summary.json");
+    let pair_id = pair_id.unwrap_or_else(|| id.clone());
     let task_entry = PilotHarnessTask {
         id,
         repo: repo.display().to_string(),
@@ -1804,6 +1947,12 @@ fn pilot_task_add(
         critical_files,
         external,
         suite_path: suite_path.map(|path| path.display().to_string()),
+        pair_id: Some(pair_id),
+        task_category,
+        difficulty,
+        condition,
+        token_accounting_source,
+        preregistered: true,
         baseline_trace_path: baseline_trace_path.display().to_string(),
         callsieve_trace_path: callsieve_trace_path.display().to_string(),
         trace_path: trace_path.display().to_string(),
@@ -1817,6 +1966,43 @@ fn pilot_task_add(
         command: "pilot-task add",
         manifest: manifest_path.display().to_string(),
         task: task_entry,
+    })
+}
+
+fn pilot_task_reject(
+    manifest_path: &Path,
+    task_id: &str,
+    reason: &str,
+) -> Result<PilotTaskRejectOutput> {
+    if reason.trim().is_empty() {
+        anyhow::bail!("rejection reason cannot be empty");
+    }
+    let mut manifest = read_pilot_manifest(manifest_path)?;
+    let index = manifest
+        .tasks
+        .iter()
+        .position(|task| task.id == task_id)
+        .with_context(|| format!("pilot task not found: {task_id}"))?;
+    let status_at_rejection = manifest.tasks[index].status.clone();
+    let trace_path = manifest.tasks[index].trace_path.clone();
+    manifest.tasks[index].status = "rejected".to_string();
+    let rejected = PilotRejectedSession {
+        task_id: task_id.to_string(),
+        reason: reason.trim().to_string(),
+        status_at_rejection,
+        trace_path,
+        rejected_at: now_unix_seconds(),
+    };
+    manifest
+        .rejected_sessions
+        .retain(|entry| entry.task_id != task_id);
+    manifest.rejected_sessions.push(rejected.clone());
+    write_pilot_manifest(manifest_path, &manifest)?;
+
+    Ok(PilotTaskRejectOutput {
+        command: "pilot-task reject",
+        manifest: manifest_path.display().to_string(),
+        rejected,
     })
 }
 
@@ -1835,6 +2021,9 @@ fn pilot_run(
         .position(|task| task.id == task_id)
         .with_context(|| format!("pilot task not found: {task_id}"))?;
     let task = manifest.tasks[index].clone();
+    if task.status == "rejected" {
+        anyhow::bail!("pilot task is rejected and cannot be updated: {task_id}");
+    }
     ensure_pilot_trace(&task, Path::new(&task.trace_path))?;
     let mode_trace = match mode {
         PilotSessionMode::Baseline => Path::new(&task.baseline_trace_path),
@@ -1873,8 +2062,65 @@ fn pilot_qa(manifest_path: &Path) -> Result<PilotQaOutput> {
     let manifest = read_pilot_manifest(manifest_path)?;
     let mut results = Vec::new();
     let mut complete_observed_sessions = 0usize;
+    let mut external_repos = BTreeSet::new();
+    let minimum_planned_tasks = threshold_number(&manifest.thresholds, "minimum_planned_tasks")
+        .max(manifest.protocol.minimum_planned_tasks);
+    let minimum_external_repos = threshold_number(&manifest.thresholds, "minimum_external_repos");
+    let require_transcript_token_accounting =
+        threshold_bool(&manifest.thresholds, "require_transcript_token_accounting");
 
     for task in &manifest.tasks {
+        if task.status == "rejected" {
+            let rejected = manifest
+                .rejected_sessions
+                .iter()
+                .find(|entry| entry.task_id == task.id);
+            let audited = rejected.is_some_and(|entry| !entry.reason.trim().is_empty());
+            push_qa(
+                &mut results,
+                &task.id,
+                "rejected_session_audit",
+                audited,
+                "rejected session has an audit reason".to_string(),
+                "rejected session is missing an audit reason".to_string(),
+            );
+            continue;
+        }
+
+        if task.external {
+            external_repos.insert(task.repo.clone());
+        }
+        let pair_id = task.pair_id.as_deref().unwrap_or(&task.id);
+        let preregistered = task.preregistered
+            && !task.task.trim().is_empty()
+            && !pair_id.trim().is_empty()
+            && !task.task_category.trim().is_empty()
+            && !task.condition.trim().is_empty()
+            && !task.expected_files.is_empty()
+            && !task.critical_files.is_empty();
+        push_qa(
+            &mut results,
+            &task.id,
+            "pre_registered_task",
+            preregistered,
+            "task has frozen pre-registration metadata".to_string(),
+            "task is missing pre-registration metadata, expected files, or critical files"
+                .to_string(),
+        );
+        let registered_token_source = if require_transcript_token_accounting {
+            task.token_accounting_source == "transcript_context_tokens"
+        } else {
+            !task.token_accounting_source.trim().is_empty()
+        };
+        push_qa(
+            &mut results,
+            &task.id,
+            "registered_token_source",
+            registered_token_source,
+            "task token source is registered".to_string(),
+            "task token source is missing or not transcript_context_tokens".to_string(),
+        );
+
         let trace_path = Path::new(&task.trace_path);
         let trace_exists = trace_path.is_file();
         push_qa(
@@ -1931,16 +2177,13 @@ fn pilot_qa(manifest_path: &Path) -> Result<PilotQaOutput> {
         let baseline_tokens = summary_number(&summary_value, "baseline_tokens");
         let callsieve_tokens = summary_number(&summary_value, "callsieve_tokens");
         let critical_misses = summary_number(&summary_value, "critical_files_still_missed");
-        let complete =
+        let complete_metrics =
             observed == 1 && controlled == 0 && baseline_tokens > 0 && callsieve_tokens > 0;
-        if complete {
-            complete_observed_sessions += 1;
-        }
         push_qa(
             &mut results,
             &task.id,
             "paired_observed_session",
-            complete,
+            complete_metrics,
             "paired observed baseline and CallSieve phases are complete".to_string(),
             format!(
                 "expected one observed pair with baseline and CallSieve tokens; observed={observed}, controlled={controlled}, baseline_tokens={baseline_tokens}, callsieve_tokens={callsieve_tokens}"
@@ -1971,28 +2214,97 @@ fn pilot_qa(manifest_path: &Path) -> Result<PilotQaOutput> {
             "strict trace policy passed".to_string(),
             format!("strict trace policy violations: {violations}"),
         );
+        let observed_collection = trace_value
+            .get("metadata")
+            .and_then(|metadata| metadata.get("collection"))
+            .and_then(serde_json::Value::as_str)
+            == Some("observed_session");
         push_qa(
             &mut results,
             &task.id,
             "observed_collection",
-            trace_value
-                .get("metadata")
-                .and_then(|metadata| metadata.get("collection"))
-                .and_then(serde_json::Value::as_str)
-                == Some("observed_session"),
+            observed_collection,
             "trace metadata collection is observed_session".to_string(),
             "trace metadata collection is not observed_session".to_string(),
         );
+        let no_controlled_markers = !trace_has_controlled_replay_marker(&trace_json);
         push_qa(
             &mut results,
             &task.id,
             "controlled_replay_markers",
-            !trace_has_controlled_replay_marker(&trace_json),
+            no_controlled_markers,
             "trace contains no controlled replay markers".to_string(),
             "trace contains controlled replay markers".to_string(),
         );
+        let trace_token_source = trace_token_accounting_source(&trace_value);
+        let transcript_token_accounting = if require_transcript_token_accounting {
+            trace_token_source == "transcript_context_tokens"
+        } else {
+            !trace_token_source.is_empty()
+        };
+        push_qa(
+            &mut results,
+            &task.id,
+            "trace_token_source",
+            transcript_token_accounting,
+            "trace token source is auditable".to_string(),
+            format!("trace token source is invalid: {trace_token_source}"),
+        );
+
+        let countable = preregistered
+            && registered_token_source
+            && task_text_matches
+            && complete_metrics
+            && critical_misses == 0
+            && violations == 0
+            && observed_collection
+            && no_controlled_markers
+            && transcript_token_accounting;
+        if countable {
+            complete_observed_sessions += 1;
+        }
+        push_qa(
+            &mut results,
+            &task.id,
+            "countable_observed_session",
+            countable,
+            "session is countable observed proof evidence".to_string(),
+            "session is not countable observed proof evidence".to_string(),
+        );
     }
 
+    push_qa(
+        &mut results,
+        "pilot",
+        "minimum_planned_tasks",
+        manifest.tasks.len() >= minimum_planned_tasks,
+        format!(
+            "planned tasks {} meet minimum {}",
+            manifest.tasks.len(),
+            minimum_planned_tasks
+        ),
+        format!(
+            "planned tasks {} are below minimum {}",
+            manifest.tasks.len(),
+            minimum_planned_tasks
+        ),
+    );
+    push_qa(
+        &mut results,
+        "pilot",
+        "minimum_external_repos",
+        external_repos.len() >= minimum_external_repos,
+        format!(
+            "external repos {} meet minimum {}",
+            external_repos.len(),
+            minimum_external_repos
+        ),
+        format!(
+            "external repos {} are below minimum {}",
+            external_repos.len(),
+            minimum_external_repos
+        ),
+    );
     push_qa(
         &mut results,
         "pilot",
@@ -2018,6 +2330,7 @@ fn pilot_qa(manifest_path: &Path) -> Result<PilotQaOutput> {
         status: if failures == 0 { "pass" } else { "fail" }.to_string(),
         target_sessions: manifest.target_sessions,
         observed_sessions: complete_observed_sessions,
+        rejected_sessions: manifest.rejected_sessions.len(),
         tasks: manifest.tasks.len(),
         failures,
         results,
@@ -2162,6 +2475,30 @@ fn summary_number(summary: &serde_json::Value, key: &str) -> usize {
         .unwrap_or_default()
 }
 
+fn threshold_number(thresholds: &serde_json::Value, key: &str) -> usize {
+    thresholds
+        .get(key)
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|value| usize::try_from(value).ok())
+        .unwrap_or_default()
+}
+
+fn threshold_bool(thresholds: &serde_json::Value, key: &str) -> bool {
+    thresholds
+        .get(key)
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+}
+
+fn trace_token_accounting_source(trace: &serde_json::Value) -> String {
+    trace
+        .get("token_accounting")
+        .and_then(|accounting| accounting.get("source"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .to_string()
+}
+
 fn push_qa(
     results: &mut Vec<PilotQaCheck>,
     task_id: &str,
@@ -2207,8 +2544,18 @@ fn build_proof_manifest(
     let suite_root = root.join("suites");
     let mut grouped: BTreeMap<String, Vec<&PilotHarnessTask>> = BTreeMap::new();
     for task in &manifest.tasks {
+        if task.status == "rejected" {
+            continue;
+        }
         grouped.entry(task.repo.clone()).or_default().push(task);
     }
+    let token_sources: Vec<String> = manifest
+        .tasks
+        .iter()
+        .map(|task| task.token_accounting_source.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
 
     let mut repos = Vec::new();
     for (repo, tasks) in grouped {
@@ -2227,7 +2574,13 @@ fn build_proof_manifest(
                 serde_json::json!({
                     "id": task.id,
                     "task": task.task,
-                    "expected_files": task.expected_files
+                    "expected_files": task.expected_files,
+                    "critical_files": task.critical_files,
+                    "pair_id": task.pair_id.as_deref().unwrap_or(&task.id),
+                    "task_category": task.task_category,
+                    "difficulty": task.difficulty,
+                    "condition": task.condition,
+                    "token_accounting_source": task.token_accounting_source
                 })
             })
             .collect();
@@ -2254,6 +2607,13 @@ fn build_proof_manifest(
 
     Ok(serde_json::json!({
         "thresholds": manifest.thresholds,
+        "audit": {
+            "protocol": manifest.protocol,
+            "planned_tasks": manifest.tasks.len(),
+            "rejected_sessions": manifest.rejected_sessions.len(),
+            "token_accounting_sources": token_sources,
+            "rejection_audit": manifest.rejected_sessions
+        },
         "repos": repos
     }))
 }
@@ -2350,6 +2710,18 @@ fn normalize_session_trace(value: &mut serde_json::Value) -> Result<()> {
     } else {
         (token_savings as f64 / baseline.tokens as f64) * 100.0
     };
+    let token_source = value
+        .get("token_accounting")
+        .and_then(|accounting| accounting.get("source"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("transcript_context_tokens")
+        .to_string();
+    let fallback_policy = value
+        .get("token_accounting")
+        .and_then(|accounting| accounting.get("fallback_policy"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("local_estimator_allowed_only_when_labeled_separately")
+        .to_string();
 
     let object = value
         .as_object_mut()
@@ -2367,6 +2739,8 @@ fn normalize_session_trace(value: &mut serde_json::Value) -> Result<()> {
     object.insert(
         "token_accounting".to_string(),
         serde_json::json!({
+            "source": token_source,
+            "fallback_policy": fallback_policy,
             "baseline_tokens": baseline.tokens,
             "callsieve_tokens": callsieve.tokens,
             "token_savings": token_savings,
@@ -3529,6 +3903,17 @@ mod tests {
             "--critical-file",
             "src/main.rs",
             "--external",
+        ])
+        .unwrap();
+        Cli::try_parse_from([
+            "callsieve",
+            "pilot-task",
+            "reject",
+            "benchmarks/evidence/pilot.json",
+            "--task-id",
+            "auth",
+            "--reason",
+            "operator learned answer during paired run",
         ])
         .unwrap();
         Cli::try_parse_from([

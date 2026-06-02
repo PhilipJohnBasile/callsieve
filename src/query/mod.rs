@@ -371,6 +371,18 @@ pub struct BenchmarkReportManifest {
     repos: Vec<BenchmarkReportRepoInput>,
     #[serde(default)]
     thresholds: PilotThresholds,
+    #[serde(default)]
+    audit: ProofAuditInput,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct ProofAuditInput {
+    #[serde(default)]
+    planned_tasks: usize,
+    #[serde(default)]
+    rejected_sessions: usize,
+    #[serde(default)]
+    token_accounting_sources: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -458,11 +470,15 @@ pub struct PilotThresholds {
     #[serde(default)]
     maximum_critical_misses: usize,
     #[serde(default)]
+    minimum_planned_tasks: usize,
+    #[serde(default)]
     require_fresh_index: bool,
     #[serde(default)]
     require_lsp_where_available: bool,
     #[serde(default)]
     require_codex_bootstrap: bool,
+    #[serde(default)]
+    require_transcript_token_accounting: bool,
 }
 
 impl Default for PilotThresholds {
@@ -477,9 +493,11 @@ impl Default for PilotThresholds {
             maximum_controlled_replay_ratio: default_maximum_controlled_replay_ratio(),
             maximum_trace_violations: 0,
             maximum_critical_misses: 0,
+            minimum_planned_tasks: 0,
             require_fresh_index: false,
             require_lsp_where_available: false,
             require_codex_bootstrap: false,
+            require_transcript_token_accounting: false,
         }
     }
 }
@@ -610,6 +628,9 @@ pub struct ProofReportOutput {
 struct PilotProofSummary {
     repos: usize,
     sessions: usize,
+    planned_tasks: usize,
+    rejected_sessions: usize,
+    token_accounting_sources: Vec<String>,
     observed_sessions: usize,
     controlled_replay_sessions: usize,
     unclassified_sessions: usize,
@@ -624,6 +645,7 @@ struct PilotProofSummary {
     avoided_file_reads: usize,
     trace_policy_violations: usize,
     critical_files_still_missed: usize,
+    transcript_token_accounting_sessions: usize,
     fresh_indexes: usize,
     daemon_fresh_repos: usize,
     lsp_enriched_repos: usize,
@@ -1655,6 +1677,7 @@ pub fn pilot_report(
     let mut lsp_available_repos = 0usize;
     let mut codex_bootstrap_repos = 0usize;
     let mut external_repos = 0usize;
+    let mut transcript_token_accounting_sessions = 0usize;
     let mut observed_trace_accumulator = TraceAccumulator::default();
     let mut controlled_trace_accumulator = TraceAccumulator::default();
     let mut unclassified_trace_accumulator = TraceAccumulator::default();
@@ -1711,6 +1734,25 @@ pub fn pilot_report(
             let trace_summary = trace_summary_from_str(&trace_json)?;
             match trace_collection {
                 TraceCollection::ObservedSession => {
+                    if trace_token_accounting_source(&trace_value) == "transcript_context_tokens" {
+                        transcript_token_accounting_sessions += trace_summary.observed_sessions;
+                    }
+                    if repo
+                        .thresholds(&manifest.thresholds)
+                        .require_transcript_token_accounting
+                        && trace_token_accounting_source(&trace_value)
+                            != "transcript_context_tokens"
+                    {
+                        failures.push(PilotFailure {
+                            label: repo.label.clone(),
+                            path: repo.path.display().to_string(),
+                            check: "require_transcript_token_accounting".to_string(),
+                            message: format!(
+                                "observed trace {} is missing transcript_context_tokens provenance",
+                                trace_path.display()
+                            ),
+                        });
+                    }
                     observed_trace_accumulator.add_summary(&trace_summary)
                 }
                 TraceCollection::ControlledReplay => {
@@ -1890,6 +1932,9 @@ pub fn pilot_report(
     let proof = PilotProofSummary {
         repos: benchmark.summary.repos,
         sessions: total_trace_sessions,
+        planned_tasks: manifest.audit.planned_tasks,
+        rejected_sessions: manifest.audit.rejected_sessions,
+        token_accounting_sources: manifest.audit.token_accounting_sources.clone(),
         observed_sessions,
         controlled_replay_sessions,
         unclassified_sessions,
@@ -1904,6 +1949,7 @@ pub fn pilot_report(
         avoided_file_reads: benchmark.summary.total_avoided_file_reads,
         trace_policy_violations,
         critical_files_still_missed,
+        transcript_token_accounting_sessions,
         fresh_indexes,
         daemon_fresh_repos,
         lsp_enriched_repos,
@@ -1922,6 +1968,17 @@ pub fn pilot_report(
             ),
         });
     }
+    if proof.planned_tasks < manifest.thresholds.minimum_planned_tasks {
+        failures.push(PilotFailure {
+            label: None,
+            path: ".".to_string(),
+            check: "minimum_planned_tasks".to_string(),
+            message: format!(
+                "planned tasks {} are below threshold {}",
+                proof.planned_tasks, manifest.thresholds.minimum_planned_tasks
+            ),
+        });
+    }
     if proof.external_repos < manifest.thresholds.minimum_external_repos {
         failures.push(PilotFailure {
             label: None,
@@ -1930,6 +1987,19 @@ pub fn pilot_report(
             message: format!(
                 "external repos {} are below threshold {}",
                 proof.external_repos, manifest.thresholds.minimum_external_repos
+            ),
+        });
+    }
+    if manifest.thresholds.require_transcript_token_accounting
+        && proof.transcript_token_accounting_sessions < proof.observed_sessions
+    {
+        failures.push(PilotFailure {
+            label: None,
+            path: ".".to_string(),
+            check: "require_transcript_token_accounting".to_string(),
+            message: format!(
+                "transcript-token observed sessions {} are below observed sessions {}",
+                proof.transcript_token_accounting_sessions, proof.observed_sessions
             ),
         });
     }
@@ -3383,6 +3453,14 @@ fn trace_collection_from_value(value: &serde_json::Value) -> TraceCollection {
     }
 }
 
+fn trace_token_accounting_source(value: &serde_json::Value) -> &str {
+    value
+        .get("token_accounting")
+        .and_then(|accounting| accounting.get("source"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+}
+
 fn string_array(value: Option<&serde_json::Value>) -> Vec<String> {
     value
         .and_then(serde_json::Value::as_array)
@@ -4024,6 +4102,7 @@ mod tests {
 
         let manifest = BenchmarkReportManifest {
             thresholds: PilotThresholds::default(),
+            audit: ProofAuditInput::default(),
             repos: vec![
                 BenchmarkReportRepoInput {
                     path: repo_a.path().to_path_buf(),

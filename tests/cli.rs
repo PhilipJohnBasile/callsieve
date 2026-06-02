@@ -872,6 +872,16 @@ fn pilot_harness_records_pair_and_finalizes_proof() {
     ]));
     assert_eq!(init["command"], "pilot-init");
     assert_eq!(init["target_sessions"], 1);
+    let initialized_manifest: Value =
+        serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+    assert_eq!(
+        initialized_manifest["protocol"]["evidence_standard"],
+        "observed_session_only"
+    );
+    assert_eq!(
+        initialized_manifest["thresholds"]["minimum_planned_tasks"],
+        1
+    );
 
     let added = json(&run(&[
         "pilot-task",
@@ -892,6 +902,11 @@ fn pilot_harness_records_pair_and_finalizes_proof() {
     ]));
     assert_eq!(added["command"], "pilot-task add");
     assert_eq!(added["task"]["status"], "pending");
+    assert_eq!(added["task"]["pair_id"], "auth");
+    assert_eq!(
+        added["task"]["token_accounting_source"],
+        "transcript_context_tokens"
+    );
 
     let baseline = json(&run(&[
         "pilot-run",
@@ -930,7 +945,17 @@ fn pilot_harness_records_pair_and_finalizes_proof() {
     let qa = json(&run(&["pilot-qa", manifest_path.to_str().unwrap()]));
     assert_eq!(qa["status"], "pass");
     assert_eq!(qa["observed_sessions"], 1);
+    assert_eq!(qa["rejected_sessions"], 0);
     assert_eq!(qa["failures"], 0);
+    assert!(
+        qa["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(
+                |check| check["check"] == "countable_observed_session" && check["status"] == "pass"
+            )
+    );
 
     let proof_path = manifest_root.path().join("proof.json");
     let finalized = json(&run(&[
@@ -959,12 +984,109 @@ fn pilot_harness_records_pair_and_finalizes_proof() {
     assert!(proof_manifest_path.is_file());
     let proof_manifest: Value =
         serde_json::from_slice(&fs::read(proof_manifest_path).unwrap()).unwrap();
+    assert_eq!(proof_manifest["audit"]["planned_tasks"], 1);
+    assert_eq!(proof_manifest["audit"]["rejected_sessions"], 0);
+    assert_eq!(
+        proof_manifest["audit"]["token_accounting_sources"][0],
+        "transcript_context_tokens"
+    );
     assert!(
         proof_manifest["repos"][0]["policy_trace_paths"][0]
             .as_str()
             .unwrap()
             .contains("callsieve-observed.json")
     );
+}
+
+#[test]
+fn pilot_init_defaults_to_strict_100_session_claim_protocol() {
+    let manifest_root = tempfile::tempdir().unwrap();
+    let manifest_path = manifest_root.path().join("pilot.json");
+
+    let init = json(&run(&["pilot-init", manifest_path.to_str().unwrap()]));
+    assert_eq!(init["target_sessions"], 100);
+
+    let manifest: Value = serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+    assert_eq!(manifest["target_sessions"], 100);
+    assert_eq!(manifest["protocol"]["minimum_planned_tasks"], 120);
+    assert_eq!(manifest["thresholds"]["minimum_observed_sessions"], 100);
+    assert_eq!(manifest["thresholds"]["minimum_external_repos"], 6);
+    assert_eq!(manifest["thresholds"]["minimum_planned_tasks"], 120);
+    assert_eq!(
+        manifest["thresholds"]["require_transcript_token_accounting"],
+        true
+    );
+    assert_eq!(manifest["thresholds"]["require_codex_bootstrap"], true);
+    assert_eq!(manifest["thresholds"]["require_lsp_where_available"], true);
+}
+
+#[test]
+fn pilot_task_reject_preserves_audit_and_excludes_task_from_count() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+    json(&run(&["index", root]));
+    let manifest_root = tempfile::tempdir().unwrap();
+    let manifest_path = manifest_root.path().join("pilot.json");
+
+    json(&run(&[
+        "pilot-init",
+        manifest_path.to_str().unwrap(),
+        "--sessions",
+        "1",
+    ]));
+    json(&run(&[
+        "pilot-task",
+        "add",
+        manifest_path.to_str().unwrap(),
+        root,
+        "change createSession token behavior",
+        "--id",
+        "auth",
+        "--expected-file",
+        "src/auth/session.ts",
+        "--critical-file",
+        "src/auth/session.ts",
+    ]));
+
+    let rejected = json(&run(&[
+        "pilot-task",
+        "reject",
+        manifest_path.to_str().unwrap(),
+        "--task-id",
+        "auth",
+        "--reason",
+        "operator saw answer during baseline phase",
+    ]));
+    assert_eq!(rejected["command"], "pilot-task reject");
+    assert_eq!(rejected["rejected"]["task_id"], "auth");
+
+    let qa = json(&run(&["pilot-qa", manifest_path.to_str().unwrap()]));
+    assert_eq!(qa["status"], "fail");
+    assert_eq!(qa["observed_sessions"], 0);
+    assert_eq!(qa["rejected_sessions"], 1);
+    assert!(
+        qa["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|check| check["check"] == "rejected_session_audit" && check["status"] == "pass")
+    );
+
+    let output = run(&[
+        "pilot-run",
+        manifest_path.to_str().unwrap(),
+        "--task-id",
+        "auth",
+        "--mode",
+        "callsieve",
+        "--command",
+        "callsieve agent-context . \"change createSession token behavior\"",
+        "--files-read",
+        "src/auth/session.ts",
+        "--tokens",
+        "3000",
+    ]);
+    assert!(!output.status.success());
 }
 
 #[test]
@@ -1145,6 +1267,87 @@ fn proof_report_requires_observed_sessions_and_rejects_mislabeled_replay() {
             .unwrap()
             .iter()
             .any(|failure| failure["check"] == "observed_trace_mislabeled_controlled_replay")
+    );
+}
+
+#[test]
+fn proof_report_requires_transcript_token_provenance_when_strict() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+    json(&run(&["index", root]));
+    let suite = repo.path().join("tasks.json");
+    write(
+        &suite,
+        r#"{"tasks":[{"id":"auth","task":"change createSession token behavior","expected_files":["src/auth/session.ts"]}]}"#,
+    );
+    let trace = repo.path().join("observed.json");
+    write(
+        &trace,
+        r#"{
+  "metadata": {"collection": "observed_session", "client": "codex", "model": "gpt-5-codex"},
+  "task": "change createSession token behavior",
+  "expected_files": ["src/auth/session.ts"],
+  "baseline": {
+    "grep_commands": 4,
+    "file_reads": 5,
+    "tokens": 10000,
+    "commands": ["rg createSession"],
+    "files_read": ["src/auth/session.ts"]
+  },
+  "callsieve": {
+    "grep_commands": 0,
+    "file_reads": 2,
+    "tokens": 3000,
+    "commands": ["callsieve agent-context . \"change auth\""],
+    "files_read": ["src/auth/session.ts"]
+  }
+}"#,
+    );
+    let manifest_root = tempfile::tempdir().unwrap();
+    let manifest_path = manifest_root.path().join("proof.json");
+    let escaped_root = root.replace('\\', "\\\\");
+    let escaped_suite = suite.to_string_lossy().replace('\\', "\\\\");
+    let escaped_trace = trace.to_string_lossy().replace('\\', "\\\\");
+    write(
+        &manifest_path,
+        &format!(
+            r#"{{
+  "thresholds": {{
+    "minimum_recall": 1.0,
+    "minimum_token_reduction_percent": -300.0,
+    "minimum_observed_sessions": 1,
+    "minimum_observed_token_reduction_percent": 50.0,
+    "minimum_planned_tasks": 1,
+    "maximum_controlled_replay_ratio": 0.0,
+    "maximum_trace_violations": 0,
+    "require_fresh_index": true,
+    "require_transcript_token_accounting": true
+  }},
+  "audit": {{
+    "planned_tasks": 1,
+    "rejected_sessions": 0,
+    "token_accounting_sources": ["manual_entry"]
+  }},
+  "repos": [
+    {{"label":"fixture","path":"{escaped_root}","suite_path":"{escaped_suite}","trace_path":"{escaped_trace}"}}
+  ]
+}}"#
+        ),
+    );
+
+    let proof = json(&run(&[
+        "proof-report",
+        manifest_path.to_str().unwrap(),
+        "--limit",
+        "5",
+    ]));
+    assert_eq!(proof["status"], "fail");
+    assert!(
+        proof["failures"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|failure| failure["check"] == "require_transcript_token_accounting")
     );
 }
 

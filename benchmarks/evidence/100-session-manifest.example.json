@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "target_sessions": 50,
+  "target_sessions": 100,
   "protocol": {
     "evidence_standard": "observed_session_only",
     "collection": "real_codex_chatgpt_developer_sessions",
@@ -8,16 +8,16 @@
     "token_accounting": "transcript_context_tokens",
     "controlled_replay_policy": "reported_separately_never_counted_as_observed",
     "planned_task_buffer_ratio": 1.2,
-    "minimum_planned_tasks": 50,
+    "minimum_planned_tasks": 120,
     "qa_batch_size": 10
   },
   "thresholds": {
     "minimum_recall": 1.0,
     "minimum_token_reduction_percent": 0.0,
-    "minimum_observed_sessions": 50,
+    "minimum_observed_sessions": 100,
     "minimum_observed_token_reduction_percent": 50.0,
-    "minimum_external_repos": 3,
-    "minimum_planned_tasks": 50,
+    "minimum_external_repos": 6,
+    "minimum_planned_tasks": 120,
     "maximum_controlled_replay_ratio": 0.0,
     "maximum_trace_violations": 0,
     "maximum_critical_misses": 0,

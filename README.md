@@ -38,7 +38,8 @@ callsieve trace-check <trace.json> [--strict]
 callsieve benchmark-report <manifest.json> [--limit <n>] [--snippets-per-file <n>] [--no-snippets]
 callsieve benchmark-doctor <manifest.json>
 callsieve pilot-init <manifest.json> [--sessions <n>]
-callsieve pilot-task add <manifest.json> <repo> "<task>" [--id <id>] [--expected-file <path>] [--critical-file <path>] [--external]
+callsieve pilot-task add <manifest.json> <repo> "<task>" [--id <id>] [--expected-file <path>] [--critical-file <path>] [--external] [--pair-id <id>] [--task-category <name>] [--difficulty <name>] [--condition <name>] [--token-source transcript_context_tokens]
+callsieve pilot-task reject <manifest.json> --task-id <id> --reason <reason>
 callsieve pilot-run <manifest.json> --task-id <id> --mode baseline|callsieve --command <cmd> [--files-read <path>...] --tokens <n>
 callsieve pilot-qa <manifest.json>
 callsieve pilot-finalize <manifest.json> --out <proof.json>
@@ -86,7 +87,7 @@ cargo run -- trace-replay . benchmarks/callsieve-real-repo.json benchmarks/sessi
 cargo run -- trace-check benchmarks/session-trace.example.json --strict
 cargo run -- benchmark-report benchmarks/report-manifest.example.json
 cargo run -- benchmark-doctor benchmarks/report-manifest.example.json
-cargo run -- pilot-init benchmarks/evidence/pilot.local.json --sessions 50
+cargo run -- pilot-init benchmarks/evidence/pilot.local.json --sessions 1
 cargo run -- pilot-task add benchmarks/evidence/pilot.local.json . "change login token expiry behavior" --id auth-expiry --expected-file src/auth/session.ts --critical-file src/auth/session.ts
 cargo run -- pilot-run benchmarks/evidence/pilot.local.json --task-id auth-expiry --mode baseline --command "rg login token expiry" --files-read src/auth/session.ts --tokens 12000
 cargo run -- pilot-run benchmarks/evidence/pilot.local.json --task-id auth-expiry --mode callsieve --command "callsieve agent-context . \"change login token expiry behavior\"" --files-read src/auth/session.ts --tokens 3000
@@ -113,6 +114,14 @@ cargo run -- shim install . --force
 cargo run -- shim doctor .
 cargo run -- grep . "change login token expiry behavior"
 ```
+
+Reject invalid observed runs without deleting their audit trail:
+
+```bash
+cargo run -- pilot-task reject benchmarks/evidence/pilot.local.json --task-id auth-expiry --reason "operator learned answer during paired run"
+```
+
+`pilot-init` defaults to the strict 100-session claim protocol. Use `--sessions 1` only for local workflow shakedowns.
 
 ## What The MVP Does
 
@@ -343,12 +352,19 @@ Use `benchmark-doctor` before a report to catch missing repos, missing indexes, 
     "minimum_observed_sessions": 1,
     "minimum_observed_token_reduction_percent": 50.0,
     "minimum_external_repos": 0,
+    "minimum_planned_tasks": 1,
     "maximum_controlled_replay_ratio": 0.25,
     "maximum_trace_violations": 0,
     "maximum_critical_misses": 0,
     "require_fresh_index": true,
     "require_lsp_where_available": false,
-    "require_codex_bootstrap": false
+    "require_codex_bootstrap": false,
+    "require_transcript_token_accounting": false
+  },
+  "audit": {
+    "planned_tasks": 1,
+    "rejected_sessions": 0,
+    "token_accounting_sources": ["transcript_context_tokens"]
   },
   "repos": [
     {
@@ -365,7 +381,7 @@ Use `benchmark-doctor` before a report to catch missing repos, missing indexes, 
 
 `pilot-report` is the pilot-proof artifact: it combines multi-repo benchmark recall, estimated token savings, observed trace savings, controlled replay counts, strict before-grep policy checks, index freshness, daemon state, Codex bootstrap coverage, and LSP coverage.
 
-`proof-report` is the top-level claim artifact. It exposes observed sessions, controlled replay sessions, external repo coverage, observed token reduction, controlled replay ratio, freshness, daemon, bootstrap, and LSP status in one JSON object. Controlled replay is never counted as observed evidence.
+`proof-report` is the top-level claim artifact. It exposes planned tasks, rejected-session audit count, observed sessions, transcript-token provenance, controlled replay sessions, external repo coverage, observed token reduction, controlled replay ratio, freshness, daemon, bootstrap, and LSP status in one JSON object. Controlled replay is never counted as observed evidence.
 
 Use `evidence-pack` when you need a shareable aggregate for external pilots:
 

@@ -236,28 +236,36 @@ Latest local proof sprint: `pass`, `1` observed Codex session, `0` controlled re
 
 ## Observed Pilot Harness
 
-Use the harness commands when collecting the 50 to 100 real Codex/ChatGPT developer tasks needed to support the Microsoft-style claim. The harness writes only local JSON under `benchmarks/evidence`, keeps paired baseline and CallSieve traces separate, and refuses finalization if critical files are still missed.
+Use the harness commands when collecting the 100 real Codex/ChatGPT developer sessions needed to support the Microsoft-style claim. The harness writes only local JSON under `benchmarks/evidence`, keeps paired baseline and CallSieve traces separate, preserves rejected-session audit reasons, and refuses finalization unless every counted session is observed, token-accounted, policy-clean, and free of critical-file misses.
 
 ```bash
-cargo run -- pilot-init benchmarks/evidence/pilot.local.json --sessions 50
+cargo run -- pilot-init benchmarks/evidence/pilot.local.json --sessions 100
 cargo run -- pilot-task add benchmarks/evidence/pilot.local.json . "change login token expiry behavior" --id auth-expiry --expected-file src/auth/session.ts --expected-file src/auth/token.ts --critical-file src/auth/session.ts --external
+# Repeat task registration and collection until at least 120 tasks are planned and 100 sessions are countable.
 cargo run -- pilot-run benchmarks/evidence/pilot.local.json --task-id auth-expiry --mode baseline --command "rg login token expiry" --files-read src/auth/session.ts --files-read src/auth/token.ts --tokens 12000
 cargo run -- pilot-run benchmarks/evidence/pilot.local.json --task-id auth-expiry --mode callsieve --command "callsieve agent-context . \"change login token expiry behavior\"" --files-read src/auth/session.ts --files-read src/auth/token.ts --tokens 3000
 cargo run -- pilot-qa benchmarks/evidence/pilot.local.json
 cargo run -- pilot-finalize benchmarks/evidence/pilot.local.json --out benchmarks/evidence/proof.local.json --limit 24
 ```
 
-`pilot-finalize` writes a generated proof manifest next to the proof output. That manifest uses combined observed traces for token accounting and `policy_trace_paths` for strict CallSieve-phase before-grep checks. This prevents controlled replay or baseline grep activity from being mixed into the observed CallSieve policy result.
+Reject invalid observed runs instead of deleting them:
 
-For the strict claim target, start from `benchmarks/evidence/50-session-manifest.example.json` and keep these gates:
+```bash
+cargo run -- pilot-task reject benchmarks/evidence/pilot.local.json --task-id auth-expiry --reason "operator learned answer during paired run"
+```
 
-- `minimum_observed_sessions`: `50` or higher
-- `minimum_external_repos`: `3` or higher
+`pilot-finalize` writes a generated proof manifest next to the proof output. That manifest uses combined observed traces for token accounting, `policy_trace_paths` for strict CallSieve-phase before-grep checks, and an `audit` block with planned task count, rejected-session count, and token-accounting sources. This prevents controlled replay, rejected evidence, or baseline grep activity from being mixed into the observed CallSieve policy result.
+
+For the strict claim target, start from `benchmarks/evidence/100-session-manifest.example.json` and keep these gates:
+
+- `minimum_observed_sessions`: `100` or higher
+- `minimum_external_repos`: `6` or higher
+- `minimum_planned_tasks`: `120` or higher
 - `minimum_observed_token_reduction_percent`: `50.0`
 - `maximum_controlled_replay_ratio`: `0.0`
 - `maximum_critical_misses`: `0`
 - `maximum_trace_violations`: `0`
-- `require_fresh_index`, `require_lsp_where_available`, and `require_codex_bootstrap`: `true`
+- `require_fresh_index`, `require_lsp_where_available`, `require_codex_bootstrap`, and `require_transcript_token_accounting`: `true`
 
 Pilot manifests support the same repo entries as `benchmark-report`, plus optional `languages` and thresholds:
 
@@ -269,12 +277,19 @@ Pilot manifests support the same repo entries as `benchmark-report`, plus option
     "minimum_observed_sessions": 1,
     "minimum_observed_token_reduction_percent": 50.0,
     "minimum_external_repos": 0,
+    "minimum_planned_tasks": 1,
     "maximum_controlled_replay_ratio": 0.25,
     "maximum_trace_violations": 0,
     "maximum_critical_misses": 0,
     "require_fresh_index": true,
     "require_lsp_where_available": false,
-    "require_codex_bootstrap": false
+    "require_codex_bootstrap": false,
+    "require_transcript_token_accounting": false
+  },
+  "audit": {
+    "planned_tasks": 1,
+    "rejected_sessions": 0,
+    "token_accounting_sources": ["transcript_context_tokens"]
   },
   "repos": [
     {
