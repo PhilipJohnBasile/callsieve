@@ -1,0 +1,24 @@
+{
+  "command": "session-finish",
+  "misses": [],
+  "summary": {
+    "avoided_file_reads": 3,
+    "avoided_grep_commands": 2,
+    "baseline_tokens": 9587,
+    "callsieve_tokens": 1747,
+    "controlled_replay_sessions": 0,
+    "files_still_missed": 0,
+    "observed_sessions": 1,
+    "sessions": 1,
+    "token_reduction_percent": 81.77740690518411,
+    "token_savings": 7840,
+    "unclassified_sessions": 0
+  },
+  "token_accounting": {
+    "baseline_tokens": 9587,
+    "callsieve_tokens": 1747,
+    "token_reduction_percent": 81.77740690518411,
+    "token_savings": 7840
+  },
+  "trace": "benchmarks/observed-codex-proof-sprint-pass-trace.json"
+}

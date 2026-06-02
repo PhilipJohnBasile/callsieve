@@ -27,10 +27,10 @@ Use `cargo run -- index . --lsp` when benchmark evidence should include local LS
 Latest local run on this repository:
 
 - expected-file recall: `16/16` (`100%`)
-- total estimated token savings: `420562`
-- average estimated token reduction: `88.6%`
+- total estimated token savings: `541090`
+- average estimated token reduction: `98.6%`
 - avoided grep commands: `34`
-- avoided file reads: `80`
+- avoided file reads: `87`
 
 The suite output includes:
 
@@ -225,6 +225,14 @@ cargo run -- pilot-doctor benchmarks/pilot-manifest.example.json
 cargo run -- pilot-report benchmarks/pilot-manifest.example.json
 cargo run -- proof-report benchmarks/pilot-manifest.example.json
 ```
+
+Current proof-sprint artifact:
+
+```bash
+cargo run -- proof-report benchmarks/proof-sprint-manifest.local.json --limit 8 --no-snippets
+```
+
+Latest local proof sprint: `pass`, `1` observed Codex session, `0` controlled replay sessions, `9587` baseline tokens, `1747` CallSieve tokens, `7840` tokens saved, `81.8%` observed token reduction, `0` missed expected files, `0` strict trace-policy violations, fresh LSP index, daemon freshness, and Codex bootstrap present.
 
 Pilot manifests support the same repo entries as `benchmark-report`, plus optional `languages` and thresholds:
 

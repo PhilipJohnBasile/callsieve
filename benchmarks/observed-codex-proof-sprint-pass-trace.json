@@ -1,0 +1,130 @@
+{
+  "baseline": {
+    "commands": [
+      "rg exact proof_report observed gate terms",
+      "rg -n -C 35 proof_report gate implementation and test ranges"
+    ],
+    "file_reads": 7,
+    "files_read": [
+      "README.md",
+      "benchmarks/pilot-manifest.example.json",
+      "docs/BENCHMARKS.md",
+      "src/query/mod.rs",
+      "tests/cli.rs"
+    ],
+    "grep_commands": 2,
+    "tokens": 9587
+  },
+  "callsieve": {
+    "commands": [
+      "callsieve agent-context . proof_report observed gate --limit 4 --snippets-per-file 0"
+    ],
+    "file_reads": 4,
+    "files_read": [
+      "README.md",
+      "benchmarks/pilot-manifest.example.json",
+      "src/query/mod.rs",
+      "tests/cli.rs"
+    ],
+    "grep_commands": 0,
+    "tokens": 1747
+  },
+  "events": [
+    {
+      "classification": "grep",
+      "command": "rg exact proof_report observed gate terms",
+      "files_read": [
+        "src/query/mod.rs",
+        "tests/cli.rs",
+        "README.md",
+        "docs/BENCHMARKS.md",
+        "benchmarks/pilot-manifest.example.json"
+      ],
+      "phase": "baseline",
+      "timestamp": 1780374401,
+      "tokens": 1610
+    },
+    {
+      "classification": "grep",
+      "command": "rg -n -C 35 proof_report gate implementation and test ranges",
+      "files_read": [
+        "tests/cli.rs",
+        "src/query/mod.rs"
+      ],
+      "phase": "baseline",
+      "timestamp": 1780374414,
+      "tokens": 7977
+    },
+    {
+      "classification": "callsieve_context",
+      "command": "callsieve agent-context . proof_report observed gate --limit 4 --snippets-per-file 0",
+      "files_read": [
+        "tests/cli.rs",
+        "src/query/mod.rs",
+        "benchmarks/pilot-manifest.example.json",
+        "README.md"
+      ],
+      "phase": "callsieve",
+      "timestamp": 1780374427,
+      "tokens": 1747
+    }
+  ],
+  "expected_files": [
+    "src/query/mod.rs",
+    "tests/cli.rs"
+  ],
+  "metadata": {
+    "client": "codex",
+    "collection": "observed_session",
+    "finished_at": 1780374439,
+    "model": "gpt-5-codex",
+    "repo": ".",
+    "started_at": 1780374391,
+    "updated_at": 1780374439
+  },
+  "misses": [],
+  "policy": {
+    "context_first": true,
+    "first_required_command": "callsieve agent-context . \"Find proof_report observed gate implementation and test\"",
+    "strict_trace_check": true
+  },
+  "session": {
+    "baseline": {
+      "commands": [
+        "rg exact proof_report observed gate terms",
+        "rg -n -C 35 proof_report gate implementation and test ranges"
+      ],
+      "file_reads": 7,
+      "files_read": [
+        "README.md",
+        "benchmarks/pilot-manifest.example.json",
+        "docs/BENCHMARKS.md",
+        "src/query/mod.rs",
+        "tests/cli.rs"
+      ],
+      "grep_commands": 2,
+      "tokens": 9587
+    },
+    "callsieve": {
+      "commands": [
+        "callsieve agent-context . proof_report observed gate --limit 4 --snippets-per-file 0"
+      ],
+      "file_reads": 4,
+      "files_read": [
+        "README.md",
+        "benchmarks/pilot-manifest.example.json",
+        "src/query/mod.rs",
+        "tests/cli.rs"
+      ],
+      "grep_commands": 0,
+      "tokens": 1747
+    }
+  },
+  "task": "Find proof_report observed gate implementation and test",
+  "token_accounting": {
+    "baseline_tokens": 9587,
+    "callsieve_tokens": 1747,
+    "token_reduction_percent": 81.77740690518411,
+    "token_savings": 7840
+  }
+}

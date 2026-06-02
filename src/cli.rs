@@ -658,6 +658,14 @@ struct DaemonState {
     last_error: Option<String>,
 }
 
+#[derive(Debug)]
+struct DaemonIndexSnapshot {
+    last_indexed_at: u64,
+    index_generation: u64,
+    stale_files: usize,
+    last_error: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 struct DaemonOutput {
     command: &'static str,
@@ -2113,6 +2121,29 @@ fn agent_client_name(client: AgentClient) -> &'static str {
     }
 }
 
+fn daemon_index_snapshot(root: &Path) -> DaemonIndexSnapshot {
+    let Some(index) = store::json_store::load_index(root).ok() else {
+        return DaemonIndexSnapshot {
+            last_indexed_at: 0,
+            index_generation: 0,
+            stale_files: 0,
+            last_error: None,
+        };
+    };
+    let stale_files = serde_json::to_value(query::index_status(root, Some(&index)))
+        .ok()
+        .and_then(|value| value.get("stale_files").and_then(serde_json::Value::as_u64))
+        .and_then(|value| usize::try_from(value).ok())
+        .unwrap_or_default();
+
+    DaemonIndexSnapshot {
+        last_indexed_at: index.metadata.indexed_at,
+        index_generation: index.metadata.index_generation,
+        stale_files,
+        last_error: index.metadata.last_error,
+    }
+}
+
 fn run_daemon(
     root: &Path,
     lsp: bool,
@@ -2120,6 +2151,7 @@ fn run_daemon(
     foreground: bool,
     once: bool,
 ) -> Result<DaemonOutput> {
+    let snapshot = daemon_index_snapshot(root);
     if !foreground && !once {
         clear_daemon_stop(root)?;
         let pid = if env::var_os("CALLSIEVE_TEST_BACKGROUND_NO_SPAWN").is_some() {
@@ -2158,11 +2190,11 @@ fn run_daemon(
             lsp,
             interval_ms,
             started_at: now_unix_seconds(),
-            last_indexed_at: 0,
-            last_change_at: 0,
-            index_generation: 0,
-            stale_files: 0,
-            last_error: None,
+            last_indexed_at: snapshot.last_indexed_at,
+            last_change_at: snapshot.last_indexed_at,
+            index_generation: snapshot.index_generation,
+            stale_files: snapshot.stale_files,
+            last_error: snapshot.last_error,
         };
         save_daemon_state(root, &state)?;
         return Ok(DaemonOutput {
@@ -2180,11 +2212,11 @@ fn run_daemon(
         lsp,
         interval_ms,
         started_at: now_unix_seconds(),
-        last_indexed_at: 0,
-        last_change_at: 0,
-        index_generation: 0,
-        stale_files: 0,
-        last_error: None,
+        last_indexed_at: snapshot.last_indexed_at,
+        last_change_at: snapshot.last_indexed_at,
+        index_generation: snapshot.index_generation,
+        stale_files: snapshot.stale_files,
+        last_error: snapshot.last_error,
     };
     save_daemon_state(root, &state)?;
 

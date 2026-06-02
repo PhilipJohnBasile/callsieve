@@ -1050,6 +1050,7 @@ fn editor_hook_generates_project_local_files_only() {
 fn daemon_background_records_state_and_stop_clears_running_status() {
     let repo = fixture_repo();
     let root = repo.path().to_str().unwrap();
+    json(&run(&["index", root]));
 
     let output = Command::new(callsieve())
         .args(["daemon", root, "--background", "--interval-ms", "50"])
@@ -1060,6 +1061,7 @@ fn daemon_background_records_state_and_stop_clears_running_status() {
     assert_eq!(daemon["command"], "daemon");
     assert_eq!(daemon["state"]["mode"], "background");
     assert_eq!(daemon["state"]["pid"], 0);
+    assert!(daemon["state"]["last_indexed_at"].as_u64().unwrap() > 0);
     assert!(repo.path().join(".callsieve/daemon.json").is_file());
 
     let stopped = json(&run(&["daemon-stop", root]));

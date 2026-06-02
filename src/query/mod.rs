@@ -15,7 +15,12 @@ use crate::{
     store::{self, CodeIndex, FileRecord, ReferenceRecord, SymbolRecord},
 };
 
-const MAX_CONTEXT_SYMBOLS_PER_FILE: usize = 8;
+const MAX_CONTEXT_SYMBOLS_PER_FILE: usize = 4;
+const MAX_CONTEXT_WHY: usize = 6;
+const MAX_CONTEXT_RELATION_FILES: usize = 5;
+const MAX_CONTEXT_GRAPH_EDGES: usize = 1;
+const MAX_CONTEXT_RELATED_TESTS: usize = 3;
+const MAX_CONTEXT_RELATED_TEST_SYMBOLS: usize = 5;
 const MAX_CONTEXT_GRAPH_SCORE: i32 = 240;
 
 #[derive(Debug, Serialize)]
@@ -1071,20 +1076,38 @@ pub fn build_context(
                 snippets_per_file,
                 include_snippets,
             );
-            let related_tests = related_tests(index, file);
-            let imports = resolved_imports_for_file(index, &file.path);
-            let referenced_by = references_to_file(index, &file.path);
-            let calls = calls_from_file(index, file);
-            let called_by = called_by_file(index, file);
-            let blast_radius =
-                blast_radius_for(&imports, &referenced_by, &related_tests, &calls, &called_by);
+            let related_tests_all = related_tests(index, file);
+            let imports_all = resolved_imports_for_file(index, &file.path);
+            let referenced_by_all = references_to_file(index, &file.path);
+            let calls_all = calls_from_file(index, file);
+            let called_by_all = called_by_file(index, file);
+            let blast_radius = blast_radius_for(
+                &imports_all,
+                &referenced_by_all,
+                &related_tests_all,
+                &calls_all,
+                &called_by_all,
+            );
+            let imports = take_strings(imports_all, MAX_CONTEXT_RELATION_FILES);
+            let referenced_by = take_strings(referenced_by_all, MAX_CONTEXT_RELATION_FILES);
+            let calls = calls_all
+                .into_iter()
+                .take(MAX_CONTEXT_GRAPH_EDGES)
+                .collect();
+            let called_by = called_by_all
+                .into_iter()
+                .take(MAX_CONTEXT_GRAPH_EDGES)
+                .collect();
+            let related_tests = compact_related_tests(related_tests_all);
+            let score = candidate.score();
+            let why = take_strings(candidate.why, MAX_CONTEXT_WHY);
 
             selected_symbols += symbols.len();
             selected_related_tests += related_tests.len();
 
             Some(ContextFile {
                 rank: rank_index + 1,
-                score: candidate.score(),
+                score,
                 file: file.path.clone(),
                 language: file.language,
                 symbols,
@@ -1095,7 +1118,7 @@ pub fn build_context(
                 calls,
                 called_by,
                 related_tests,
-                why: candidate.why,
+                why,
             })
         })
         .collect();
@@ -2623,11 +2646,11 @@ fn blast_radius_for(
     };
 
     BlastRadius {
-        imports: imports.to_vec(),
-        referenced_by: referenced_by.to_vec(),
-        tests,
-        calls: call_targets,
-        called_by: callers,
+        imports: take_string_refs(imports, MAX_CONTEXT_RELATION_FILES),
+        referenced_by: take_string_refs(referenced_by, MAX_CONTEXT_RELATION_FILES),
+        tests: take_strings(tests, MAX_CONTEXT_RELATED_TESTS),
+        calls: take_strings(call_targets, MAX_CONTEXT_RELATION_FILES),
+        called_by: take_strings(callers, MAX_CONTEXT_RELATION_FILES),
         risk: risk.to_string(),
     }
 }
@@ -2646,6 +2669,29 @@ fn edge_files(edges: &[ReferenceEdge], use_target: bool) -> Vec<String> {
     files.sort();
     files.dedup();
     files
+}
+
+fn take_strings(values: Vec<String>, limit: usize) -> Vec<String> {
+    values.into_iter().take(limit).collect()
+}
+
+fn take_string_refs(values: &[String], limit: usize) -> Vec<String> {
+    values.iter().take(limit).cloned().collect()
+}
+
+fn compact_related_tests(tests: Vec<RelatedTest>) -> Vec<RelatedTest> {
+    tests
+        .into_iter()
+        .take(MAX_CONTEXT_RELATED_TESTS)
+        .map(|test| RelatedTest {
+            file: test.file,
+            symbols: test
+                .symbols
+                .into_iter()
+                .take(MAX_CONTEXT_RELATED_TEST_SYMBOLS)
+                .collect(),
+        })
+        .collect()
 }
 
 struct BaselineReplay {
@@ -3526,6 +3572,32 @@ mod tests {
 
         assert_eq!(output.read_first.len(), 1);
         assert_eq!(output.read_first[0].snippets.len(), 1);
+    }
+
+    #[test]
+    fn context_caps_agent_facing_explanations_and_graph_edges() {
+        let (temp, index) = fixture_index();
+        let output = build_context(
+            temp.path(),
+            &index,
+            "change createSession refreshSession token behavior",
+            8,
+            2,
+            true,
+        )
+        .unwrap();
+
+        for file in output.read_first {
+            assert!(file.symbols.len() <= MAX_CONTEXT_SYMBOLS_PER_FILE);
+            assert!(file.why.len() <= MAX_CONTEXT_WHY);
+            assert!(file.calls.len() <= MAX_CONTEXT_GRAPH_EDGES);
+            assert!(file.called_by.len() <= MAX_CONTEXT_GRAPH_EDGES);
+            assert!(file.imports.len() <= MAX_CONTEXT_RELATION_FILES);
+            assert!(file.referenced_by.len() <= MAX_CONTEXT_RELATION_FILES);
+            assert!(file.related_tests.len() <= MAX_CONTEXT_RELATED_TESTS);
+            assert!(file.blast_radius.imports.len() <= MAX_CONTEXT_RELATION_FILES);
+            assert!(file.blast_radius.called_by.len() <= MAX_CONTEXT_RELATION_FILES);
+        }
     }
 
     #[test]
