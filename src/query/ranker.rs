@@ -12,6 +12,15 @@ pub struct RankedMatch {
     pub symbol_id: Option<String>,
     pub score: i32,
     pub why: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub score_debug: Vec<ScoreComponent>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ScoreComponent {
+    pub name: String,
+    pub points: i32,
+    pub detail: String,
 }
 
 pub fn rank(index: &CodeIndex, question: &str, limit: usize) -> Vec<RankedMatch> {
@@ -59,31 +68,77 @@ fn score_symbol(
 ) -> Option<RankedMatch> {
     let mut score = 0;
     let mut why = Vec::new();
+    let mut score_debug = Vec::new();
     let symbol_lower = symbol.name.to_ascii_lowercase();
     let path_lower = file.path.to_ascii_lowercase();
 
+    let symbol_name_tokens = formatter::tokenize(&symbol.name);
+    let symbol_token_count = symbol_name_tokens.len();
     if query == symbol_lower
-        || query.contains(&symbol_lower)
         || query_tokens.iter().any(|token| token == &symbol_lower)
+        || (symbol_token_count > 1 && query.contains(&symbol_lower))
     {
-        let symbol_token_count = formatter::tokenize(&symbol.name).len();
-        score += if symbol_token_count > 1 { 320 } else { 180 };
-        why.push(format!("exact symbol match: {}", symbol.name));
+        let points = if symbol_token_count > 1 { 320 } else { 180 };
+        add_score_component(
+            &mut score,
+            &mut why,
+            &mut score_debug,
+            "exact_symbol",
+            points,
+            format!("exact symbol match: {}", symbol.name),
+        );
+    }
+
+    let symbol_name_terms: BTreeSet<String> = symbol_name_tokens.into_iter().collect();
+    let name_overlap: Vec<String> = query_tokens
+        .iter()
+        .filter(|token| symbol_name_terms.contains(*token))
+        .cloned()
+        .collect();
+    if name_overlap.len() >= 2 {
+        let points = if name_overlap.len() >= 3 { 420 } else { 320 };
+        add_score_component(
+            &mut score,
+            &mut why,
+            &mut score_debug,
+            "symbol_name_keyword_cluster",
+            points,
+            format!("symbol name keyword cluster: {}", name_overlap.join(", ")),
+        );
     }
 
     let file_stem = file_stem(&file.path).to_ascii_lowercase();
     if query == path_lower || query_tokens.iter().any(|token| token == &file_stem) {
-        score += if file.language.is_code() { 80 } else { 230 };
-        why.push(format!("path or filename match: {}", file.path));
+        let points = if file.language.is_code() { 80 } else { 230 };
+        add_score_component(
+            &mut score,
+            &mut why,
+            &mut score_debug,
+            "path_filename",
+            points,
+            format!("path or filename match: {}", file.path),
+        );
     }
 
     if symbol_lower.contains(query) {
         if symbol.visibility == "exported" || symbol.visibility == "public" {
-            score += 60;
-            why.push(format!("exported symbol substring match: {}", symbol.name));
+            add_score_component(
+                &mut score,
+                &mut why,
+                &mut score_debug,
+                "symbol_substring",
+                60,
+                format!("exported symbol substring match: {}", symbol.name),
+            );
         } else {
-            score += 40;
-            why.push(format!("local symbol substring match: {}", symbol.name));
+            add_score_component(
+                &mut score,
+                &mut why,
+                &mut score_debug,
+                "symbol_substring",
+                40,
+                format!("local symbol substring match: {}", symbol.name),
+            );
         }
     }
 
@@ -94,8 +149,14 @@ fn score_symbol(
         .cloned()
         .collect();
     if !overlap.is_empty() {
-        score += 14 * overlap.len() as i32;
-        why.push(format!("keyword overlap: {}", overlap.join(", ")));
+        add_score_component(
+            &mut score,
+            &mut why,
+            &mut score_debug,
+            "keyword_overlap",
+            14 * overlap.len() as i32,
+            format!("keyword overlap: {}", overlap.join(", ")),
+        );
     }
 
     if file.is_test
@@ -103,23 +164,47 @@ fn score_symbol(
             .iter()
             .any(|token| token == "test" || token == "spec")
     {
-        score += 25;
-        why.push("test file match".to_string());
+        add_score_component(
+            &mut score,
+            &mut why,
+            &mut score_debug,
+            "test_file",
+            25,
+            "test file match".to_string(),
+        );
     }
 
     if file.is_config && query_tokens.iter().any(|token| token == "config") {
-        score += 5;
-        why.push("config file heuristic".to_string());
+        add_score_component(
+            &mut score,
+            &mut why,
+            &mut score_debug,
+            "config_file",
+            5,
+            "config file heuristic".to_string(),
+        );
     }
 
     if file.is_config && has_config_intent(query_tokens) {
-        score += 45;
-        why.push("config/dependency intent".to_string());
+        add_score_component(
+            &mut score,
+            &mut why,
+            &mut score_debug,
+            "config_dependency_intent",
+            45,
+            "config/dependency intent".to_string(),
+        );
     }
 
     if file.size_bytes > 250_000 {
-        score -= 20;
-        why.push("large file penalty".to_string());
+        add_score_component(
+            &mut score,
+            &mut why,
+            &mut score_debug,
+            "large_file_penalty",
+            -20,
+            "large file penalty".to_string(),
+        );
     }
 
     (score > 0).then(|| RankedMatch {
@@ -127,22 +212,31 @@ fn score_symbol(
         symbol_id: Some(symbol.id.clone()),
         score,
         why,
+        score_debug,
     })
 }
 
 fn score_file(file: &FileRecord, query: &str, query_tokens: &[String]) -> Option<RankedMatch> {
     let mut score = 0;
     let mut why = Vec::new();
+    let mut score_debug = Vec::new();
     let path_lower = file.path.to_ascii_lowercase();
     let file_stem = file_stem(&file.path).to_ascii_lowercase();
 
     if query == path_lower || query_tokens.iter().any(|token| token == &file_stem) {
-        score += if file.language.is_code() {
+        let points = if file.language.is_code() {
             if file.is_test { 140 } else { 300 }
         } else {
             230
         };
-        why.push(format!("path or filename match: {}", file.path));
+        add_score_component(
+            &mut score,
+            &mut why,
+            &mut score_debug,
+            "path_filename",
+            points,
+            format!("path or filename match: {}", file.path),
+        );
     }
 
     let terms: BTreeSet<String> = path_tokens(&file.path).into_iter().collect();
@@ -152,18 +246,36 @@ fn score_file(file: &FileRecord, query: &str, query_tokens: &[String]) -> Option
         .cloned()
         .collect();
     if !overlap.is_empty() {
-        score += 16 * overlap.len() as i32;
-        why.push(format!("path keyword overlap: {}", overlap.join(", ")));
+        add_score_component(
+            &mut score,
+            &mut why,
+            &mut score_debug,
+            "path_keyword_overlap",
+            16 * overlap.len() as i32,
+            format!("path keyword overlap: {}", overlap.join(", ")),
+        );
     }
 
     if is_module_anchor_match(file, query_tokens) {
-        score += 180;
-        why.push("module anchor path match".to_string());
+        add_score_component(
+            &mut score,
+            &mut why,
+            &mut score_debug,
+            "module_anchor",
+            180,
+            "module anchor path match".to_string(),
+        );
     }
 
     if let Some(score_boost) = basename_cluster_score(file, query_tokens) {
-        score += score_boost;
-        why.push("filename keyword cluster".to_string());
+        add_score_component(
+            &mut score,
+            &mut why,
+            &mut score_debug,
+            "filename_keyword_cluster",
+            score_boost,
+            "filename keyword cluster".to_string(),
+        );
     }
 
     let content_terms: BTreeSet<&str> = file.content_terms.iter().map(String::as_str).collect();
@@ -181,11 +293,14 @@ fn score_file(file: &FileRecord, query: &str, query_tokens: &[String]) -> Option
         } else {
             10
         };
-        score += weight * content_overlap.len() as i32;
-        why.push(format!(
-            "content keyword overlap: {}",
-            content_overlap.join(", ")
-        ));
+        add_score_component(
+            &mut score,
+            &mut why,
+            &mut score_debug,
+            "content_keyword_overlap",
+            weight * content_overlap.len() as i32,
+            format!("content keyword overlap: {}", content_overlap.join(", ")),
+        );
     }
 
     if file.is_test
@@ -193,54 +308,114 @@ fn score_file(file: &FileRecord, query: &str, query_tokens: &[String]) -> Option
             .iter()
             .any(|token| token == "test" || token == "spec")
     {
-        score += 25;
-        why.push("test file match".to_string());
+        add_score_component(
+            &mut score,
+            &mut why,
+            &mut score_debug,
+            "test_file",
+            25,
+            "test file match".to_string(),
+        );
     }
 
     if file.is_test && (!overlap.is_empty() || !content_overlap.is_empty()) {
         let signal_count = overlap.len().saturating_add(content_overlap.len()).min(4) as i32;
-        score += 40 + (signal_count * 15);
-        why.push("test proximity match".to_string());
+        add_score_component(
+            &mut score,
+            &mut why,
+            &mut score_debug,
+            "test_proximity",
+            40 + (signal_count * 15),
+            "test proximity match".to_string(),
+        );
     }
 
     if is_fixture_data(file) && !has_test_intent(query_tokens) {
-        score -= 140;
-        why.push("fixture data penalty".to_string());
+        add_score_component(
+            &mut score,
+            &mut why,
+            &mut score_debug,
+            "fixture_data_penalty",
+            -140,
+            "fixture data penalty".to_string(),
+        );
     }
 
     if file.is_config && query_tokens.iter().any(|token| token == "config") {
-        score += 5;
-        why.push("config file heuristic".to_string());
+        add_score_component(
+            &mut score,
+            &mut why,
+            &mut score_debug,
+            "config_file",
+            5,
+            "config file heuristic".to_string(),
+        );
     }
 
     if file.is_config && has_config_intent(query_tokens) {
-        score += 70;
-        why.push("config/dependency intent".to_string());
+        add_score_component(
+            &mut score,
+            &mut why,
+            &mut score_debug,
+            "config_dependency_intent",
+            70,
+            "config/dependency intent".to_string(),
+        );
     }
 
     if is_dependency_manifest(file) && has_dependency_manifest_intent(query_tokens) {
-        score += 170;
-        why.push("dependency manifest intent".to_string());
+        add_score_component(
+            &mut score,
+            &mut why,
+            &mut score_debug,
+            "dependency_manifest_intent",
+            320,
+            "dependency manifest intent".to_string(),
+        );
     }
 
     if is_benchmark_file(file) && has_benchmark_evidence_intent(query_tokens) {
-        score += 260;
-        why.push("benchmark evidence file intent".to_string());
+        add_score_component(
+            &mut score,
+            &mut why,
+            &mut score_debug,
+            "benchmark_evidence_file_intent",
+            260,
+            "benchmark evidence file intent".to_string(),
+        );
     }
 
     if is_readme(file) && has_benchmark_evidence_intent(query_tokens) {
-        score += 240;
-        why.push("readme evidence file intent".to_string());
+        add_score_component(
+            &mut score,
+            &mut why,
+            &mut score_debug,
+            "readme_evidence_file_intent",
+            240,
+            "readme evidence file intent".to_string(),
+        );
     }
 
     if is_docs_file(file) && has_docs_intent(query_tokens) {
-        score += 260;
-        why.push("docs intent".to_string());
+        add_score_component(
+            &mut score,
+            &mut why,
+            &mut score_debug,
+            "docs_intent",
+            260,
+            "docs intent".to_string(),
+        );
     }
 
     if file.size_bytes > 250_000 {
-        score -= 20;
-        why.push("large file penalty".to_string());
+        add_score_component(
+            &mut score,
+            &mut why,
+            &mut score_debug,
+            "large_file_penalty",
+            -20,
+            "large file penalty".to_string(),
+        );
     }
 
     (score > 0).then(|| RankedMatch {
@@ -248,7 +423,25 @@ fn score_file(file: &FileRecord, query: &str, query_tokens: &[String]) -> Option
         symbol_id: None,
         score,
         why,
+        score_debug,
     })
+}
+
+fn add_score_component(
+    score: &mut i32,
+    why: &mut Vec<String>,
+    score_debug: &mut Vec<ScoreComponent>,
+    name: &'static str,
+    points: i32,
+    detail: String,
+) {
+    *score += points;
+    why.push(detail.clone());
+    score_debug.push(ScoreComponent {
+        name: name.to_string(),
+        points,
+        detail,
+    });
 }
 
 const CONFIG_INTENT: &[&str] = &[
@@ -523,4 +716,79 @@ fn file_stem(path: &str) -> &str {
         .split('.')
         .next()
         .unwrap_or(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        indexer::language::Language,
+        store::{CodeIndex, FileRecord, IndexMetadata, SymbolRecord},
+    };
+
+    fn file(id: &str, path: &str) -> FileRecord {
+        FileRecord {
+            id: id.to_string(),
+            path: path.to_string(),
+            language: Language::Rust,
+            size_bytes: 100,
+            line_count: 10,
+            mtime: 0,
+            content_hash: "hash".to_string(),
+            is_test: false,
+            is_config: false,
+            module_path: path.to_string(),
+            content_terms: Vec::new(),
+        }
+    }
+
+    fn symbol(id: &str, file_id: &str, name: &str) -> SymbolRecord {
+        SymbolRecord {
+            id: id.to_string(),
+            file_id: file_id.to_string(),
+            name: name.to_string(),
+            kind: "function".to_string(),
+            language: Language::Rust,
+            start_line: 1,
+            end_line: 3,
+            visibility: "private".to_string(),
+            parent: None,
+            signature: format!("fn {name}()"),
+            doc: None,
+        }
+    }
+
+    #[test]
+    fn exact_symbol_match_does_not_fire_inside_longer_query_word() {
+        let index = CodeIndex {
+            schema_version: 1,
+            root: ".".to_string(),
+            metadata: IndexMetadata::default(),
+            files: vec![
+                file("query_file", "src/query/mod.rs"),
+                file("text_file", "src/output/mod.rs"),
+            ],
+            symbols: vec![
+                symbol("build_context", "query_file", "build_context"),
+                symbol("text", "text_file", "text"),
+            ],
+            imports: Vec::new(),
+            references: Vec::new(),
+            warnings: Vec::new(),
+        };
+
+        let ranked = rank(&index, "make context generation faster", 10);
+
+        assert!(
+            ranked
+                .iter()
+                .all(|match_| match_.symbol_id.as_deref() != Some("text")),
+            "single-word symbol `text` should not match only because it appears inside `context`"
+        );
+        assert!(
+            ranked
+                .iter()
+                .any(|match_| match_.symbol_id.as_deref() == Some("build_context"))
+        );
+    }
 }

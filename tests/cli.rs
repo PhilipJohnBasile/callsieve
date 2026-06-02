@@ -28,6 +28,10 @@ fn json(output: &Output) -> Value {
     serde_json::from_slice(&output.stdout).expect("stdout should be valid JSON")
 }
 
+fn json_allow_failure(output: &Output) -> Value {
+    serde_json::from_slice(&output.stdout).expect("stdout should be valid JSON")
+}
+
 fn write(path: impl AsRef<Path>, content: &str) {
     let path = path.as_ref();
     if let Some(parent) = path.parent() {
@@ -260,6 +264,48 @@ fn query_ranks_exact_code_context_and_returns_snippet() {
             .contains("createSession")
     );
     assert!(!first["why"].as_array().unwrap().is_empty());
+    assert!(query["timing"]["ranking_ms"].as_u64().is_some());
+    assert!(query["timing"]["index_load_ms"].as_u64().is_some());
+}
+
+#[test]
+fn query_and_context_support_why_debug() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+    json(&run(&["index", root]));
+
+    let query = json(&run(&[
+        "query",
+        root,
+        "where is createSession auth handled?",
+        "--why-debug",
+    ]));
+    let components = query["matches"][0]["why_debug"].as_array().unwrap();
+    assert!(
+        components
+            .iter()
+            .any(|component| component["name"] == "exact_symbol")
+    );
+    assert!(
+        components
+            .iter()
+            .any(|component| component["points"].as_i64().is_some())
+    );
+
+    let context = json(&run(&[
+        "context",
+        root,
+        "change createSession token behavior",
+        "--why-debug",
+    ]));
+    assert!(context["timing"]["graph_expansion_ms"].as_u64().is_some());
+    assert!(
+        context["read_first"][0]["why_debug"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|component| component["name"].as_str().is_some())
+    );
 }
 
 #[test]
@@ -469,10 +515,124 @@ fn mcp_lists_and_calls_context_tool() {
         responses[2]["result"]["structuredContent"]["trace_event"]["tool"],
         "callsieve_context"
     );
+    assert_eq!(
+        responses[2]["result"]["structuredContent"]["freshness"]["initial_fresh"],
+        true
+    );
     assert_eq!(responses[3]["result"]["isError"], false);
     assert_eq!(
         responses[3]["result"]["structuredContent"]["index_exists"],
         true
+    );
+}
+
+#[test]
+fn mcp_context_rebuilds_missing_and_stale_index() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+    let escaped_root = root.replace('\\', "\\\\");
+
+    let mut child = Command::new(callsieve())
+        .arg("mcp")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn callsieve mcp");
+    let mut stdin = child.stdin.take().unwrap();
+    writeln!(
+        stdin,
+        r#"{{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{{"name":"callsieve_context","arguments":{{"path":"{escaped_root}","task":"change createSession token behavior","limit":5}}}}}}"#
+    )
+    .unwrap();
+    drop(stdin);
+
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success());
+    let responses: Vec<Value> = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(responses[0]["result"]["isError"], false);
+    assert_eq!(
+        responses[0]["result"]["structuredContent"]["freshness"]["initial_fresh"],
+        false
+    );
+    assert_eq!(
+        responses[0]["result"]["structuredContent"]["freshness"]["refreshed"],
+        true
+    );
+    assert!(repo.path().join(".callsieve/index.json").is_file());
+
+    write(
+        repo.path().join("src/auth/session.ts"),
+        "import { tokenFor } from './token';\n\nexport function createSession(userId: string) {\n  return tokenFor(userId) + ':updated';\n}\n\nexport const refreshSession = () => createSession('demo');\n",
+    );
+
+    let mut child = Command::new(callsieve())
+        .arg("mcp")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn callsieve mcp");
+    let mut stdin = child.stdin.take().unwrap();
+    writeln!(
+        stdin,
+        r#"{{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{{"name":"callsieve_context","arguments":{{"path":"{escaped_root}","task":"change updated session behavior","limit":5}}}}}}"#
+    )
+    .unwrap();
+    drop(stdin);
+
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success());
+    let responses: Vec<Value> = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(
+        responses[0]["result"]["structuredContent"]["freshness"]["initial_fresh"],
+        false
+    );
+    assert_eq!(
+        responses[0]["result"]["structuredContent"]["freshness"]["final_fresh"],
+        true
+    );
+}
+
+#[test]
+fn mcp_context_rebuild_failure_returns_structured_fix() {
+    let repo = tempfile::tempdir().unwrap();
+    let missing = repo.path().join("missing-repo");
+    let escaped_missing = missing.to_string_lossy().replace('\\', "\\\\");
+
+    let mut child = Command::new(callsieve())
+        .arg("mcp")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn callsieve mcp");
+    let mut stdin = child.stdin.take().unwrap();
+    writeln!(
+        stdin,
+        r#"{{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{{"name":"callsieve_context","arguments":{{"path":"{escaped_missing}","task":"change auth","limit":5}}}}}}"#
+    )
+    .unwrap();
+    drop(stdin);
+
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success());
+    let response: Value = serde_json::from_str(
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .next()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(response["result"]["isError"], true);
+    assert!(
+        response["result"]["structuredContent"]["error"]["fix_command"]
+            .as_str()
+            .unwrap()
+            .contains("callsieve index")
     );
 }
 
@@ -588,6 +748,89 @@ fn benchmark_suite_reports_recall_and_observed_session_savings() {
             .len(),
         2
     );
+}
+
+#[test]
+fn eval_retrieval_reports_recall_and_fails_on_critical_miss() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+    json(&run(&["index", root]));
+
+    let suite_path = repo.path().join("retrieval-eval.json");
+    let escaped_root = root.replace('\\', "\\\\");
+    write(
+        &suite_path,
+        &format!(
+            r#"{{
+  "path": "{escaped_root}",
+  "tasks": [
+    {{
+      "id": "auth-session",
+      "task": "change createSession token behavior",
+      "expected_files": ["src/auth/session.ts", "src/auth/token.ts"],
+      "critical_files": ["src/auth/session.ts"]
+    }}
+  ]
+}}"#
+        ),
+    );
+
+    let eval = json(&run(&[
+        "eval-retrieval",
+        suite_path.to_str().unwrap(),
+        "--limit",
+        "5",
+    ]));
+    assert_eq!(eval["status"], "pass");
+    assert_eq!(eval["summary"]["critical_recall"], 1.0);
+    assert!(eval["summary"]["selected_tokens"].as_u64().unwrap() > 0);
+
+    let missed_path = repo.path().join("retrieval-eval-miss.json");
+    write(
+        &missed_path,
+        &format!(
+            r#"{{
+  "path": "{escaped_root}",
+  "tasks": [
+    {{
+      "id": "missing-critical",
+      "task": "change createSession token behavior",
+      "expected_files": ["src/auth/session.ts"],
+      "critical_files": ["src/auth/missing.ts"]
+    }}
+  ]
+}}"#
+        ),
+    );
+
+    let missed = run(&[
+        "eval-retrieval",
+        missed_path.to_str().unwrap(),
+        "--limit",
+        "5",
+    ]);
+    assert!(!missed.status.success());
+    let missed_json = json_allow_failure(&missed);
+    assert_eq!(missed_json["status"], "fail");
+    assert_eq!(
+        missed_json["tasks"][0]["critical_files_missing"][0],
+        "src/auth/missing.ts"
+    );
+}
+
+#[test]
+fn perf_report_emits_latency_percentiles_without_network() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+    json(&run(&["index", root]));
+
+    let report = json(&run(&["perf-report", root, "--iterations", "1"]));
+
+    assert_eq!(report["command"], "perf-report");
+    assert_eq!(report["iterations"], 1);
+    assert!(report["summary"]["p50_ms"].as_u64().is_some());
+    assert!(report["summary"]["p95_ms"].as_u64().is_some());
+    assert!(report["tasks"].as_array().unwrap().len() > 1);
 }
 
 #[test]
@@ -1836,6 +2079,88 @@ fn codex_bootstrap_generates_local_files_and_enforce_passes_with_path_shim() {
 }
 
 #[test]
+fn bootstrap_generic_strict_builds_local_adoption_stack() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+
+    let output = Command::new(callsieve())
+        .args([
+            "bootstrap",
+            root,
+            "--client",
+            "generic",
+            "--strict",
+            "--force",
+        ])
+        .env("CALLSIEVE_TEST_BACKGROUND_NO_SPAWN", "1")
+        .output()
+        .expect("failed to run callsieve");
+    let bootstrap = json(&output);
+
+    assert_eq!(
+        bootstrap["status"],
+        "pass",
+        "{}",
+        serde_json::to_string_pretty(&bootstrap).unwrap()
+    );
+    assert_eq!(bootstrap["command"], "bootstrap");
+    assert!(repo.path().join(".callsieve/index.json").is_file());
+    assert!(repo.path().join(".callsieve/agent-policy.md").is_file());
+    assert!(repo.path().join(".callsieve/bin").is_dir());
+    assert!(repo.path().join(".callsieve/daemon.json").is_file());
+    assert_eq!(bootstrap["daemon"]["mode"], "background");
+    assert_eq!(bootstrap["daemon"]["pid"], 0);
+    assert_eq!(bootstrap["enforcement"]["status"], "pass");
+    assert!(
+        bootstrap["first_required_command"]
+            .as_str()
+            .unwrap()
+            .contains("callsieve agent-context")
+    );
+}
+
+#[test]
+fn doctor_reports_missing_setup_and_fix_repairs_it() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+
+    let report = json(&run(&["doctor", root, "--client", "generic", "--strict"]));
+    assert_eq!(report["status"], "fail");
+    assert!(!repo.path().join(".callsieve/index.json").is_file());
+    assert!(
+        report["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|check| check["check"] == "fresh_index" && check["status"] == "fail")
+    );
+
+    let output = Command::new(callsieve())
+        .args(["doctor", root, "--client", "generic", "--fix", "--strict"])
+        .env("CALLSIEVE_TEST_BACKGROUND_NO_SPAWN", "1")
+        .output()
+        .expect("failed to run callsieve");
+    let fixed = json(&output);
+    assert_eq!(
+        fixed["status"],
+        "pass",
+        "{}",
+        serde_json::to_string_pretty(&fixed).unwrap()
+    );
+    assert!(repo.path().join(".callsieve/index.json").is_file());
+    assert!(repo.path().join(".callsieve/agent-policy.md").is_file());
+    assert!(repo.path().join(".callsieve/bin").is_dir());
+    assert!(repo.path().join(".callsieve/daemon.json").is_file());
+    assert!(
+        fixed["fixes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|fix| fix["step"] == "strict_shim")
+    );
+}
+
+#[test]
 fn editor_hook_generates_project_local_files_only() {
     let repo = tempfile::tempdir().unwrap();
     let root = repo.path().to_str().unwrap();
@@ -2224,6 +2549,12 @@ fn setup_agent_generates_policy_files() {
 
     assert_eq!(setup["client"], "codex");
     assert!(
+        setup["first_required_command"]
+            .as_str()
+            .unwrap()
+            .contains("callsieve agent-context")
+    );
+    assert!(
         setup["files"]
             .as_array()
             .unwrap()
@@ -2233,6 +2564,11 @@ fn setup_agent_generates_policy_files() {
     let config = fs::read_to_string(repo.path().join(".codex/config.toml")).unwrap();
     assert!(config.contains("[mcp_servers.callsieve]"));
     assert!(!config.contains("command = \"callsieve\""));
+    assert!(
+        fs::read_to_string(repo.path().join(".codex/CALLSIEVE.md"))
+            .unwrap()
+            .contains("First command for every coding task")
+    );
     assert!(
         fs::read_to_string(repo.path().join(".codex/CALLSIEVE.md"))
             .unwrap()
@@ -2300,6 +2636,54 @@ fn enforce_audits_agent_policy_index_trace_and_optional_shim() {
 }
 
 #[test]
+fn enforce_strict_fails_on_reads_before_context() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+    json(&run(&["index", root]));
+    json(&run(&["agent-setup", root, "--client", "generic"]));
+    let trace_path = repo.path().join("bad-strict-trace.json");
+    write(
+        &trace_path,
+        r#"{
+  "tasks": [
+    {
+      "id": "bad",
+      "task": "change auth",
+      "session": {
+        "baseline": {"grep_commands": 2, "file_reads": 4, "tokens": 1000},
+        "callsieve": {
+          "grep_commands": 0,
+          "file_reads": 1,
+          "tokens": 500,
+          "commands": ["Get-Content src/auth/session.ts", "callsieve agent-context . \"change auth\""]
+        }
+      }
+    }
+  ]
+}"#,
+    );
+
+    let enforce = json(&run(&[
+        "enforce",
+        root,
+        "--client",
+        "generic",
+        "--trace",
+        trace_path.to_str().unwrap(),
+        "--strict",
+    ]));
+
+    assert_eq!(enforce["status"], "fail");
+    assert!(
+        enforce["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|check| check["check"] == "trace_policy" && check["status"] == "fail")
+    );
+}
+
+#[test]
 fn policy_check_exits_nonzero_on_strict_violation() {
     let repo = fixture_repo();
     let trace_path = repo.path().join("bad-policy.json");
@@ -2357,6 +2741,49 @@ fn shim_install_doctor_and_uninstall_manage_local_wrappers() {
 }
 
 #[test]
+fn strict_shim_trace_records_grep_before_context_violation() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+    json(&run(&["index", root]));
+
+    let install = json(&run(&["shim", "install", root, "--strict"]));
+    assert_eq!(install["strict"], true);
+    let shim_file = if cfg!(windows) {
+        repo.path().join(".callsieve/bin/rg.cmd")
+    } else {
+        repo.path().join(".callsieve/bin/rg")
+    };
+    assert!(
+        fs::read_to_string(shim_file)
+            .unwrap()
+            .contains("--shim-strict")
+    );
+
+    let output = json(&run(&[
+        "grep",
+        root,
+        "createSession",
+        "--shim-strict",
+        "--shim-command",
+        "rg createSession",
+    ]));
+    assert_eq!(output["shim_event"]["policy_violation"], true);
+
+    let trace_path = repo.path().join(".callsieve/shim-trace.json");
+    assert!(trace_path.is_file());
+    let check = json(&run(&[
+        "trace-check",
+        trace_path.to_str().unwrap(),
+        "--strict",
+    ]));
+    assert_eq!(check["status"], "fail");
+    assert_eq!(
+        check["violation_details"][0]["event_kind"],
+        "grep_before_context"
+    );
+}
+
+#[test]
 fn guard_returns_context_and_writes_trace_stub() {
     let repo = fixture_repo();
     let root = repo.path().to_str().unwrap();
@@ -2389,6 +2816,39 @@ fn guard_returns_context_and_writes_trace_stub() {
 }
 
 #[test]
+fn begin_returns_context_and_writes_clean_trace_event() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+    json(&run(&["index", root]));
+    let trace_path = repo.path().join("begin-trace.json");
+
+    let output = json(&run(&[
+        "begin",
+        root,
+        "change createSession token behavior",
+        "--client",
+        "generic",
+        "--trace-out",
+        trace_path.to_str().unwrap(),
+    ]));
+
+    assert_eq!(output["command"], "begin");
+    assert_eq!(output["trace_event"]["classification"], "callsieve_context");
+    assert_eq!(
+        output["context"]["read_first"][0]["file"],
+        "src/auth/session.ts"
+    );
+    assert!(trace_path.is_file());
+
+    let check = json(&run(&[
+        "trace-check",
+        trace_path.to_str().unwrap(),
+        "--strict",
+    ]));
+    assert_eq!(check["status"], "pass");
+}
+
+#[test]
 fn grep_wrapper_returns_context_before_rg() {
     let repo = fixture_repo();
     let root = repo.path().to_str().unwrap();
@@ -2398,6 +2858,12 @@ fn grep_wrapper_returns_context_before_rg() {
 
     assert_eq!(output["command"], "grep");
     assert!(output["rg"].is_null());
+    assert!(
+        output["rg_status"]
+            .as_str()
+            .unwrap()
+            .contains("pass --run-rg")
+    );
     assert_eq!(output["audit_event"]["tool"], "callsieve_grep");
     assert_eq!(output["audit_event"]["context_first"], true);
     assert_eq!(

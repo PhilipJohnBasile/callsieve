@@ -1,14 +1,14 @@
 use std::{
     io::{self, BufRead, Write},
     path::PathBuf,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Result, anyhow};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::{query, store};
+use crate::{indexer, query, store};
 
 #[derive(Debug, Deserialize)]
 struct JsonRpcRequest {
@@ -236,7 +236,7 @@ fn call_tool(params: Option<Value>) -> Result<Value> {
         .unwrap_or_else(|| json!({}));
 
     match name {
-        "callsieve_context" => Ok(tool_execution_result(execute_context(&arguments))),
+        "callsieve_context" => Ok(execute_context_tool(&arguments)),
         "callsieve_symbol" => Ok(tool_execution_result(execute_symbol(&arguments))),
         "callsieve_stats" => Ok(tool_execution_result(execute_stats(&arguments))),
         "callsieve_status" => Ok(tool_execution_result(execute_status(&arguments))),
@@ -246,13 +246,60 @@ fn call_tool(params: Option<Value>) -> Result<Value> {
     }
 }
 
+fn execute_context_tool(arguments: &Value) -> Value {
+    match execute_context(arguments) {
+        Ok(value) => tool_execution_result(Ok(value)),
+        Err(error) => {
+            let fix_command = arguments
+                .get("path")
+                .and_then(Value::as_str)
+                .filter(|path| !path.trim().is_empty())
+                .map(|path| format!("callsieve index {path}"));
+            tool_execution_error(error.to_string(), fix_command)
+        }
+    }
+}
+
 fn execute_context(arguments: &Value) -> Result<Value> {
+    let total_start = Instant::now();
     let path = repo_path(arguments)?;
     let task = required_str(arguments, "task")?;
     let limit = optional_usize(arguments, "limit", 8)?;
     let snippets_per_file = optional_usize(arguments, "snippets_per_file", 2)?;
     let include_snippets = !optional_bool(arguments, "no_snippets", false)?;
-    let index = store::json_store::load_index(&path)?;
+    let freshness_start = Instant::now();
+    let initial_index = store::json_store::load_index(&path).ok();
+    let initial_status = query::index_status(&path, initial_index.as_ref());
+    let initial_status_value = serde_json::to_value(&initial_status)?;
+    let initial_fresh = status_is_fresh(&initial_status_value);
+    let freshness_check_ms = elapsed_ms(freshness_start.elapsed());
+    let mut refreshed = false;
+    let mut rebuild_ms = 0;
+    let index = if initial_fresh {
+        initial_index.expect("fresh status requires an index")
+    } else {
+        let rebuild_start = Instant::now();
+        let index = indexer::build_index(&path).map_err(|error| {
+            anyhow!(
+                "failed to rebuild missing or stale CallSieve index for {}; run `callsieve index {}`: {error}",
+                path.display(),
+                path.display()
+            )
+        })?;
+        store::json_store::save_index(&path, &index).map_err(|error| {
+            anyhow!(
+                "failed to save rebuilt CallSieve index for {}; run `callsieve index {}`: {error}",
+                path.display(),
+                path.display()
+            )
+        })?;
+        refreshed = true;
+        rebuild_ms = elapsed_ms(rebuild_start.elapsed());
+        index
+    };
+    let final_status = query::index_status(&path, Some(&index));
+    let final_status_value = serde_json::to_value(&final_status)?;
+    let final_fresh = status_is_fresh(&final_status_value);
     let output = query::build_context(
         &path,
         &index,
@@ -264,6 +311,37 @@ fn execute_context(arguments: &Value) -> Result<Value> {
 
     let mut value = serde_json::to_value(output)?;
     if let Some(object) = value.as_object_mut() {
+        object.insert(
+            "freshness".to_string(),
+            json!({
+                "initial_fresh": initial_fresh,
+                "refreshed": refreshed,
+                "final_fresh": final_fresh,
+                "index_generation": final_status_value
+                    .get("index_generation")
+                    .and_then(Value::as_u64)
+                    .unwrap_or_default(),
+                "stale_files": final_status_value
+                    .get("stale_files")
+                    .and_then(Value::as_u64)
+                    .unwrap_or_default(),
+                "fix_command": format!("callsieve index {}", path.display())
+            }),
+        );
+        if let Some(timing) = object.get_mut("timing").and_then(Value::as_object_mut) {
+            timing.insert(
+                "freshness_check_ms".to_string(),
+                serde_json::Value::from(freshness_check_ms),
+            );
+            timing.insert(
+                "index_rebuild_ms".to_string(),
+                serde_json::Value::from(rebuild_ms),
+            );
+            timing.insert(
+                "mcp_total_ms".to_string(),
+                serde_json::Value::from(elapsed_ms(total_start.elapsed())),
+            );
+        }
         object.insert(
             "trace_event".to_string(),
             json!({
@@ -367,6 +445,17 @@ fn optional_usize(value: &Value, field: &str, default: usize) -> Result<usize> {
     }
 }
 
+fn status_is_fresh(status: &Value) -> bool {
+    status
+        .get("fresh")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+fn elapsed_ms(duration: std::time::Duration) -> u64 {
+    duration.as_millis().try_into().unwrap_or(u64::MAX)
+}
+
 fn tool_execution_result(result: Result<Value>) -> Value {
     match result {
         Ok(structured_content) => {
@@ -393,6 +482,27 @@ fn tool_execution_result(result: Result<Value>) -> Value {
             "isError": true
         }),
     }
+}
+
+fn tool_execution_error(message: String, fix_command: Option<String>) -> Value {
+    let structured_content = json!({
+        "error": {
+            "message": message,
+            "fix_command": fix_command
+        }
+    });
+    let text = serde_json::to_string_pretty(&structured_content)
+        .unwrap_or_else(|_| structured_content.to_string());
+    json!({
+        "content": [
+            {
+                "type": "text",
+                "text": text
+            }
+        ],
+        "structuredContent": structured_content,
+        "isError": true
+    })
 }
 
 fn jsonrpc_error(id: Value, code: i32, message: String) -> Value {

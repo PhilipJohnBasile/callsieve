@@ -20,7 +20,7 @@ CallSieve is not another coding agent. It is the context and retrieval layer und
 
 ## Current State
 
-CallSieve is now a local Rust CLI with a JSON index, deterministic retrieval, optional LSP reference enrichment, MCP tools, context-first guardrails, daemon/watch freshness support, benchmark reports, observed-session traces, and gated proof reports. The product is still local-first and CLI-first, but it has moved beyond the original bootstrap into an agent-context and evidence collection layer.
+CallSieve is now a local Rust CLI with a JSON index, deterministic retrieval, optional LSP reference enrichment, MCP tools, context-first guardrails, daemon/watch freshness support, agent adoption automation, benchmark reports, observed-session traces, and gated proof reports. The product is still local-first and CLI-first, but it has moved beyond the original bootstrap into an agent-context and evidence collection layer.
 
 The core workflow is:
 
@@ -34,11 +34,13 @@ index repo -> ask for agent context -> read returned files first -> grep only if
 callsieve index <path> [--lsp]
 callsieve symbols <path>
 callsieve symbol <path> <symbol_name>
-callsieve query <path> "<question>"
-callsieve context <path> "<task>" [--limit <n>] [--snippets-per-file <n>] [--no-snippets]
-callsieve agent-context <path> "<task>" [--limit <n>] [--snippets-per-file <n>]
+callsieve query <path> "<question>" [--why-debug]
+callsieve context <path> "<task>" [--limit <n>] [--snippets-per-file <n>] [--no-snippets] [--why-debug]
+callsieve agent-context <path> "<task>" [--limit <n>] [--snippets-per-file <n>] [--why-debug]
 callsieve benchmark <path> "<task>" [--limit <n>] [--snippets-per-file <n>] [--no-snippets]
 callsieve benchmark-suite <path> <tasks.json> [--limit <n>] [--snippets-per-file <n>] [--no-snippets]
+callsieve eval-retrieval <manifest.json> [--limit <n>] [--snippets-per-file <n>] [--no-snippets] [--json]
+callsieve perf-report <path> [--tasks <manifest.json>] [--iterations <n>] [--json]
 callsieve trace-summary <trace.json>
 callsieve session-start <path> "<task>" --client codex --model <name> --trace <trace.json> [--expected-file <path>] [--critical-file <path>]
 callsieve session-event <trace.json> --command <cmd> [--files-read <path>...] [--tokens <n>] [--phase baseline|callsieve]
@@ -68,12 +70,15 @@ callsieve daemon-stop <path>
 callsieve watch <path> [--debounce-ms <n>] [--foreground] [--lsp]
 callsieve agent-setup <path> --client <codex|claude|cursor|cline|roo|generic> [--force]
 callsieve setup-agent <codex|claude|cursor|cline|roo|generic> <path> [--force]
+callsieve bootstrap <path> --client <codex|claude|cursor|cline|roo|generic> [--strict] [--force] [--lsp]
+callsieve doctor <path> --client <codex|claude|cursor|cline|roo|generic> [--fix] [--strict]
 callsieve codex-bootstrap <path> --model <name> [--force]
 callsieve editor-hook <path> --editor <vscode|cursor|generic> [--force]
 callsieve guard <path> "<task>" [--trace-out <trace.json>]
+callsieve begin <path> "<task>" --client <codex|claude|cursor|cline|roo|generic> [--trace-out <trace.json>]
 callsieve codex-session <path> "<task>" --trace-out <trace.json> [--model <name>] [--expected-file <path>]
 callsieve enforce <path> --client <codex|claude|cursor|cline|roo|generic> [--trace <trace.json>] [--strict] [--require-shim]
-callsieve shim install <path> [--force]
+callsieve shim install <path> [--force] [--strict]
 callsieve shim doctor <path>
 callsieve shim uninstall <path>
 callsieve grep <path> "<query>" [--run-rg]
@@ -91,6 +96,8 @@ cargo run -- agent-context . "change login token expiry behavior"
 cargo run -- benchmark . "change login token expiry behavior"
 cargo run -- benchmark-suite . benchmarks/tasks.json
 cargo run -- benchmark-suite . benchmarks/callsieve-real-repo.json
+cargo run -- eval-retrieval benchmarks/retrieval-fixtures.json
+cargo run -- perf-report . --iterations 5
 cargo run -- trace-summary benchmarks/session-trace.example.json
 cargo run -- session-start . "change login token expiry behavior" --client codex --model gpt-5-codex --trace .callsieve/observed-session.json
 cargo run -- session-event .callsieve/observed-session.json --command "callsieve agent-context . \"change login token expiry behavior\"" --files-read src/auth/session.ts --tokens 3000 --phase callsieve
@@ -119,12 +126,16 @@ cargo run -- daemon-status .
 cargo run -- watch .
 cargo run -- watch . --lsp
 cargo run -- agent-setup . --client codex
+cargo run -- bootstrap . --client generic --strict --force
+cargo run -- doctor . --client generic --strict
+cargo run -- doctor . --client generic --fix --strict
 cargo run -- codex-bootstrap . --model gpt-5-codex --force
 cargo run -- editor-hook . --editor cursor --force
 cargo run -- guard . "change login token expiry behavior" --trace-out .callsieve/session-trace.json
+cargo run -- begin . "change login token expiry behavior" --client generic --trace-out .callsieve/session-trace.json
 cargo run -- codex-session . "change login token expiry behavior" --trace-out .callsieve/codex-session.json --model gpt-5-codex
 cargo run -- enforce . --client codex --trace .callsieve/session-trace.json --strict
-cargo run -- shim install . --force
+cargo run -- shim install . --force --strict
 cargo run -- shim doctor .
 cargo run -- grep . "change login token expiry behavior"
 ```
@@ -154,6 +165,8 @@ cargo run -- pilot-task reject benchmarks/evidence/pilot.local.json --task-id au
 - provides an `agent-context` wrapper agents can call before grep
 - exposes a minimal MCP stdio server so agents can call CallSieve before grep
 - estimates context-packet token savings versus a naive grep/read loop
+- evaluates retrieval recall against expected and critical file fixtures with `eval-retrieval`
+- reports local p50/p95 context latency with `perf-report`
 - records real observed agent session events and summarizes baseline versus CallSieve-assisted phases
 - keeps controlled replay evidence separate from observed-session evidence
 - aggregates benchmark evidence across multiple local repositories
@@ -164,6 +177,10 @@ cargo run -- pilot-task reject benchmarks/evidence/pilot.local.json --task-id au
 - validates evidence manifests before reports
 - reports index freshness and keeps indexes fresh with a local watcher or daemon state loop
 - generates client-specific agent rules that require CallSieve before broad grep
+- writes an explicit first command into agent setup: `callsieve agent-context <repo> "<task>"`
+- bootstraps the local adoption stack with `bootstrap`: index, agent config, daemon state, and optional strict shims
+- audits and repairs local adoption setup with `doctor --fix`
+- starts lightweight task sessions with `begin`, returning context and optionally writing a trace stub for strict audits
 - guards context-first sessions and can write trace stubs for policy audits
 - starts controlled Codex/ChatGPT context-first replay traces with model tags
 - bootstraps project-local Codex launchers, resolved MCP config, rules, and grep shims without global PATH/profile mutation
@@ -317,6 +334,8 @@ cargo run -- pilot-task reject benchmarks/evidence/pilot.local.json --task-id au
 
 `benchmark-suite` reports expected-file recall, aggregate estimated token savings, and optional observed session savings when real agent trace numbers are supplied.
 
+`eval-retrieval` runs the same task fixture shape against the actual `agent-context` selection path and reports recall@k, critical recall, selected tokens, and failure reasons. It exits nonzero when a critical file is missed. `perf-report` runs fixed local tasks and reports p50/p95 latency for index load plus context generation.
+
 `trace-replay` generates deterministic baseline versus CallSieve trace JSON from a suite. It is tagged with `metadata.collection = "controlled_replay"` and is useful before real observed session evidence exists.
 
 Use `session-start`, `session-event`, and `session-finish` for real observed agent sessions across Codex, Claude, Cursor, and local agents. These traces are tagged with `metadata.collection = "observed_session"` and keep ordered events with command classification, files read, optional token counts, and phase (`baseline` or `callsieve`).
@@ -410,7 +429,24 @@ With `--anonymize`, repo paths, labels, suite paths, and trace paths are redacte
 
 ## Agent Enforcement
 
-Use `agent-setup` to install local MCP config plus a short CallSieve-first policy file for Codex, Claude, Cursor, Cline, Roo, or generic MCP clients:
+Use `bootstrap` when you want the whole local adoption stack in one command: rebuild the index, write client-specific MCP config and policy files, start the daemon state path, and optionally install strict local shims. It does not mutate global shell profiles, global user PATH, or cloud configuration.
+
+```bash
+cargo run -- bootstrap . --client generic --strict --force --lsp
+cargo run -- doctor . --client generic --strict
+cargo run -- doctor . --client generic --fix --strict
+```
+
+`doctor` reports local adoption checks: fresh index, generated agent files, optional Codex bootstrap files, strict shim files, and whether the shim directory is currently on the agent shell PATH. With `--fix`, it repairs missing or stale local pieces it can safely write under the repo. PATH changes remain an explicit shell choice for the launched agent process.
+
+Use `begin` as the lightweight entrypoint for a task session. It returns the normal read-first context packet and, with `--trace-out`, writes the first context event so `trace-check --strict` can audit later grep or file reads:
+
+```bash
+cargo run -- begin . "change login token expiry behavior" --client generic --trace-out .callsieve/session-trace.json
+cargo run -- trace-check .callsieve/session-trace.json --strict
+```
+
+Use `agent-setup` when you only need local MCP config plus a short CallSieve-first policy file for Codex, Claude, Cursor, Cline, Roo, or generic MCP clients:
 
 ```bash
 cargo run -- agent-setup . --client codex --force
@@ -460,11 +496,11 @@ This repo includes `benchmarks/codex-chatgpt-manifest.local.json` as the local C
 For hard opt-in grep interception, install local wrappers and prepend `.callsieve/bin` to the agent shell PATH:
 
 ```bash
-cargo run -- shim install . --force
+cargo run -- shim install . --force --strict
 cargo run -- shim doctor .
 ```
 
-The install writes a local `callsieve` launcher plus wrappers that call `callsieve grep` before passing through to the real `rg` or `grep` command captured at install time.
+The install writes a project-local `callsieve` launcher plus wrappers that call `callsieve grep` before passing through to the real `rg` or `grep` command captured at install time. With `--strict`, shim-mediated grep writes `.callsieve/shim-trace.json` events that strict trace checks can flag when grep happens before CallSieve context. The wrappers are inert until `.callsieve/bin` is prepended to the agent shell PATH for that process.
 
 ## Fresh Indexes
 
@@ -518,7 +554,7 @@ If a server is missing or fails, CallSieve keeps the tree-sitter and heuristic g
 - `callsieve_trace_check`: audit whether a session grepped before CallSieve
 - `callsieve_benchmark`: estimate grep/read-loop token savings
 
-The MCP server requires an existing `.callsieve/index.json`; it does not rebuild or mutate the index.
+`callsieve_context` self-heals a missing or stale `.callsieve/index.json` by rebuilding the local index before returning context. MCP responses include freshness and timing metadata. The MCP server does not install shims, mutate client config, start the daemon, or send code to a remote service.
 
 See [docs/MCP.md](docs/MCP.md) for Codex, Claude Code, Claude Desktop, Cursor, Cline, and Roo setup examples.
 

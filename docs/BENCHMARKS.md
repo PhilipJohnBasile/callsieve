@@ -7,6 +7,10 @@ Run the real-repo CallSieve suite:
 ```bash
 cargo run -- index .
 cargo run -- benchmark-suite . benchmarks/callsieve-real-repo.json
+cargo run -- eval-retrieval benchmarks/retrieval-fixtures.json
+cargo run -- perf-report . --iterations 5
+cargo run -- begin . "change the read-first context packet ranking" --client generic --trace-out .callsieve/session-trace.json
+cargo run -- trace-check .callsieve/session-trace.json --strict
 cargo run -- trace-replay . benchmarks/callsieve-real-repo.json benchmarks/session-trace.local.json --limit 20
 cargo run -- trace-summary benchmarks/session-trace.example.json
 cargo run -- session-start . "change the read-first context packet ranking" --client codex --model gpt-5-codex --trace .callsieve/observed-session.json
@@ -27,9 +31,10 @@ Use `cargo run -- index . --lsp` when benchmark evidence should include local LS
 
 ## Current Evidence Stack
 
-CallSieve has four evidence modes:
+CallSieve has five evidence modes:
 
 - `benchmark-suite`: deterministic recall and token-savings estimates for local task suites.
+- `eval-retrieval` and `perf-report`: local retrieval-quality and p95-latency gates for tuning the read-first packet before proof collection.
 - `trace-replay` and `codex-session`: controlled replay, useful for shakedown and setup checks, never counted as observed proof.
 - `session-*`, `pilot-*`, `pilot-report`, and `proof-report`: observed paired sessions with strict trace policy, transcript token provenance, critical-file miss tracking, and replay separation.
 - `enterprise-proof-report`: broad-claim proof gates for 1,000 observed sessions, multi-client coverage, scale proxy repos, per-session savings ratios, and PMF evidence.
@@ -74,6 +79,15 @@ The suite output includes:
 ```
 
 ## Session Trace Format
+
+Use `begin` as the lightweight task-session entrypoint when you want a context-first packet plus an auditable trace stub in one command:
+
+```bash
+cargo run -- begin <repo> "<task>" --client generic --trace-out <trace.json>
+cargo run -- trace-check <trace.json> --strict
+```
+
+`begin` writes the first CallSieve context event into the trace and records the selected `read_first` files and estimated context tokens. Later session events can add actual grep, read, and token details. Because the first event is CallSieve context, the resulting stub is ready for `trace-check --strict`, which will fail later broad grep or common file reads that happen before context.
 
 Use `session` when you have actual baseline and CallSieve-assisted agent trace numbers. `observed` is still accepted as a backward-compatible alias.
 
@@ -131,7 +145,7 @@ cargo run -- trace-check benchmarks/session-trace.example.json --strict
 cargo run -- policy-check benchmarks/session-trace.example.json --strict
 ```
 
-`trace-check` fails when an observed CallSieve-assisted session runs `rg`, `grep`, or `ripgrep` before `callsieve context`, `agent-context`, `guard`, `grep`, or the MCP `callsieve_context` tool. With `--strict`, it also fails common file reads such as `cat`, `sed`, `nl`, `Get-Content`, and `read_file` before CallSieve context.
+`trace-check` fails when an observed CallSieve-assisted session runs `rg`, `grep`, or `ripgrep` before `callsieve context`, `agent-context`, `begin`, `guard`, `grep`, or the MCP `callsieve_context` tool. With `--strict`, it also fails common file reads such as `cat`, `sed`, `nl`, `Get-Content`, and `read_file` before CallSieve context.
 
 `policy-check` prints the same JSON check result but exits nonzero on violations, which makes it suitable for CI or scripted pilot audits.
 
@@ -400,7 +414,7 @@ Recommended external proof target:
 
 ## Interpreting Misses
 
-`benchmark-suite` reports `misses` when an expected file is not selected. Common reasons:
+`benchmark-suite` reports `misses` when an expected file is not selected. `eval-retrieval` uses the same task fixture shape and exits nonzero when a critical file is missed. Common reasons:
 
 - the expected file is not currently indexed
 - the expected file fell outside `--limit`

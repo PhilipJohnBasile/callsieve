@@ -5,6 +5,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
+    time::{Duration, Instant},
 };
 
 use anyhow::Result;
@@ -12,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     indexer::{SCHEMA_VERSION, language::Language},
-    store::{self, CodeIndex, FileRecord, ReferenceRecord, SymbolRecord},
+    store::{self, CodeIndex, FileRecord, ImportRecord, ReferenceRecord, SymbolRecord},
 };
 
 const MAX_CONTEXT_SYMBOLS_PER_FILE: usize = 4;
@@ -73,6 +74,7 @@ pub struct QueryOutput {
     root: String,
     matches: Vec<QueryMatch>,
     stats: QueryStats,
+    timing: TimingStats,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     warnings: Vec<String>,
 }
@@ -88,6 +90,8 @@ struct QueryMatch {
     #[serde(skip_serializing_if = "Option::is_none")]
     snippet: Option<Snippet>,
     why: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    why_debug: Vec<ranker::ScoreComponent>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     related_tests: Vec<RelatedTest>,
 }
@@ -120,12 +124,22 @@ struct QueryStats {
     matched_symbols: usize,
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize)]
+pub struct TimingStats {
+    pub index_load_ms: u64,
+    pub ranking_ms: u64,
+    pub graph_expansion_ms: u64,
+    pub snippet_ms: u64,
+    pub total_ms: u64,
+}
+
 #[derive(Debug, Serialize)]
 pub struct ContextOutput {
     task: String,
     root: String,
     read_first: Vec<ContextFile>,
     stats: ContextStats,
+    timing: TimingStats,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     warnings: Vec<String>,
 }
@@ -151,6 +165,8 @@ struct ContextFile {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     related_tests: Vec<RelatedTest>,
     why: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    why_debug: Vec<ranker::ScoreComponent>,
 }
 
 #[derive(Debug, Serialize)]
@@ -194,6 +210,20 @@ struct ContextStats {
     selected_files: usize,
     selected_symbols: usize,
     related_tests: usize,
+}
+
+impl QueryOutput {
+    pub fn add_index_load_time(&mut self, index_load_ms: u64) {
+        self.timing.index_load_ms = index_load_ms;
+        self.timing.total_ms = self.timing.total_ms.saturating_add(index_load_ms);
+    }
+}
+
+impl ContextOutput {
+    pub fn add_index_load_time(&mut self, index_load_ms: u64) {
+        self.timing.index_load_ms = index_load_ms;
+        self.timing.total_ms = self.timing.total_ms.saturating_add(index_load_ms);
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -329,6 +359,62 @@ struct BenchmarkSuiteSummary {
     misses: Vec<BenchmarkSuiteMiss>,
     #[serde(skip_serializing_if = "Option::is_none")]
     observed_session: Option<ObservedSessionSummary>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct EvalRetrievalOutput {
+    command: &'static str,
+    status: String,
+    root: String,
+    limit: usize,
+    snippets_per_file: usize,
+    task_count: usize,
+    tasks: Vec<EvalRetrievalTaskOutput>,
+    summary: EvalRetrievalSummary,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    warnings: Vec<String>,
+}
+
+impl EvalRetrievalOutput {
+    pub fn failed(&self) -> bool {
+        self.status == "fail"
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct EvalRetrievalTaskOutput {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    id: Option<String>,
+    task: String,
+    status: String,
+    expected_files: Vec<String>,
+    critical_files: Vec<String>,
+    selected_files: Vec<String>,
+    expected_files_found: Vec<String>,
+    expected_files_missing: Vec<String>,
+    critical_files_found: Vec<String>,
+    critical_files_missing: Vec<String>,
+    recall_at_k: f64,
+    critical_recall: f64,
+    selected_tokens: usize,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    failure_reasons: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct EvalRetrievalSummary {
+    task_count: usize,
+    passed_tasks: usize,
+    failed_tasks: usize,
+    expected_files: usize,
+    expected_files_found: usize,
+    missed_expected_files: usize,
+    recall_at_k: f64,
+    critical_files: usize,
+    critical_files_found: usize,
+    missed_critical_files: usize,
+    critical_recall: f64,
+    selected_tokens: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -938,6 +1024,8 @@ struct ContextCandidate {
     symbol_ids: Vec<String>,
     why: Vec<String>,
     seen_why: BTreeSet<String>,
+    why_debug: Vec<ranker::ScoreComponent>,
+    seen_debug: BTreeSet<String>,
 }
 
 impl ContextCandidate {
@@ -951,6 +1039,8 @@ impl ContextCandidate {
             symbol_ids: Vec::new(),
             why: Vec::new(),
             seen_why: BTreeSet::new(),
+            why_debug: Vec::new(),
+            seen_debug: BTreeSet::new(),
         }
     }
 
@@ -963,7 +1053,13 @@ impl ContextCandidate {
         self.best_score + self.graph_score + (bonus_count * 5)
     }
 
-    fn add_match(&mut self, score: i32, symbol_id: Option<&str>, why: &[String]) {
+    fn add_match(
+        &mut self,
+        score: i32,
+        symbol_id: Option<&str>,
+        why: &[String],
+        score_debug: &[ranker::ScoreComponent],
+    ) {
         self.best_score = self.best_score.max(score);
 
         if let Some(symbol_id) = symbol_id
@@ -978,14 +1074,189 @@ impl ContextCandidate {
                 self.why.push(reason.clone());
             }
         }
+
+        for component in score_debug {
+            self.push_debug(component.clone());
+        }
     }
 
-    fn add_graph_boost(&mut self, score: i32, confidence: f64, why: String) {
+    fn add_graph_boost(&mut self, name: &'static str, score: i32, confidence: f64, why: String) {
         self.graph_confidence = self.graph_confidence.max(confidence);
         if self.seen_why.insert(why.clone()) {
             self.graph_score = (self.graph_score + score).min(MAX_CONTEXT_GRAPH_SCORE);
-            self.why.push(why);
+            self.why.push(why.clone());
+            self.push_debug(ranker::ScoreComponent {
+                name: name.to_string(),
+                points: score,
+                detail: why,
+            });
         }
+    }
+
+    fn push_debug(&mut self, component: ranker::ScoreComponent) {
+        let key = format!(
+            "{}:{}:{}",
+            component.name, component.points, component.detail
+        );
+        if self.seen_debug.insert(key) {
+            self.why_debug.push(component);
+        }
+    }
+}
+
+struct IndexLookup<'a> {
+    files_by_id: BTreeMap<&'a str, &'a FileRecord>,
+    files_by_path: BTreeMap<&'a str, &'a FileRecord>,
+    symbols_by_id: BTreeMap<&'a str, &'a SymbolRecord>,
+    symbols_by_file: BTreeMap<&'a str, Vec<&'a SymbolRecord>>,
+    imports_by_source: BTreeMap<&'a str, Vec<&'a ImportRecord>>,
+    imports_by_resolved: BTreeMap<&'a str, Vec<&'a ImportRecord>>,
+    references_by_source_path: BTreeMap<&'a str, Vec<&'a ReferenceRecord>>,
+    references_by_target_path: BTreeMap<&'a str, Vec<&'a ReferenceRecord>>,
+    references_by_source_symbol: BTreeMap<&'a str, Vec<&'a ReferenceRecord>>,
+    references_by_target_symbol: BTreeMap<&'a str, Vec<&'a ReferenceRecord>>,
+    test_files: Vec<&'a FileRecord>,
+}
+
+impl<'a> IndexLookup<'a> {
+    fn new(index: &'a CodeIndex) -> Self {
+        let mut lookup = Self {
+            files_by_id: BTreeMap::new(),
+            files_by_path: BTreeMap::new(),
+            symbols_by_id: BTreeMap::new(),
+            symbols_by_file: BTreeMap::new(),
+            imports_by_source: BTreeMap::new(),
+            imports_by_resolved: BTreeMap::new(),
+            references_by_source_path: BTreeMap::new(),
+            references_by_target_path: BTreeMap::new(),
+            references_by_source_symbol: BTreeMap::new(),
+            references_by_target_symbol: BTreeMap::new(),
+            test_files: Vec::new(),
+        };
+
+        for file in &index.files {
+            lookup.files_by_id.insert(file.id.as_str(), file);
+            lookup.files_by_path.insert(file.path.as_str(), file);
+            if file.is_test {
+                lookup.test_files.push(file);
+            }
+        }
+
+        for symbol in &index.symbols {
+            lookup.symbols_by_id.insert(symbol.id.as_str(), symbol);
+            lookup
+                .symbols_by_file
+                .entry(symbol.file_id.as_str())
+                .or_default()
+                .push(symbol);
+        }
+
+        for import in &index.imports {
+            lookup
+                .imports_by_source
+                .entry(import.source_path.as_str())
+                .or_default()
+                .push(import);
+            if let Some(resolved_path) = import.resolved_path.as_deref() {
+                lookup
+                    .imports_by_resolved
+                    .entry(resolved_path)
+                    .or_default()
+                    .push(import);
+            }
+        }
+
+        for reference in &index.references {
+            lookup
+                .references_by_source_path
+                .entry(reference.source_path.as_str())
+                .or_default()
+                .push(reference);
+            if let Some(target_path) = reference.target_path.as_deref() {
+                lookup
+                    .references_by_target_path
+                    .entry(target_path)
+                    .or_default()
+                    .push(reference);
+            }
+            if let Some(source_symbol_id) = reference.source_symbol_id.as_deref() {
+                lookup
+                    .references_by_source_symbol
+                    .entry(source_symbol_id)
+                    .or_default()
+                    .push(reference);
+            }
+            if let Some(target_symbol_id) = reference.target_symbol_id.as_deref() {
+                lookup
+                    .references_by_target_symbol
+                    .entry(target_symbol_id)
+                    .or_default()
+                    .push(reference);
+            }
+        }
+
+        lookup
+    }
+
+    fn file_by_id(&self, file_id: &str) -> Option<&'a FileRecord> {
+        self.files_by_id.get(file_id).copied()
+    }
+
+    fn file_by_path(&self, path: &str) -> Option<&'a FileRecord> {
+        self.files_by_path.get(path).copied()
+    }
+
+    fn symbol_by_id(&self, symbol_id: &str) -> Option<&'a SymbolRecord> {
+        self.symbols_by_id.get(symbol_id).copied()
+    }
+
+    fn symbols_for_file(&self, file_id: &str) -> &[&'a SymbolRecord] {
+        self.symbols_by_file
+            .get(file_id)
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+    }
+
+    fn imports_from_path(&self, path: &str) -> &[&'a ImportRecord] {
+        self.imports_by_source
+            .get(path)
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+    }
+
+    fn imports_to_path(&self, path: &str) -> &[&'a ImportRecord] {
+        self.imports_by_resolved
+            .get(path)
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+    }
+
+    fn references_from_path(&self, path: &str) -> &[&'a ReferenceRecord] {
+        self.references_by_source_path
+            .get(path)
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+    }
+
+    fn references_to_path(&self, path: &str) -> &[&'a ReferenceRecord] {
+        self.references_by_target_path
+            .get(path)
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+    }
+
+    fn references_from_symbol(&self, symbol_id: &str) -> &[&'a ReferenceRecord] {
+        self.references_by_source_symbol
+            .get(symbol_id)
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+    }
+
+    fn references_to_symbol(&self, symbol_id: &str) -> &[&'a ReferenceRecord] {
+        self.references_by_target_symbol
+            .get(symbol_id)
+            .map(Vec::as_slice)
+            .unwrap_or_default()
     }
 }
 
@@ -1064,18 +1335,21 @@ struct TraceCheckViolation {
 }
 
 pub fn list_symbols(root: &Path, index: &CodeIndex, limit: usize) -> Result<SymbolsOutput> {
+    let lookup = IndexLookup::new(index);
     let symbols = index
         .symbols
         .iter()
         .take(limit)
         .filter_map(|symbol| {
-            file_by_id(index, &symbol.file_id).map(|file| SymbolListItem {
-                file: file.path.clone(),
-                name: symbol.name.clone(),
-                kind: symbol.kind.clone(),
-                lines: [symbol.start_line, symbol.end_line],
-                visibility: symbol.visibility.clone(),
-            })
+            lookup
+                .file_by_id(&symbol.file_id)
+                .map(|file| SymbolListItem {
+                    file: file.path.clone(),
+                    name: symbol.name.clone(),
+                    kind: symbol.kind.clone(),
+                    lines: [symbol.start_line, symbol.end_line],
+                    visibility: symbol.visibility.clone(),
+                })
         })
         .collect();
 
@@ -1092,6 +1366,8 @@ pub fn find_symbol(
     symbol_name: &str,
     limit: usize,
 ) -> Result<SymbolOutput> {
+    let lookup = IndexLookup::new(index);
+    let symbol_name_lower = symbol_name.to_ascii_lowercase();
     let mut matches: Vec<&SymbolRecord> = index
         .symbols
         .iter()
@@ -1100,7 +1376,7 @@ pub fn find_symbol(
                 || symbol
                     .name
                     .to_ascii_lowercase()
-                    .contains(&symbol_name.to_ascii_lowercase())
+                    .contains(&symbol_name_lower)
         })
         .collect();
 
@@ -1117,7 +1393,7 @@ pub fn find_symbol(
         .into_iter()
         .take(limit)
         .filter_map(|symbol| {
-            let file = file_by_id(index, &symbol.file_id)?;
+            let file = lookup.file_by_id(&symbol.file_id)?;
             Some(SymbolDetail {
                 file: file.path.clone(),
                 name: symbol.name.clone(),
@@ -1126,11 +1402,11 @@ pub fn find_symbol(
                 lines: [symbol.start_line, symbol.end_line],
                 visibility: symbol.visibility.clone(),
                 signature: symbol.signature.clone(),
-                imports: imports_for_file(index, &file.path),
-                referenced_by: references_to_file(index, &file.path),
-                calls: calls_from_symbol(index, symbol),
-                references: references_from_symbol(index, symbol),
-                called_by: called_by_symbol(index, symbol),
+                imports: imports_for_file(&lookup, &file.path),
+                referenced_by: references_to_file(&lookup, &file.path),
+                calls: calls_from_symbol(&lookup, symbol),
+                references: references_from_symbol(&lookup, symbol),
+                called_by: called_by_symbol(&lookup, symbol),
             })
         })
         .collect();
@@ -1149,27 +1425,56 @@ pub fn run_query(
     limit: usize,
     include_snippets: bool,
 ) -> Result<QueryOutput> {
+    run_query_with_options(root, index, question, limit, include_snippets, false)
+}
+
+pub fn run_query_with_options(
+    root: &Path,
+    index: &CodeIndex,
+    question: &str,
+    limit: usize,
+    include_snippets: bool,
+    why_debug: bool,
+) -> Result<QueryOutput> {
+    let total_start = Instant::now();
+    let lookup = IndexLookup::new(index);
+    let ranking_start = Instant::now();
     let ranked = ranker::rank(index, question, limit);
-    let matched_files: BTreeSet<String> =
-        ranked.iter().map(|match_| match_.file_id.clone()).collect();
+    let ranking_ms = elapsed_ms(ranking_start.elapsed());
+    let matched_files = ranked
+        .iter()
+        .map(|match_| match_.file_id.as_str())
+        .collect::<BTreeSet<_>>()
+        .len();
     let matched_symbols = ranked
         .iter()
         .filter(|match_| match_.symbol_id.is_some())
         .count();
+    let mut snippet_elapsed = Duration::ZERO;
 
     let matches = ranked
         .into_iter()
         .enumerate()
         .filter_map(|(rank_index, ranked)| {
-            let file = file_by_id(index, &ranked.file_id)?;
+            let file = lookup.file_by_id(&ranked.file_id)?;
             let symbol = ranked
                 .symbol_id
                 .as_deref()
-                .and_then(|symbol_id| index.symbols.iter().find(|symbol| symbol.id == symbol_id));
+                .and_then(|symbol_id| lookup.symbol_by_id(symbol_id));
 
-            let snippet = include_snippets
-                .then(|| snippet_for(root, file, symbol))
-                .flatten();
+            let snippet = if include_snippets {
+                let snippet_start = Instant::now();
+                let snippet = snippet_for(root, file, symbol);
+                snippet_elapsed += snippet_start.elapsed();
+                snippet
+            } else {
+                None
+            };
+            let score_debug = if why_debug {
+                ranked.score_debug
+            } else {
+                Vec::new()
+            };
 
             Some(QueryMatch {
                 rank: rank_index + 1,
@@ -1185,7 +1490,8 @@ pub fn run_query(
                 }),
                 snippet,
                 why: ranked.why,
-                related_tests: related_tests(index, file),
+                why_debug: score_debug,
+                related_tests: related_tests(&lookup, file),
             })
         })
         .collect();
@@ -1196,8 +1502,15 @@ pub fn run_query(
         matches,
         stats: QueryStats {
             searched_files: index.files.len(),
-            matched_files: matched_files.len(),
+            matched_files,
             matched_symbols,
+        },
+        timing: TimingStats {
+            index_load_ms: 0,
+            ranking_ms,
+            graph_expansion_ms: 0,
+            snippet_ms: elapsed_ms(snippet_elapsed),
+            total_ms: elapsed_ms(total_start.elapsed()),
         },
         warnings: stale_warnings(root, index),
     })
@@ -1211,8 +1524,32 @@ pub fn build_context(
     snippets_per_file: usize,
     include_snippets: bool,
 ) -> Result<ContextOutput> {
+    build_context_with_options(
+        root,
+        index,
+        task,
+        limit,
+        snippets_per_file,
+        include_snippets,
+        false,
+    )
+}
+
+pub fn build_context_with_options(
+    root: &Path,
+    index: &CodeIndex,
+    task: &str,
+    limit: usize,
+    snippets_per_file: usize,
+    include_snippets: bool,
+    why_debug: bool,
+) -> Result<ContextOutput> {
+    let total_start = Instant::now();
     let candidate_limit = limit.saturating_mul(16);
+    let lookup = IndexLookup::new(index);
+    let ranking_start = Instant::now();
     let ranked = ranker::rank(index, task, candidate_limit);
+    let ranking_ms = elapsed_ms(ranking_start.elapsed());
     let mut grouped: BTreeMap<String, ContextCandidate> = BTreeMap::new();
 
     for (rank_index, ranked_match) in ranked.iter().enumerate() {
@@ -1225,10 +1562,13 @@ pub fn build_context(
             ranked_match.score,
             ranked_match.symbol_id.as_deref(),
             &ranked_match.why,
+            &ranked_match.score_debug,
         );
     }
-    add_graph_context(index, &ranked, &mut grouped);
-    add_reference_context(index, &ranked, &mut grouped);
+    let graph_start = Instant::now();
+    add_graph_context(&lookup, &ranked, &mut grouped);
+    add_reference_context(&lookup, &ranked, &mut grouped);
+    let graph_expansion_ms = elapsed_ms(graph_start.elapsed());
 
     let mut candidates: Vec<ContextCandidate> = grouped.into_values().collect();
     candidates.sort_by(|left, right| {
@@ -1242,16 +1582,17 @@ pub fn build_context(
 
     let mut selected_symbols = 0;
     let mut selected_related_tests = 0;
+    let mut snippet_elapsed = Duration::ZERO;
     let read_first: Vec<ContextFile> = candidates
         .into_iter()
         .take(limit)
         .enumerate()
         .filter_map(|(rank_index, candidate)| {
-            let file = file_by_id(index, &candidate.file_id)?;
+            let file = lookup.file_by_id(&candidate.file_id)?;
             let symbol_records: Vec<&SymbolRecord> = candidate
                 .symbol_ids
                 .iter()
-                .filter_map(|symbol_id| symbol_by_id(index, symbol_id))
+                .filter_map(|symbol_id| lookup.symbol_by_id(symbol_id))
                 .collect();
 
             let symbols: Vec<QuerySymbol> = symbol_records
@@ -1265,6 +1606,7 @@ pub fn build_context(
                 })
                 .collect();
 
+            let snippet_start = Instant::now();
             let snippets = context_snippets(
                 root,
                 file,
@@ -1272,11 +1614,12 @@ pub fn build_context(
                 snippets_per_file,
                 include_snippets,
             );
-            let related_tests_all = related_tests(index, file);
-            let imports_all = resolved_imports_for_file(index, &file.path);
-            let referenced_by_all = references_to_file(index, &file.path);
-            let calls_all = calls_from_file(index, file);
-            let called_by_all = called_by_file(index, file);
+            snippet_elapsed += snippet_start.elapsed();
+            let related_tests_all = related_tests(&lookup, file);
+            let imports_all = resolved_imports_for_file(&lookup, &file.path);
+            let referenced_by_all = references_to_file(&lookup, &file.path);
+            let calls_all = calls_from_file(&lookup, file);
+            let called_by_all = called_by_file(&lookup, file);
             let blast_radius = blast_radius_for(
                 &imports_all,
                 &referenced_by_all,
@@ -1297,6 +1640,11 @@ pub fn build_context(
             let related_tests = compact_related_tests(related_tests_all);
             let score = candidate.score();
             let why = take_strings(candidate.why, MAX_CONTEXT_WHY);
+            let debug = if why_debug {
+                candidate.why_debug.into_iter().take(16).collect()
+            } else {
+                Vec::new()
+            };
 
             selected_symbols += symbols.len();
             selected_related_tests += related_tests.len();
@@ -1315,6 +1663,7 @@ pub fn build_context(
                 called_by,
                 related_tests,
                 why,
+                why_debug: debug,
             })
         })
         .collect();
@@ -1327,6 +1676,13 @@ pub fn build_context(
             selected_files: read_first.len(),
             selected_symbols,
             related_tests: selected_related_tests,
+        },
+        timing: TimingStats {
+            index_load_ms: 0,
+            ranking_ms,
+            graph_expansion_ms,
+            snippet_ms: elapsed_ms(snippet_elapsed),
+            total_ms: elapsed_ms(total_start.elapsed()),
         },
         read_first,
         warnings: stale_warnings(root, index),
@@ -1526,6 +1882,167 @@ pub fn benchmark_suite(
 
     Ok(BenchmarkSuiteOutput {
         root: root_label(root),
+        task_count,
+        tasks: task_outputs,
+        summary,
+        warnings: stale_warnings(root, index),
+    })
+}
+
+pub fn eval_retrieval(
+    root: &Path,
+    index: &CodeIndex,
+    suite: BenchmarkSuiteInput,
+    limit: usize,
+    snippets_per_file: usize,
+    include_snippets: bool,
+) -> Result<EvalRetrievalOutput> {
+    let mut task_outputs = Vec::new();
+    let mut total_expected_files = 0;
+    let mut total_expected_files_found = 0;
+    let mut total_critical_files = 0;
+    let mut total_critical_files_found = 0;
+    let mut total_selected_tokens = 0;
+
+    for task in suite.tasks {
+        let BenchmarkSuiteTaskInput {
+            id,
+            task,
+            expected_files,
+            critical_files,
+            observed: _,
+            session: _,
+        } = task;
+        let benchmark = benchmark_context(
+            root,
+            index,
+            &task,
+            limit,
+            snippets_per_file,
+            include_snippets,
+        )?;
+        let selected_files: Vec<String> = benchmark
+            .callsieve
+            .top_files
+            .iter()
+            .map(|file| file.file.clone())
+            .collect();
+        let selected_set: BTreeSet<&str> = selected_files.iter().map(String::as_str).collect();
+        let expected_files_found: Vec<String> = expected_files
+            .iter()
+            .filter(|file| selected_set.contains(file.as_str()))
+            .cloned()
+            .collect();
+        let expected_files_missing: Vec<String> = expected_files
+            .iter()
+            .filter(|file| !selected_set.contains(file.as_str()))
+            .cloned()
+            .collect();
+        let critical_files_found: Vec<String> = critical_files
+            .iter()
+            .filter(|file| selected_set.contains(file.as_str()))
+            .cloned()
+            .collect();
+        let critical_files_missing: Vec<String> = critical_files
+            .iter()
+            .filter(|file| !selected_set.contains(file.as_str()))
+            .cloned()
+            .collect();
+        let enforced_missing = if critical_files.is_empty() {
+            &expected_files_missing
+        } else {
+            &critical_files_missing
+        };
+        let mut failure_reasons =
+            miss_reasons_for(index, enforced_missing, &selected_files, &benchmark);
+        if !critical_files_missing.is_empty() {
+            failure_reasons.push(format!(
+                "critical files missed: {}",
+                critical_files_missing.join(", ")
+            ));
+        }
+        let status = if enforced_missing.is_empty() {
+            "pass"
+        } else {
+            "fail"
+        }
+        .to_string();
+        let selected_tokens = benchmark.callsieve.estimated_packet_tokens;
+
+        total_expected_files += expected_files.len();
+        total_expected_files_found += expected_files_found.len();
+        total_critical_files += critical_files.len();
+        total_critical_files_found += critical_files_found.len();
+        total_selected_tokens += selected_tokens;
+
+        task_outputs.push(EvalRetrievalTaskOutput {
+            id,
+            task,
+            status,
+            expected_files: expected_files.clone(),
+            critical_files: critical_files.clone(),
+            selected_files,
+            expected_files_found,
+            expected_files_missing,
+            critical_files_found,
+            critical_files_missing,
+            recall_at_k: recall(
+                expected_files
+                    .iter()
+                    .filter(|file| {
+                        benchmark
+                            .callsieve
+                            .top_files
+                            .iter()
+                            .any(|selected| selected.file == **file)
+                    })
+                    .count(),
+                expected_files.len(),
+            ),
+            critical_recall: recall(
+                critical_files
+                    .iter()
+                    .filter(|file| {
+                        benchmark
+                            .callsieve
+                            .top_files
+                            .iter()
+                            .any(|selected| selected.file == **file)
+                    })
+                    .count(),
+                critical_files.len(),
+            ),
+            selected_tokens,
+            failure_reasons,
+        });
+    }
+
+    let failed_tasks = task_outputs
+        .iter()
+        .filter(|task| task.status == "fail")
+        .count();
+    let task_count = task_outputs.len();
+    let summary = EvalRetrievalSummary {
+        task_count,
+        passed_tasks: task_count.saturating_sub(failed_tasks),
+        failed_tasks,
+        expected_files: total_expected_files,
+        expected_files_found: total_expected_files_found,
+        missed_expected_files: total_expected_files.saturating_sub(total_expected_files_found),
+        recall_at_k: recall(total_expected_files_found, total_expected_files),
+        critical_files: total_critical_files,
+        critical_files_found: total_critical_files_found,
+        missed_critical_files: total_critical_files.saturating_sub(total_critical_files_found),
+        critical_recall: recall(total_critical_files_found, total_critical_files),
+        selected_tokens: total_selected_tokens,
+    };
+
+    Ok(EvalRetrievalOutput {
+        command: "eval-retrieval",
+        status: if failed_tasks == 0 { "pass" } else { "fail" }.to_string(),
+        root: root_label(root),
+        limit,
+        snippets_per_file,
         task_count,
         tasks: task_outputs,
         summary,
@@ -3149,20 +3666,8 @@ fn miss_reasons_for(
     reasons
 }
 
-fn file_by_id<'a>(index: &'a CodeIndex, file_id: &str) -> Option<&'a FileRecord> {
-    index.files.iter().find(|file| file.id == file_id)
-}
-
-fn symbol_by_id<'a>(index: &'a CodeIndex, symbol_id: &str) -> Option<&'a SymbolRecord> {
-    index.symbols.iter().find(|symbol| symbol.id == symbol_id)
-}
-
-fn file_by_path<'a>(index: &'a CodeIndex, path: &str) -> Option<&'a FileRecord> {
-    index.files.iter().find(|file| file.path == path)
-}
-
 fn add_graph_context(
-    index: &CodeIndex,
+    lookup: &IndexLookup<'_>,
     ranked: &[ranker::RankedMatch],
     grouped: &mut BTreeMap<String, ContextCandidate>,
 ) {
@@ -3175,26 +3680,27 @@ fn add_graph_context(
         .collect();
 
     for file_id in matched_file_ids {
-        let Some(file) = file_by_id(index, file_id) else {
+        let Some(file) = lookup.file_by_id(file_id) else {
             continue;
         };
 
-        for imported_path in resolved_imports_for_file(index, &file.path) {
-            let Some(imported_file) = file_by_path(index, &imported_path) else {
+        for imported_path in resolved_imports_for_file(lookup, &file.path) {
+            let Some(imported_file) = lookup.file_by_path(&imported_path) else {
                 continue;
             };
             let entry = grouped
                 .entry(imported_file.id.clone())
                 .or_insert_with(|| ContextCandidate::new(imported_file.id.clone(), 0, usize::MAX));
             entry.add_graph_boost(
+                "graph_imported_file",
                 IMPORTED_FILE_BOOST,
                 0.5,
                 format!("referenced by matched file: {}", file.path),
             );
         }
 
-        for referencing_path in references_to_file(index, &file.path) {
-            let Some(referencing_file) = file_by_path(index, &referencing_path) else {
+        for referencing_path in references_to_file(lookup, &file.path) {
+            let Some(referencing_file) = lookup.file_by_path(&referencing_path) else {
                 continue;
             };
             let entry = grouped
@@ -3203,6 +3709,7 @@ fn add_graph_context(
                     ContextCandidate::new(referencing_file.id.clone(), 0, usize::MAX)
                 });
             entry.add_graph_boost(
+                "graph_referencing_file",
                 REFERENCING_FILE_BOOST,
                 0.5,
                 format!("references matched file: {}", file.path),
@@ -3212,7 +3719,7 @@ fn add_graph_context(
 }
 
 fn add_reference_context(
-    index: &CodeIndex,
+    lookup: &IndexLookup<'_>,
     ranked: &[ranker::RankedMatch],
     grouped: &mut BTreeMap<String, ContextCandidate>,
 ) {
@@ -3228,81 +3735,91 @@ fn add_reference_context(
         .filter_map(|match_| match_.symbol_id.as_deref())
         .collect();
 
-    for reference in &index.references {
-        if matched_file_ids.contains(reference.file_id.as_str())
-            && let Some(target_path) = reference.target_path.as_deref()
-            && let Some(target_file) = file_by_path(index, target_path)
-        {
-            let entry = grouped
-                .entry(target_file.id.clone())
-                .or_insert_with(|| ContextCandidate::new(target_file.id.clone(), 0, usize::MAX));
-            entry.add_graph_boost(
-                CALLEE_BOOST,
-                reference.confidence,
-                format!(
-                    "{} from matched file: {}",
-                    reference.kind, reference.target_name
-                ),
-            );
+    for file_id in matched_file_ids {
+        let Some(file) = lookup.file_by_id(file_id) else {
+            continue;
+        };
+
+        for reference in lookup.references_from_path(&file.path) {
+            if let Some(target_path) = reference.target_path.as_deref()
+                && let Some(target_file) = lookup.file_by_path(target_path)
+            {
+                let entry = grouped.entry(target_file.id.clone()).or_insert_with(|| {
+                    ContextCandidate::new(target_file.id.clone(), 0, usize::MAX)
+                });
+                entry.add_graph_boost(
+                    "graph_callee",
+                    CALLEE_BOOST,
+                    reference.confidence,
+                    format!(
+                        "{} from matched file: {}",
+                        reference.kind, reference.target_name
+                    ),
+                );
+            }
         }
 
-        if let Some(target_path) = reference.target_path.as_deref()
-            && file_by_path(index, target_path)
-                .is_some_and(|target_file| matched_file_ids.contains(target_file.id.as_str()))
-            && let Some(source_file) = file_by_path(index, &reference.source_path)
-        {
-            let entry = grouped
-                .entry(source_file.id.clone())
-                .or_insert_with(|| ContextCandidate::new(source_file.id.clone(), 0, usize::MAX));
-            entry.add_graph_boost(
-                CALLER_BOOST,
-                reference.confidence,
-                format!("{} matched file: {}", reference.kind, target_path),
-            );
+        for reference in lookup.references_to_path(&file.path) {
+            if reference.source_path != file.path
+                && let Some(source_file) = lookup.file_by_path(&reference.source_path)
+            {
+                let entry = grouped.entry(source_file.id.clone()).or_insert_with(|| {
+                    ContextCandidate::new(source_file.id.clone(), 0, usize::MAX)
+                });
+                entry.add_graph_boost(
+                    "graph_caller",
+                    CALLER_BOOST,
+                    reference.confidence,
+                    format!("{} matched file: {}", reference.kind, file.path),
+                );
+            }
+        }
+    }
+
+    for symbol_id in matched_symbol_ids {
+        for reference in lookup.references_to_symbol(symbol_id) {
+            if let Some(source_file) = lookup.file_by_path(&reference.source_path) {
+                let entry = grouped.entry(source_file.id.clone()).or_insert_with(|| {
+                    ContextCandidate::new(source_file.id.clone(), 0, usize::MAX)
+                });
+                entry.add_graph_boost(
+                    "graph_caller",
+                    CALLER_BOOST,
+                    reference.confidence,
+                    format!(
+                        "{} matched symbol: {}",
+                        reference.kind, reference.target_name
+                    ),
+                );
+            }
         }
 
-        if let Some(target_symbol_id) = reference.target_symbol_id.as_deref()
-            && matched_symbol_ids.contains(target_symbol_id)
-            && let Some(source_file) = file_by_path(index, &reference.source_path)
-        {
-            let entry = grouped
-                .entry(source_file.id.clone())
-                .or_insert_with(|| ContextCandidate::new(source_file.id.clone(), 0, usize::MAX));
-            entry.add_graph_boost(
-                CALLER_BOOST,
-                reference.confidence,
-                format!(
-                    "{} matched symbol: {}",
-                    reference.kind, reference.target_name
-                ),
-            );
-        }
-
-        if let Some(source_symbol_id) = reference.source_symbol_id.as_deref()
-            && matched_symbol_ids.contains(source_symbol_id)
-            && let Some(target_path) = reference.target_path.as_deref()
-            && let Some(target_file) = file_by_path(index, target_path)
-        {
-            let entry = grouped
-                .entry(target_file.id.clone())
-                .or_insert_with(|| ContextCandidate::new(target_file.id.clone(), 0, usize::MAX));
-            entry.add_graph_boost(
-                CALLEE_BOOST,
-                reference.confidence,
-                format!(
-                    "{} from matched symbol: {}",
-                    reference.kind, reference.target_name
-                ),
-            );
+        for reference in lookup.references_from_symbol(symbol_id) {
+            if let Some(target_path) = reference.target_path.as_deref()
+                && let Some(target_file) = lookup.file_by_path(target_path)
+            {
+                let entry = grouped.entry(target_file.id.clone()).or_insert_with(|| {
+                    ContextCandidate::new(target_file.id.clone(), 0, usize::MAX)
+                });
+                entry.add_graph_boost(
+                    "graph_callee",
+                    CALLEE_BOOST,
+                    reference.confidence,
+                    format!(
+                        "{} from matched symbol: {}",
+                        reference.kind, reference.target_name
+                    ),
+                );
+            }
         }
     }
 }
 
-fn imports_for_file(index: &CodeIndex, path: &str) -> Vec<String> {
-    index
-        .imports
+fn imports_for_file(lookup: &IndexLookup<'_>, path: &str) -> Vec<String> {
+    lookup
+        .imports_from_path(path)
         .iter()
-        .filter(|import| import.source_path == path)
+        .copied()
         .map(|import| {
             import
                 .resolved_path
@@ -3312,11 +3829,11 @@ fn imports_for_file(index: &CodeIndex, path: &str) -> Vec<String> {
         .collect()
 }
 
-fn resolved_imports_for_file(index: &CodeIndex, path: &str) -> Vec<String> {
-    let mut imports: Vec<String> = index
-        .imports
+fn resolved_imports_for_file(lookup: &IndexLookup<'_>, path: &str) -> Vec<String> {
+    let mut imports: Vec<String> = lookup
+        .imports_from_path(path)
         .iter()
-        .filter(|import| import.source_path == path)
+        .copied()
         .filter_map(|import| import.resolved_path.clone())
         .collect();
     imports.sort();
@@ -3324,11 +3841,11 @@ fn resolved_imports_for_file(index: &CodeIndex, path: &str) -> Vec<String> {
     imports
 }
 
-fn references_to_file(index: &CodeIndex, path: &str) -> Vec<String> {
-    let mut references: Vec<String> = index
-        .imports
+fn references_to_file(lookup: &IndexLookup<'_>, path: &str) -> Vec<String> {
+    let mut references: Vec<String> = lookup
+        .imports_to_path(path)
         .iter()
-        .filter(|import| import.resolved_path.as_deref() == Some(path))
+        .copied()
         .map(|import| import.source_path.clone())
         .collect();
     references.sort();
@@ -3336,76 +3853,68 @@ fn references_to_file(index: &CodeIndex, path: &str) -> Vec<String> {
     references
 }
 
-fn calls_from_symbol(index: &CodeIndex, symbol: &SymbolRecord) -> Vec<ReferenceEdge> {
-    index
-        .references
+fn calls_from_symbol(lookup: &IndexLookup<'_>, symbol: &SymbolRecord) -> Vec<ReferenceEdge> {
+    lookup
+        .references_from_symbol(&symbol.id)
         .iter()
-        .filter(|reference| {
-            reference.source_symbol_id.as_deref() == Some(symbol.id.as_str())
-                && reference.kind == "call"
-        })
-        .map(|reference| reference_edge(index, reference))
+        .copied()
+        .filter(|reference| reference.kind == "call")
+        .map(|reference| reference_edge(lookup, reference))
         .take(10)
         .collect()
 }
 
-fn references_from_symbol(index: &CodeIndex, symbol: &SymbolRecord) -> Vec<ReferenceEdge> {
-    index
-        .references
+fn references_from_symbol(lookup: &IndexLookup<'_>, symbol: &SymbolRecord) -> Vec<ReferenceEdge> {
+    lookup
+        .references_from_symbol(&symbol.id)
         .iter()
-        .filter(|reference| {
-            reference.source_symbol_id.as_deref() == Some(symbol.id.as_str())
-                && reference.kind != "call"
-        })
-        .map(|reference| reference_edge(index, reference))
+        .copied()
+        .filter(|reference| reference.kind != "call")
+        .map(|reference| reference_edge(lookup, reference))
         .take(10)
         .collect()
 }
 
-fn called_by_symbol(index: &CodeIndex, symbol: &SymbolRecord) -> Vec<ReferenceEdge> {
-    index
-        .references
+fn called_by_symbol(lookup: &IndexLookup<'_>, symbol: &SymbolRecord) -> Vec<ReferenceEdge> {
+    lookup
+        .references_to_symbol(&symbol.id)
         .iter()
-        .filter(|reference| {
-            reference.target_symbol_id.as_deref() == Some(symbol.id.as_str())
-                && reference.kind == "call"
-        })
-        .map(|reference| reference_edge(index, reference))
+        .copied()
+        .filter(|reference| reference.kind == "call")
+        .map(|reference| reference_edge(lookup, reference))
         .take(10)
         .collect()
 }
 
-fn calls_from_file(index: &CodeIndex, file: &FileRecord) -> Vec<ReferenceEdge> {
-    index
-        .references
+fn calls_from_file(lookup: &IndexLookup<'_>, file: &FileRecord) -> Vec<ReferenceEdge> {
+    lookup
+        .references_from_path(&file.path)
         .iter()
+        .copied()
         .filter(|reference| reference.source_path == file.path && reference.kind == "call")
-        .map(|reference| reference_edge(index, reference))
+        .map(|reference| reference_edge(lookup, reference))
         .take(10)
         .collect()
 }
 
-fn called_by_file(index: &CodeIndex, file: &FileRecord) -> Vec<ReferenceEdge> {
-    index
-        .references
+fn called_by_file(lookup: &IndexLookup<'_>, file: &FileRecord) -> Vec<ReferenceEdge> {
+    lookup
+        .references_to_path(&file.path)
         .iter()
-        .filter(|reference| {
-            reference.target_path.as_deref() == Some(file.path.as_str())
-                && reference.source_path != file.path
-                && reference.kind == "call"
-        })
-        .map(|reference| reference_edge(index, reference))
+        .copied()
+        .filter(|reference| reference.source_path != file.path && reference.kind == "call")
+        .map(|reference| reference_edge(lookup, reference))
         .take(10)
         .collect()
 }
 
-fn reference_edge(index: &CodeIndex, reference: &ReferenceRecord) -> ReferenceEdge {
+fn reference_edge(lookup: &IndexLookup<'_>, reference: &ReferenceRecord) -> ReferenceEdge {
     ReferenceEdge {
         file: reference.source_path.clone(),
         symbol: reference
             .source_symbol_id
             .as_deref()
-            .and_then(|symbol_id| symbol_by_id(index, symbol_id))
+            .and_then(|symbol_id| lookup.symbol_by_id(symbol_id))
             .map(|symbol| symbol.name.clone()),
         target: reference.target_name.clone(),
         target_file: reference.target_path.clone(),
@@ -3673,6 +4182,10 @@ fn estimate_tokens(text: &str) -> usize {
     }
 }
 
+fn elapsed_ms(duration: Duration) -> u64 {
+    duration.as_millis().try_into().unwrap_or(u64::MAX)
+}
+
 fn recall(found: usize, total: usize) -> f64 {
     if total == 0 {
         0.0
@@ -3906,6 +4419,10 @@ fn observed_only_summary(summary: Option<TraceSummaryOutput>) -> Option<TraceSum
 fn snippet_for(root: &Path, file: &FileRecord, symbol: Option<&SymbolRecord>) -> Option<Snippet> {
     let content = fs::read_to_string(root.join(&file.path)).ok()?;
     let lines: Vec<&str> = content.lines().collect();
+    snippet_from_lines(&lines, symbol)
+}
+
+fn snippet_from_lines(lines: &[&str], symbol: Option<&SymbolRecord>) -> Option<Snippet> {
     if lines.is_empty() {
         return None;
     }
@@ -3937,14 +4454,19 @@ fn context_snippets(
         return Vec::new();
     }
 
+    let Ok(content) = fs::read_to_string(root.join(&file.path)) else {
+        return Vec::new();
+    };
+    let lines: Vec<&str> = content.lines().collect();
+
     let mut snippets: Vec<Snippet> = symbols
         .iter()
         .take(snippets_per_file)
-        .filter_map(|symbol| snippet_for(root, file, Some(*symbol)))
+        .filter_map(|symbol| snippet_from_lines(&lines, Some(*symbol)))
         .collect();
 
     if snippets.is_empty()
-        && let Some(snippet) = snippet_for(root, file, None)
+        && let Some(snippet) = snippet_from_lines(&lines, None)
     {
         snippets.push(snippet);
     }
@@ -3952,25 +4474,23 @@ fn context_snippets(
     snippets
 }
 
-fn related_tests(index: &CodeIndex, file: &FileRecord) -> Vec<RelatedTest> {
+fn related_tests(lookup: &IndexLookup<'_>, file: &FileRecord) -> Vec<RelatedTest> {
     if file.is_test {
         return Vec::new();
     }
 
     let stem = file_stem(&file.path).to_ascii_lowercase();
-    index
-        .files
+    lookup
+        .test_files
         .iter()
-        .filter(|candidate| {
-            candidate.is_test && candidate.path.to_ascii_lowercase().contains(stem.as_str())
-        })
+        .filter(|candidate| candidate.path.to_ascii_lowercase().contains(stem.as_str()))
         .take(5)
         .map(|test_file| RelatedTest {
             file: test_file.path.clone(),
-            symbols: index
-                .symbols
+            symbols: lookup
+                .symbols_for_file(&test_file.id)
                 .iter()
-                .filter(|symbol| symbol.file_id == test_file.id)
+                .copied()
                 .map(|symbol| symbol.name.clone())
                 .collect(),
         })
@@ -4244,6 +4764,7 @@ fn is_callsieve_context_command(command: &str) -> bool {
     lower.contains("callsieve context")
         || lower.contains("callsieve agent-context")
         || lower.contains("callsieve codex-session")
+        || lower.contains("callsieve begin")
         || lower.contains("callsieve_context")
         || lower.contains("callsieve guard")
         || lower.contains("callsieve grep")

@@ -1,0 +1,72 @@
+{
+  "path": ".",
+  "tasks": [
+    {
+      "id": "code-edit-agent-context",
+      "category": "code_edit",
+      "task": "change agent-context read-first context generation timing and debug output",
+      "expected_files": ["src/query/mod.rs", "src/cli.rs"],
+      "critical_files": ["src/query/mod.rs"]
+    },
+    {
+      "id": "bug-ranker-exact-symbol",
+      "category": "bug_fix",
+      "task": "fix ranker exact symbol matching so text does not match context",
+      "expected_files": ["src/query/ranker.rs"],
+      "critical_files": ["src/query/ranker.rs"]
+    },
+    {
+      "id": "tests-cli-retrieval",
+      "category": "tests",
+      "task": "add CLI integration tests for eval retrieval perf report and why debug output",
+      "expected_files": ["tests/cli.rs"],
+      "critical_files": ["tests/cli.rs"]
+    },
+    {
+      "id": "docs-agent-workflow",
+      "category": "docs",
+      "task": "update benchmark docs and MCP docs for context first agent setup workflow",
+      "expected_files": ["README.md", "docs/BENCHMARKS.md", "docs/MCP.md"],
+      "critical_files": ["README.md"]
+    },
+    {
+      "id": "config-build-dependency",
+      "category": "build",
+      "task": "change Rust dependency config build workflow and toolchain settings",
+      "expected_files": ["Cargo.toml", "rust-toolchain.toml", ".github/workflows/ci.yml"],
+      "critical_files": ["Cargo.toml"]
+    },
+    {
+      "id": "proof-evidence",
+      "category": "proof",
+      "task": "improve enterprise proof evidence pack proof report schemas and gates",
+      "expected_files": [
+        "src/query/mod.rs",
+        "docs/ENTERPRISE_PROOF.md",
+        "benchmarks/evidence/enterprise-proof-manifest.example.json"
+      ],
+      "critical_files": ["src/query/mod.rs"]
+    },
+    {
+      "id": "mcp-context-tool",
+      "category": "api",
+      "task": "update MCP callsieve_context tool behavior and setup documentation",
+      "expected_files": ["src/mcp.rs", "docs/MCP.md"],
+      "critical_files": ["src/mcp.rs"]
+    },
+    {
+      "id": "cli-agent-setup",
+      "category": "cli",
+      "task": "harden agent setup enforce grep shim and first command CLI workflow",
+      "expected_files": ["src/cli.rs", "README.md", "docs/MCP.md"],
+      "critical_files": ["src/cli.rs"]
+    },
+    {
+      "id": "refactor-lookup-cache",
+      "category": "refactor",
+      "task": "refactor query context helper lookups to use index lookup caches",
+      "expected_files": ["src/query/mod.rs"],
+      "critical_files": ["src/query/mod.rs"]
+    }
+  ]
+}

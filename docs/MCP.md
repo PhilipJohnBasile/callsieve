@@ -11,7 +11,7 @@
 
 The MCP server is the integration surface for agents. It does not replace the CLI: indexing, watching, daemon refresh, evidence collection, proof reports, and enterprise-proof reports still run through `callsieve` commands.
 
-Build or install CallSieve first, then index each repository before using the MCP tools:
+Build or install CallSieve first. You can index each repository up front, or let the first `callsieve_context` call rebuild a missing or stale local index:
 
 ```bash
 cargo install --path .
@@ -25,7 +25,13 @@ For higher-confidence reference edges, index with local LSP enrichment before st
 callsieve index /path/to/repo --lsp
 ```
 
-The MCP server reads the existing `.callsieve/index.json`; it does not install language servers, rebuild indexes, mutate traces, or send code to a remote service.
+`callsieve_context` checks freshness before ranking. If `.callsieve/index.json` is missing or stale, it rebuilds and saves the local index, then returns the context packet. The response includes `freshness.initial_fresh`, `freshness.refreshed`, `freshness.final_fresh`, `freshness.index_generation`, `freshness.stale_files`, and `freshness.fix_command`, plus timing fields such as `freshness_check_ms`, `index_rebuild_ms`, and `mcp_total_ms`.
+
+The MCP server does not install language servers, install grep shims, mutate client config, mutate traces, start the daemon, or send code to a remote service. If an MCP rebuild fails, the tool response returns the exact CLI repair command in `structuredContent.error.fix_command`, for example:
+
+```bash
+callsieve index /path/to/repo
+```
 
 If you do not install the binary, replace `callsieve` in the examples with:
 
@@ -36,6 +42,9 @@ cargo run --manifest-path /path/to/callsieve/Cargo.toml -- mcp
 CallSieve can generate local config and a before-grep policy file for supported clients:
 
 ```bash
+callsieve bootstrap /path/to/repo --client generic --strict --force
+callsieve doctor /path/to/repo --client generic --strict
+callsieve doctor /path/to/repo --client generic --fix --strict
 callsieve agent-setup /path/to/repo --client codex
 callsieve agent-setup /path/to/repo --client claude
 callsieve agent-setup /path/to/repo --client cursor
@@ -45,7 +54,7 @@ callsieve agent-setup /path/to/repo --client generic
 ```
 
 Pass `--force` to replace existing generated files.
-Generated MCP configs use the resolved CallSieve executable path so client startup does not depend on the agent shell PATH. Manual examples below use `callsieve` for readability; replace it with an absolute path when the client shell cannot resolve the binary.
+Generated MCP configs use the resolved CallSieve executable path so client startup does not depend on the agent shell PATH. Generated policy files also include the first command agents should run for every task: `callsieve agent-context <repo> "<task>"`. Manual examples below use `callsieve` for readability; replace it with an absolute path when the client shell cannot resolve the binary.
 
 Audit generated setup with:
 
@@ -184,7 +193,7 @@ Use `callsieve_context` before broad search tools and repeated file reads.
 
 For coding tasks, agents should:
 
-1. Call `callsieve_context` with `{ "path": "/path/to/repo", "task": "..." }`.
+1. Call `callsieve_context` with `{ "path": "/path/to/repo", "task": "..." }`, or run `callsieve begin /path/to/repo "<task>" --client <client> --trace-out /path/to/repo/.callsieve/session-trace.json` before any broad search.
 2. Call `callsieve_status` if freshness or LSP enrichment state is uncertain.
 3. Read the returned `read_first` snippets and files.
 4. Use `callsieve_symbol` for named symbols when needed.
@@ -201,11 +210,11 @@ For proof work, pair MCP usage with CLI trace collection. The agent should call 
 For opt-in PATH-level interception, install local wrappers:
 
 ```bash
-callsieve shim install /path/to/repo --force
+callsieve shim install /path/to/repo --force --strict
 callsieve shim doctor /path/to/repo
 ```
 
-Then prepend `/path/to/repo/.callsieve/bin` to the PATH used by the agent shell. The install writes a local `callsieve` launcher plus `rg` and `grep` wrappers. The search wrappers call `callsieve grep` before passing through to the real `rg` or `grep` command captured during install. Remove them with:
+Then prepend `/path/to/repo/.callsieve/bin` to the PATH used by the agent shell for that process. The install writes a local `callsieve` launcher plus `rg` and `grep` wrappers. The search wrappers call `callsieve grep` before passing through to the real `rg` or `grep` command captured during install. With `--strict`, shim-mediated grep writes `.callsieve/shim-trace.json` for strict trace audits. Remove wrappers with:
 
 ```bash
 callsieve shim uninstall /path/to/repo

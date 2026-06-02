@@ -5,7 +5,7 @@ use std::{
     path::{Path, PathBuf},
     process::{Command as ProcessCommand, Stdio},
     thread,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Context, Result};
@@ -74,6 +74,10 @@ pub enum Command {
 
         #[arg(long)]
         no_snippets: bool,
+
+        /// Include structured scoring components for ranking diagnostics.
+        #[arg(long)]
+        why_debug: bool,
     },
 
     /// Build a compact read-first packet for a coding task.
@@ -89,6 +93,10 @@ pub enum Command {
 
         #[arg(long)]
         no_snippets: bool,
+
+        /// Include structured scoring components for ranking diagnostics.
+        #[arg(long)]
+        why_debug: bool,
     },
 
     /// Build an agent-ready context packet agents should request before grep.
@@ -101,6 +109,10 @@ pub enum Command {
 
         #[arg(long, default_value_t = 2)]
         snippets_per_file: usize,
+
+        /// Include structured scoring components for ranking diagnostics.
+        #[arg(long)]
+        why_debug: bool,
     },
 
     /// Estimate token savings versus a naive grep/read loop.
@@ -131,6 +143,41 @@ pub enum Command {
 
         #[arg(long)]
         no_snippets: bool,
+    },
+
+    /// Evaluate read-first retrieval against expected and critical task fixtures.
+    #[command(name = "eval-retrieval")]
+    EvalRetrieval {
+        manifest: PathBuf,
+
+        #[arg(long, default_value_t = 8)]
+        limit: usize,
+
+        #[arg(long, default_value_t = 2)]
+        snippets_per_file: usize,
+
+        #[arg(long)]
+        no_snippets: bool,
+
+        /// Accepted for compatibility. CallSieve command output is JSON by default.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Run fixed local context tasks and report p50/p95 latency.
+    #[command(name = "perf-report")]
+    PerfReport {
+        path: PathBuf,
+
+        #[arg(long)]
+        tasks: Option<PathBuf>,
+
+        #[arg(long, default_value_t = 5)]
+        iterations: usize,
+
+        /// Accepted for compatibility. CallSieve command output is JSON by default.
+        #[arg(long)]
+        json: bool,
     },
 
     /// Summarize observed baseline versus CallSieve agent session traces.
@@ -433,6 +480,37 @@ pub enum Command {
         force: bool,
     },
 
+    /// Build index, setup agent policy, start daemon, and optionally install strict grep shims.
+    Bootstrap {
+        path: PathBuf,
+
+        #[arg(long, value_enum, default_value_t = AgentClient::Generic)]
+        client: AgentClient,
+
+        #[arg(long)]
+        strict: bool,
+
+        #[arg(long)]
+        force: bool,
+
+        #[arg(long)]
+        lsp: bool,
+    },
+
+    /// Report or repair local CallSieve adoption checks for an agent client.
+    Doctor {
+        path: PathBuf,
+
+        #[arg(long, value_enum, default_value_t = AgentClient::Generic)]
+        client: AgentClient,
+
+        #[arg(long)]
+        fix: bool,
+
+        #[arg(long)]
+        strict: bool,
+    },
+
     /// Generate local agent config and rules that require CallSieve before grep.
     #[command(name = "setup-agent")]
     SetupAgent {
@@ -469,6 +547,24 @@ pub enum Command {
     Guard {
         path: PathBuf,
         task: String,
+
+        #[arg(long)]
+        trace_out: Option<PathBuf>,
+
+        #[arg(long, default_value_t = 8)]
+        limit: usize,
+
+        #[arg(long, default_value_t = 2)]
+        snippets_per_file: usize,
+    },
+
+    /// Start an agent task, return context, and optionally write the first trace event.
+    Begin {
+        path: PathBuf,
+        task: String,
+
+        #[arg(long, value_enum, default_value_t = AgentClient::Generic)]
+        client: AgentClient,
 
         #[arg(long)]
         trace_out: Option<PathBuf>,
@@ -540,6 +636,12 @@ pub enum Command {
 
         #[arg(long, default_value_t = 2)]
         snippets_per_file: usize,
+
+        #[arg(long, hide = true)]
+        shim_strict: bool,
+
+        #[arg(long, hide = true)]
+        shim_command: Option<String>,
     },
 
     /// Show index statistics.
@@ -554,6 +656,9 @@ pub enum ShimCommand {
 
         #[arg(long)]
         force: bool,
+
+        #[arg(long)]
+        strict: bool,
     },
 
     /// Verify shim files and PATH guidance.
@@ -692,7 +797,41 @@ struct SetupAgentOutput {
     client: String,
     root: String,
     files: Vec<String>,
+    first_required_command: String,
     policy: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+struct AutomationStep {
+    step: String,
+    status: String,
+    message: String,
+}
+
+#[derive(Debug, Serialize)]
+struct BootstrapOutput {
+    command: &'static str,
+    status: String,
+    root: String,
+    client: String,
+    strict: bool,
+    steps: Vec<AutomationStep>,
+    generated_files: Vec<String>,
+    daemon: DaemonState,
+    first_required_command: String,
+    enforcement: EnforceOutput,
+}
+
+#[derive(Debug, Serialize)]
+struct DoctorOutput {
+    command: &'static str,
+    status: String,
+    root: String,
+    client: String,
+    message: String,
+    checks: Vec<EnforceCheck>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    fixes: Vec<AutomationStep>,
 }
 
 #[derive(Debug, Serialize)]
@@ -703,6 +842,20 @@ struct GuardOutput {
     policy: &'static str,
     context: query::ContextOutput,
     trace_event: AuditEvent,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    trace_path: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct BeginOutput {
+    command: &'static str,
+    root: String,
+    client: String,
+    task: String,
+    policy: &'static str,
+    next_step: String,
+    context: query::ContextOutput,
+    trace_event: serde_json::Value,
     #[serde(skip_serializing_if = "Option::is_none")]
     trace_path: Option<String>,
 }
@@ -725,6 +878,7 @@ struct CodexSessionOutput {
 struct GrepOutput {
     command: &'static str,
     policy: &'static str,
+    rg_status: &'static str,
     context: query::ContextOutput,
     audit_event: AuditEvent,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -762,6 +916,36 @@ struct PolicyCheckOutput {
     command: &'static str,
     trace: String,
     check: serde_json::Value,
+}
+
+#[derive(Debug, Serialize)]
+struct PerfReportOutput {
+    command: &'static str,
+    status: String,
+    root: String,
+    iterations: usize,
+    task_count: usize,
+    summary: PerfLatencySummary,
+    tasks: Vec<PerfTaskOutput>,
+}
+
+#[derive(Debug, Serialize)]
+struct PerfLatencySummary {
+    samples: usize,
+    p50_ms: u64,
+    p95_ms: u64,
+    min_ms: u64,
+    max_ms: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct PerfTaskOutput {
+    task: String,
+    samples: usize,
+    p50_ms: u64,
+    p95_ms: u64,
+    min_ms: u64,
+    max_ms: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -1080,6 +1264,9 @@ struct ShimOutput {
     status: String,
     root: String,
     bin_dir: String,
+    strict: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    trace: Option<String>,
     files: Vec<String>,
     path_instruction: String,
 }
@@ -1163,9 +1350,15 @@ pub fn run() -> Result<()> {
             question,
             limit,
             no_snippets,
+            why_debug,
         } => {
-            let index = store::json_store::load_index(&path)?;
-            let output = query::run_query(&path, &index, &question, limit, !no_snippets)?;
+            let (index, index_load_ms) = load_index_timed(&path)?;
+            let mut output = if why_debug {
+                query::run_query_with_options(&path, &index, &question, limit, !no_snippets, true)?
+            } else {
+                query::run_query(&path, &index, &question, limit, !no_snippets)?
+            };
+            output.add_index_load_time(index_load_ms);
             output::json::print(&output)?;
         }
         Command::Context {
@@ -1174,10 +1367,19 @@ pub fn run() -> Result<()> {
             limit,
             snippets_per_file,
             no_snippets,
+            why_debug,
         } => {
-            let index = store::json_store::load_index(&path)?;
-            let output =
-                query::build_context(&path, &index, &task, limit, snippets_per_file, !no_snippets)?;
+            let (index, index_load_ms) = load_index_timed(&path)?;
+            let mut output = query::build_context_with_options(
+                &path,
+                &index,
+                &task,
+                limit,
+                snippets_per_file,
+                !no_snippets,
+                why_debug,
+            )?;
+            output.add_index_load_time(index_load_ms);
             output::json::print(&output)?;
         }
         Command::AgentContext {
@@ -1185,10 +1387,19 @@ pub fn run() -> Result<()> {
             task,
             limit,
             snippets_per_file,
+            why_debug,
         } => {
-            let index = store::json_store::load_index(&path)?;
-            let context =
-                query::build_context(&path, &index, &task, limit, snippets_per_file, true)?;
+            let (index, index_load_ms) = load_index_timed(&path)?;
+            let mut context = query::build_context_with_options(
+                &path,
+                &index,
+                &task,
+                limit,
+                snippets_per_file,
+                true,
+                why_debug,
+            )?;
+            context.add_index_load_time(index_load_ms);
             let output = AgentContextOutput {
                 instruction: AgentContextInstruction {
                     action: "read_first_before_grep",
@@ -1237,6 +1448,58 @@ pub fn run() -> Result<()> {
                 snippets_per_file,
                 !no_snippets,
             )?;
+            output::json::print(&output)?;
+        }
+        Command::EvalRetrieval {
+            manifest,
+            limit,
+            snippets_per_file,
+            no_snippets,
+            json: _,
+        } => {
+            let manifest_json = fs::read_to_string(&manifest).with_context(|| {
+                format!(
+                    "failed to read retrieval eval manifest: {}",
+                    manifest.display()
+                )
+            })?;
+            let manifest_value: serde_json::Value = serde_json::from_str(&manifest_json)
+                .with_context(|| {
+                    format!(
+                        "failed to parse retrieval eval manifest: {}",
+                        manifest.display()
+                    )
+                })?;
+            let path = retrieval_manifest_root(&manifest_value);
+            let index = store::json_store::load_index(&path)?;
+            let suite: query::BenchmarkSuiteInput = serde_json::from_value(manifest_value)
+                .with_context(|| {
+                    format!(
+                        "failed to parse retrieval eval tasks: {}",
+                        manifest.display()
+                    )
+                })?;
+            let output = query::eval_retrieval(
+                &path,
+                &index,
+                suite,
+                limit,
+                snippets_per_file,
+                !no_snippets,
+            )?;
+            let failed = output.failed();
+            output::json::print(&output)?;
+            if failed {
+                std::process::exit(1);
+            }
+        }
+        Command::PerfReport {
+            path,
+            tasks,
+            iterations,
+            json: _,
+        } => {
+            let output = perf_report(&path, tasks.as_deref(), iterations)?;
             output::json::print(&output)?;
         }
         Command::TraceSummary { trace } => {
@@ -1628,6 +1891,25 @@ pub fn run() -> Result<()> {
             let output = setup_agent(client, &path, force)?;
             output::json::print(&output)?;
         }
+        Command::Bootstrap {
+            path,
+            client,
+            strict,
+            force,
+            lsp,
+        } => {
+            let output = bootstrap(&path, client, strict, force, lsp)?;
+            output::json::print(&output)?;
+        }
+        Command::Doctor {
+            path,
+            client,
+            fix,
+            strict,
+        } => {
+            let output = doctor(&path, client, fix, strict)?;
+            output::json::print(&output)?;
+        }
         Command::CodexBootstrap { path, model, force } => {
             let output = codex_bootstrap(&path, &model, force)?;
             output::json::print(&output)?;
@@ -1669,6 +1951,24 @@ pub fn run() -> Result<()> {
                 },
                 trace_path,
             };
+            output::json::print(&output)?;
+        }
+        Command::Begin {
+            path,
+            task,
+            client,
+            trace_out,
+            limit,
+            snippets_per_file,
+        } => {
+            let output = begin_task(
+                &path,
+                &task,
+                client,
+                trace_out.as_deref(),
+                limit,
+                snippets_per_file,
+            )?;
             output::json::print(&output)?;
         }
         Command::CodexSession {
@@ -1743,8 +2043,12 @@ pub fn run() -> Result<()> {
             output::json::print(&output)?;
         }
         Command::Shim { command } => match command {
-            ShimCommand::Install { path, force } => {
-                let output = install_shim(&path, force)?;
+            ShimCommand::Install {
+                path,
+                force,
+                strict,
+            } => {
+                let output = install_shim(&path, force, strict)?;
                 output::json::print(&output)?;
             }
             ShimCommand::Doctor { path } => {
@@ -1762,18 +2066,34 @@ pub fn run() -> Result<()> {
             run_rg: should_run_rg,
             limit,
             snippets_per_file,
+            shim_strict,
+            shim_command,
         } => {
             let index = store::json_store::load_index(&path)?;
             let context =
                 query::build_context(&path, &index, &pattern, limit, snippets_per_file, true)?;
+            let shim_event = if shim_strict {
+                Some(record_shim_grep_event(
+                    &path,
+                    shim_command.as_deref(),
+                    &pattern,
+                )?)
+            } else {
+                None
+            };
             let rg = if should_run_rg {
                 Some(run_rg(&path, &pattern)?)
             } else {
                 None
             };
-            let output = GrepOutput {
+            let mut output = serde_json::to_value(GrepOutput {
                 command: "grep",
                 policy: "callsieve_context_first; rg only runs when --run-rg is set",
+                rg_status: if should_run_rg {
+                    "context returned first; rg executed after context"
+                } else {
+                    "context returned first; pass --run-rg to execute rg after context"
+                },
                 context,
                 audit_event: AuditEvent {
                     tool: "callsieve_grep",
@@ -1783,7 +2103,12 @@ pub fn run() -> Result<()> {
                     called_at: now_unix_seconds(),
                 },
                 rg,
-            };
+            })?;
+            if let Some(shim_event) = shim_event
+                && let Some(object) = output.as_object_mut()
+            {
+                object.insert("shim_event".to_string(), shim_event);
+            }
             output::json::print(&output)?;
         }
         Command::Stats { path } => {
@@ -1794,6 +2119,157 @@ pub fn run() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn load_index_timed(path: &Path) -> Result<(store::CodeIndex, u64)> {
+    let started = Instant::now();
+    let index = store::json_store::load_index(path)?;
+    Ok((index, duration_ms(started.elapsed())))
+}
+
+fn retrieval_manifest_root(value: &serde_json::Value) -> PathBuf {
+    let raw_path = ["path", "repo", "root"]
+        .iter()
+        .find_map(|key| value.get(*key).and_then(serde_json::Value::as_str));
+    let Some(raw_path) = raw_path else {
+        return PathBuf::from(".");
+    };
+
+    PathBuf::from(raw_path)
+}
+
+fn perf_report(
+    root: &Path,
+    tasks_path: Option<&Path>,
+    iterations: usize,
+) -> Result<PerfReportOutput> {
+    let iterations = iterations.max(1);
+    let tasks = perf_tasks(tasks_path)?;
+    let mut all_samples = Vec::new();
+    let mut task_outputs = Vec::new();
+
+    for task in tasks {
+        let mut samples = Vec::new();
+        for _ in 0..iterations {
+            let started = Instant::now();
+            let (index, _) = load_index_timed(root)?;
+            let _context = query::build_context(root, &index, &task, 8, 2, true)?;
+            samples.push(duration_ms(started.elapsed()));
+        }
+        all_samples.extend(samples.iter().copied());
+        let summary = latency_summary(&samples);
+        task_outputs.push(PerfTaskOutput {
+            task,
+            samples: summary.samples,
+            p50_ms: summary.p50_ms,
+            p95_ms: summary.p95_ms,
+            min_ms: summary.min_ms,
+            max_ms: summary.max_ms,
+        });
+    }
+
+    let summary = latency_summary(&all_samples);
+    Ok(PerfReportOutput {
+        command: "perf-report",
+        status: if summary.p95_ms <= 1_000 {
+            "pass"
+        } else {
+            "warn"
+        }
+        .to_string(),
+        root: root_label(root),
+        iterations,
+        task_count: task_outputs.len(),
+        summary,
+        tasks: task_outputs,
+    })
+}
+
+fn perf_tasks(tasks_path: Option<&Path>) -> Result<Vec<String>> {
+    let Some(tasks_path) = tasks_path else {
+        return Ok(default_perf_tasks());
+    };
+    let tasks_json = fs::read_to_string(tasks_path).with_context(|| {
+        format!(
+            "failed to read perf task manifest: {}",
+            tasks_path.display()
+        )
+    })?;
+    let value: serde_json::Value = serde_json::from_str(&tasks_json).with_context(|| {
+        format!(
+            "failed to parse perf task manifest: {}",
+            tasks_path.display()
+        )
+    })?;
+    let tasks_value = value.get("tasks").unwrap_or(&value);
+    let tasks = tasks_value
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|item| {
+            item.as_str().map(str::to_string).or_else(|| {
+                item.get("task")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string)
+            })
+        })
+        .collect::<Vec<_>>();
+
+    if tasks.is_empty() {
+        Ok(default_perf_tasks())
+    } else {
+        Ok(tasks)
+    }
+}
+
+fn default_perf_tasks() -> Vec<String> {
+    [
+        "change agent context retrieval timing and debug output",
+        "fix exact symbol ranking for context generation",
+        "update proof report evidence gates",
+        "add CLI integration tests for retrieval evaluation",
+        "update MCP setup docs for context-first agents",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
+}
+
+fn latency_summary(samples: &[u64]) -> PerfLatencySummary {
+    if samples.is_empty() {
+        return PerfLatencySummary {
+            samples: 0,
+            p50_ms: 0,
+            p95_ms: 0,
+            min_ms: 0,
+            max_ms: 0,
+        };
+    }
+
+    let mut sorted = samples.to_vec();
+    sorted.sort_unstable();
+    PerfLatencySummary {
+        samples: sorted.len(),
+        p50_ms: percentile_ms(&sorted, 0.50),
+        p95_ms: percentile_ms(&sorted, 0.95),
+        min_ms: *sorted.first().unwrap_or(&0),
+        max_ms: *sorted.last().unwrap_or(&0),
+    }
+}
+
+fn percentile_ms(sorted_samples: &[u64], percentile: f64) -> u64 {
+    let len = sorted_samples.len();
+    if len == 0 {
+        return 0;
+    }
+    let index = ((len as f64 * percentile).ceil() as usize)
+        .saturating_sub(1)
+        .min(len - 1);
+    sorted_samples[index]
+}
+
+fn duration_ms(duration: Duration) -> u64 {
+    duration.as_millis().try_into().unwrap_or(u64::MAX)
 }
 
 fn init_tracing(verbose: bool) -> Result<()> {
@@ -1853,6 +2329,425 @@ fn refresh_watch_index(
         refreshed: true,
         status,
     })
+}
+
+fn build_index_output(root: &Path, lsp: bool) -> Result<IndexOutput> {
+    let index = if lsp {
+        indexer::build_index_with_options(
+            root,
+            indexer::IndexOptions {
+                lsp,
+                ..indexer::IndexOptions::default()
+            },
+        )?
+    } else {
+        indexer::build_index(root)?
+    };
+    let index_path = store::json_store::save_index(root, &index)?;
+    Ok(IndexOutput {
+        command: "index",
+        root: root_label(root),
+        index: repo_relative_display(root, &index_path),
+        files: index.files.len(),
+        symbols: index.symbols.len(),
+        imports: index.imports.len(),
+        references: index.references.len(),
+        lsp_enriched: index.metadata.lsp_enriched,
+        warnings: index.warnings,
+    })
+}
+
+fn bootstrap(
+    root: &Path,
+    client: AgentClient,
+    strict: bool,
+    force: bool,
+    lsp: bool,
+) -> Result<BootstrapOutput> {
+    let mut steps = Vec::new();
+    let mut generated_files = Vec::new();
+
+    let index = build_index_output(root, lsp)?;
+    generated_files.push(index.index.clone());
+    steps.push(automation_step(
+        "index",
+        "pass",
+        format!(
+            "indexed {} files, {} symbols, {} references",
+            index.files, index.symbols, index.references
+        ),
+    ));
+
+    let setup = setup_agent(client, root, force)?;
+    generated_files.extend(setup.files.clone());
+    steps.push(automation_step(
+        "agent_setup",
+        "pass",
+        format!("wrote {} agent setup file(s)", setup.files.len()),
+    ));
+
+    if matches!(client, AgentClient::Codex) {
+        let launchers = write_codex_launchers(root, &setup.first_required_command, force)?;
+        generated_files.extend(launchers.clone());
+        steps.push(automation_step(
+            "codex_launchers",
+            "pass",
+            format!("wrote {} Codex launcher file(s)", launchers.len()),
+        ));
+    }
+
+    let daemon = run_daemon(root, lsp, 1000, false, false)?;
+    steps.push(automation_step(
+        "daemon",
+        "pass",
+        format!("daemon state is {}", daemon.state.status),
+    ));
+
+    if strict {
+        let shim = install_shim(root, force, true)?;
+        generated_files.extend(shim.files.clone());
+        steps.push(automation_step(
+            "strict_shim",
+            "pass",
+            format!("installed {} strict shim file(s)", shim.files.len()),
+        ));
+    }
+
+    generated_files.sort();
+    generated_files.dedup();
+    let enforcement = enforce_setup(root, client, None, strict, strict)?;
+    let status = enforcement.status.clone();
+
+    Ok(BootstrapOutput {
+        command: "bootstrap",
+        status,
+        root: root_label(root),
+        client: agent_client_name(client).to_string(),
+        strict,
+        steps,
+        generated_files,
+        daemon: daemon.state,
+        first_required_command: setup.first_required_command,
+        enforcement,
+    })
+}
+
+fn doctor(root: &Path, client: AgentClient, fix: bool, strict: bool) -> Result<DoctorOutput> {
+    let mut fixes = Vec::new();
+    let mut checks = doctor_checks(root, client, strict)?;
+    if fix {
+        if check_failed(&checks, "fresh_index") {
+            let index = build_index_output(root, false)?;
+            fixes.push(automation_step(
+                "index",
+                "pass",
+                format!("rebuilt index at {}", index.index),
+            ));
+        }
+        if checks
+            .iter()
+            .any(|check| check.check.starts_with("agent_file:") && check.status == "fail")
+        {
+            let setup = setup_missing_agent_files(client, root)?;
+            fixes.push(automation_step(
+                "agent_setup",
+                "pass",
+                format!("wrote {} missing agent setup file(s)", setup.files.len()),
+            ));
+        }
+        if matches!(client, AgentClient::Codex)
+            && checks
+                .iter()
+                .any(|check| check.check.starts_with("codex_bootstrap:") && check.status == "fail")
+        {
+            let first_required_command =
+                format!("callsieve agent-context {} \"<task>\"", root.display());
+            let launchers = write_codex_launchers(root, &first_required_command, false)?;
+            fixes.push(automation_step(
+                "codex_launchers",
+                "pass",
+                format!("wrote {} missing Codex launcher file(s)", launchers.len()),
+            ));
+        }
+        if check_failed(&checks, "daemon_state") {
+            let daemon = run_daemon(root, false, 1000, false, false)?;
+            fixes.push(automation_step(
+                "daemon",
+                "pass",
+                format!("daemon state is {}", daemon.state.status),
+            ));
+        }
+        if strict && check_failed(&checks, "shim_files") {
+            let shim = install_shim(root, true, true)?;
+            fixes.push(automation_step(
+                "strict_shim",
+                "pass",
+                format!("installed {} strict shim file(s)", shim.files.len()),
+            ));
+        }
+        checks = doctor_checks(root, client, strict)?;
+    }
+
+    let status = status_from_checks(&checks);
+    let message = if status == "pass" {
+        "all local CallSieve adoption checks passed".to_string()
+    } else if fix {
+        "some CallSieve adoption checks still failed after repair".to_string()
+    } else {
+        "run doctor again with --fix to repair failed local checks".to_string()
+    };
+
+    Ok(DoctorOutput {
+        command: "doctor",
+        status,
+        root: root_label(root),
+        client: agent_client_name(client).to_string(),
+        message,
+        checks,
+        fixes,
+    })
+}
+
+fn begin_task(
+    root: &Path,
+    task: &str,
+    client: AgentClient,
+    trace_out: Option<&Path>,
+    limit: usize,
+    snippets_per_file: usize,
+) -> Result<BeginOutput> {
+    let (index, index_load_ms) = load_index_timed(root)?;
+    let mut context = query::build_context(root, &index, task, limit, snippets_per_file, true)?;
+    context.add_index_load_time(index_load_ms);
+    let context_value = serde_json::to_value(&context)?;
+    let files_read = context_read_first_files(&context_value);
+    let tokens = serde_json::to_string(&context_value)
+        .map(|json| json.len().div_ceil(4))
+        .unwrap_or_default();
+    let command = first_required_context_command(root, task);
+
+    let (trace_path, trace_event) = if let Some(trace) = trace_out {
+        session_start(
+            root,
+            task,
+            client,
+            default_agent_model(client),
+            trace,
+            files_read.clone(),
+            files_read.clone(),
+        )?;
+        let event = session_event(
+            trace,
+            &command,
+            files_read,
+            Some(tokens),
+            Some(SessionPhase::Callsieve),
+        )?
+        .event;
+        (Some(trace.display().to_string()), event)
+    } else {
+        (
+            None,
+            serde_json::json!({
+                "timestamp": now_unix_seconds(),
+                "command": command,
+                "files_read": files_read,
+                "tokens": tokens,
+                "classification": "callsieve_context",
+                "phase": "callsieve"
+            }),
+        )
+    };
+
+    let next_step = if let Some(trace_path) = trace_path.as_deref() {
+        format!(
+            "Read read_first files before broad grep; audit with `callsieve trace-check {trace_path} --strict`."
+        )
+    } else {
+        "Read read_first files before broad grep; pass --trace-out to record an audited trace."
+            .to_string()
+    };
+
+    Ok(BeginOutput {
+        command: "begin",
+        root: root_label(root),
+        client: agent_client_name(client).to_string(),
+        task: task.to_string(),
+        policy: "context_first; read returned files before broad grep or repeated file reads",
+        next_step,
+        context,
+        trace_event,
+        trace_path,
+    })
+}
+
+fn doctor_checks(root: &Path, client: AgentClient, strict: bool) -> Result<Vec<EnforceCheck>> {
+    let mut checks = Vec::new();
+    let index = store::json_store::load_index(root).ok();
+    let status = query::index_status(root, index.as_ref());
+    let status_value = serde_json::to_value(&status)?;
+    let fresh = status_value
+        .get("fresh")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    checks.push(enforce_check(
+        "fresh_index",
+        fresh,
+        if fresh {
+            "index is fresh"
+        } else {
+            "index is missing or stale"
+        },
+    ));
+
+    for (path, _) in agent_files(client, root) {
+        let relative = repo_relative_display(root, &path);
+        checks.push(enforce_check(
+            format!("agent_file:{relative}"),
+            path.is_file(),
+            if path.is_file() {
+                "required agent policy/config exists".to_string()
+            } else {
+                "required agent policy/config is missing".to_string()
+            },
+        ));
+    }
+
+    if matches!(client, AgentClient::Codex) && strict {
+        for path in codex_launcher_paths(root) {
+            let relative = repo_relative_display(root, &path);
+            checks.push(enforce_check(
+                format!("codex_bootstrap:{relative}"),
+                path.is_file(),
+                if path.is_file() {
+                    "Codex bootstrap launcher exists".to_string()
+                } else {
+                    "Codex bootstrap launcher is missing".to_string()
+                },
+            ));
+        }
+    }
+
+    let daemon = load_daemon_state(root).unwrap_or_else(|| missing_daemon_state(root));
+    let daemon_ok = daemon_state_is_usable(&daemon);
+    checks.push(enforce_check(
+        "daemon_state",
+        daemon_ok,
+        if daemon_ok {
+            format!("daemon state is {}", daemon.status)
+        } else {
+            "daemon state is missing, stopped, or errored".to_string()
+        },
+    ));
+
+    let shim_files = shim_files_installed(root);
+    checks.push(check_with_status(
+        "shim_files",
+        if shim_files {
+            "pass"
+        } else if strict {
+            "fail"
+        } else {
+            "warn"
+        },
+        if shim_files {
+            "grep shim files are installed"
+        } else if strict {
+            "strict mode requires project-local rg/grep shims"
+        } else {
+            "grep shim files are optional unless --strict is used"
+        },
+    ));
+
+    let bin_dir = shim_bin_dir(root);
+    let shim_on_path = shim_dir_on_path(&bin_dir);
+    checks.push(check_with_status(
+        "path_contains_shim_dir",
+        if shim_on_path { "pass" } else { "warn" },
+        if shim_on_path {
+            "shim bin directory is on PATH"
+        } else {
+            "prepend shim bin directory to PATH before running agents"
+        },
+    ));
+
+    Ok(checks)
+}
+
+fn setup_missing_agent_files(client: AgentClient, root: &Path) -> Result<SetupAgentOutput> {
+    let first_required_command = format!("callsieve agent-context {} \"<task>\"", root.display());
+    let mut written = Vec::new();
+    for (path, content) in agent_files(client, root) {
+        if !path.exists() {
+            write_project_file(root, &path, &content, false, &mut written)?;
+        }
+    }
+
+    Ok(SetupAgentOutput {
+        command: "setup-agent",
+        client: agent_client_name(client).to_string(),
+        root: root_label(root),
+        files: written,
+        first_required_command,
+        policy: "Call callsieve_context before broad grep, rg, repository search, or repeated file reads.",
+    })
+}
+
+fn default_agent_model(client: AgentClient) -> &'static str {
+    match client {
+        AgentClient::Codex => "gpt-5-codex",
+        AgentClient::Claude => "claude",
+        AgentClient::Cursor => "cursor",
+        AgentClient::Cline => "cline",
+        AgentClient::Roo => "roo",
+        AgentClient::Generic => "generic-agent",
+    }
+}
+
+fn automation_step(
+    step: impl Into<String>,
+    status: impl Into<String>,
+    message: impl Into<String>,
+) -> AutomationStep {
+    AutomationStep {
+        step: step.into(),
+        status: status.into(),
+        message: message.into(),
+    }
+}
+
+fn check_failed(checks: &[EnforceCheck], name: &str) -> bool {
+    checks
+        .iter()
+        .any(|check| check.check == name && check.status == "fail")
+}
+
+fn status_from_checks(checks: &[EnforceCheck]) -> String {
+    if checks.iter().all(|check| check.status != "fail") {
+        "pass"
+    } else {
+        "fail"
+    }
+    .to_string()
+}
+
+fn check_with_status(
+    check: impl Into<String>,
+    status: impl Into<String>,
+    message: impl Into<String>,
+) -> EnforceCheck {
+    EnforceCheck {
+        check: check.into(),
+        status: status.into(),
+        message: message.into(),
+    }
+}
+
+fn daemon_state_is_usable(state: &DaemonState) -> bool {
+    !matches!(
+        state.status.as_str(),
+        "missing" | "stopped" | "stop_requested" | "error"
+    ) && state.last_error.is_none()
 }
 
 fn session_start(
@@ -3809,12 +4704,14 @@ fn is_callsieve_context_command_local(command: &str) -> bool {
         || lower.contains("callsieve agent-context")
         || lower.contains("callsieve codex-session")
         || lower.contains("callsieve session-start")
+        || lower.contains("callsieve begin")
         || lower.contains("callsieve_context")
         || lower.contains("callsieve guard")
         || lower.contains("callsieve grep")
 }
 
 fn setup_agent(client: AgentClient, root: &Path, force: bool) -> Result<SetupAgentOutput> {
+    let first_required_command = format!("callsieve agent-context {} \"<task>\"", root.display());
     let files = agent_files(client, root);
     let mut written = Vec::new();
 
@@ -3838,33 +4735,20 @@ fn setup_agent(client: AgentClient, root: &Path, force: bool) -> Result<SetupAge
         client: agent_client_name(client).to_string(),
         root: root_label(root),
         files: written,
+        first_required_command,
         policy: "Call callsieve_context before broad grep, rg, repository search, or repeated file reads.",
     })
 }
 
 fn codex_bootstrap(root: &Path, model: &str, force: bool) -> Result<CodexBootstrapOutput> {
     let setup = setup_agent(AgentClient::Codex, root, force)?;
-    let shim = install_shim(root, force)?;
+    let shim = install_shim(root, force, false)?;
     let mut files = setup.files;
     files.extend(shim.files);
 
     let first_required_command = format!("callsieve agent-context {} \"<task>\"", root.display());
-    let ps1_path = root.join(".callsieve/codex-launch.ps1");
-    let sh_path = root.join(".callsieve/codex-launch.sh");
-    write_project_file(
-        root,
-        &ps1_path,
-        &codex_launcher_ps1(&first_required_command),
-        force,
-        &mut files,
-    )?;
-    write_project_file(
-        root,
-        &sh_path,
-        &codex_launcher_sh(&first_required_command),
-        force,
-        &mut files,
-    )?;
+    let launchers = write_codex_launchers(root, &first_required_command, force)?;
+    files.extend(launchers.clone());
 
     Ok(CodexBootstrapOutput {
         command: "codex-bootstrap",
@@ -3872,12 +4756,36 @@ fn codex_bootstrap(root: &Path, model: &str, force: bool) -> Result<CodexBootstr
         model: model.to_string(),
         files,
         first_required_command,
-        launcher: vec![
-            repo_relative_display(root, &ps1_path),
-            repo_relative_display(root, &sh_path),
-        ],
+        launcher: launchers,
         policy: "project-local bootstrap only; no global PATH, shell profile, or user config mutation",
     })
+}
+
+fn write_codex_launchers(
+    root: &Path,
+    first_required_command: &str,
+    force: bool,
+) -> Result<Vec<String>> {
+    let mut files = Vec::new();
+    for path in codex_launcher_paths(root) {
+        if path.exists() && !force {
+            continue;
+        }
+        let content = if path.extension().and_then(|extension| extension.to_str()) == Some("ps1") {
+            codex_launcher_ps1(first_required_command)
+        } else {
+            codex_launcher_sh(first_required_command)
+        };
+        write_project_file(root, &path, &content, force, &mut files)?;
+    }
+    Ok(files)
+}
+
+fn codex_launcher_paths(root: &Path) -> [PathBuf; 2] {
+    [
+        root.join(".callsieve/codex-launch.ps1"),
+        root.join(".callsieve/codex-launch.sh"),
+    ]
 }
 
 fn editor_hook(root: &Path, editor: EditorKind, force: bool) -> Result<EditorHookOutput> {
@@ -4056,10 +4964,7 @@ fn enforce_setup(
     }
 
     if matches!(client, AgentClient::Codex) && (strict || require_shim) {
-        for path in [
-            root.join(".callsieve/codex-launch.ps1"),
-            root.join(".callsieve/codex-launch.sh"),
-        ] {
+        for path in codex_launcher_paths(root) {
             let relative = repo_relative_display(root, &path);
             checks.push(enforce_check(
                 format!("codex_bootstrap:{relative}"),
@@ -4074,10 +4979,10 @@ fn enforce_setup(
     }
 
     let shim = shim_doctor(root);
-    let shim_pass = shim.status == "pass";
+    let shim_files = shim_files_installed(root);
     checks.push(EnforceCheck {
         check: "shim_doctor".to_string(),
-        status: if shim_pass {
+        status: if shim.status == "pass" || (require_shim && shim_files) {
             "pass"
         } else if require_shim {
             "fail"
@@ -4085,15 +4990,28 @@ fn enforce_setup(
             "warn"
         }
         .to_string(),
-        message: if shim_pass {
+        message: if shim.status == "pass" {
             "grep shim is installed and on PATH"
+        } else if require_shim && shim_files {
+            "grep shim files are installed; prepend shim bin directory to PATH before running agents"
         } else if require_shim {
-            "grep shim is required but not fully installed or not on PATH"
+            "grep shim is required but wrapper files are missing"
         } else {
             "grep shim is optional; use --require-shim to fail on this"
         }
         .to_string(),
     });
+    let bin_dir = shim_bin_dir(root);
+    let shim_on_path = shim_dir_on_path(&bin_dir);
+    checks.push(check_with_status(
+        "path_contains_shim_dir",
+        if shim_on_path { "pass" } else { "warn" },
+        if shim_on_path {
+            "shim bin directory is on PATH"
+        } else {
+            "prepend shim bin directory to PATH before running agents"
+        },
+    ));
 
     if let Some(trace) = trace {
         let trace_json = fs::read_to_string(trace)
@@ -4165,7 +5083,8 @@ fn enforce_check(
 }
 
 fn agent_files(client: AgentClient, root: &Path) -> Vec<(PathBuf, String)> {
-    let policy = "CallSieve policy: call callsieve_context with the repository path and task before broad grep, rg, repository-wide search, or repeated file reads. Read read_first files first; grep only if the context packet is insufficient.\n";
+    let first_required_command = format!("callsieve agent-context {} \"<task>\"", root.display());
+    let policy = agent_policy_text(client, &first_required_command);
     let callsieve_command = callsieve_executable_display();
     match client {
         AgentClient::Codex => vec![
@@ -4176,7 +5095,7 @@ fn agent_files(client: AgentClient, root: &Path) -> Vec<(PathBuf, String)> {
                     toml_basic_string(&callsieve_command)
                 ),
             ),
-            (root.join(".codex/CALLSIEVE.md"), policy.to_string()),
+            (root.join(".codex/CALLSIEVE.md"), policy.clone()),
         ],
         AgentClient::Claude => vec![
             (
@@ -4193,7 +5112,7 @@ fn agent_files(client: AgentClient, root: &Path) -> Vec<(PathBuf, String)> {
                 }))
                 .unwrap_or_else(|_| "{}".to_string()),
             ),
-            (root.join("CLAUDE.md"), policy.to_string()),
+            (root.join("CLAUDE.md"), policy.clone()),
         ],
         AgentClient::Cursor => vec![
             (
@@ -4209,7 +5128,7 @@ fn agent_files(client: AgentClient, root: &Path) -> Vec<(PathBuf, String)> {
                 }))
                 .unwrap_or_else(|_| "{}".to_string()),
             ),
-            (root.join(".cursor/rules/callsieve.mdc"), policy.to_string()),
+            (root.join(".cursor/rules/callsieve.mdc"), policy.clone()),
         ],
         AgentClient::Cline => vec![
             (
@@ -4227,7 +5146,7 @@ fn agent_files(client: AgentClient, root: &Path) -> Vec<(PathBuf, String)> {
                 }))
                 .unwrap_or_else(|_| "{}".to_string()),
             ),
-            (root.join(".clinerules/callsieve.md"), policy.to_string()),
+            (root.join(".clinerules/callsieve.md"), policy.clone()),
         ],
         AgentClient::Roo => vec![
             (
@@ -4244,15 +5163,42 @@ fn agent_files(client: AgentClient, root: &Path) -> Vec<(PathBuf, String)> {
                 }))
                 .unwrap_or_else(|_| "{}".to_string()),
             ),
-            (root.join(".roo/rules/callsieve.md"), policy.to_string()),
+            (root.join(".roo/rules/callsieve.md"), policy.clone()),
         ],
         AgentClient::Generic => vec![(
             root.join(".callsieve/agent-policy.md"),
             format!(
-                "{policy}\nUse `callsieve mcp` for MCP clients, or `callsieve agent-context <repo> \"<task>\"` before broad search.\n"
+                "{policy}\nUse `callsieve mcp` for MCP clients, or the first command above before broad search.\n"
             ),
         )],
     }
+}
+
+fn agent_policy_text(client: AgentClient, first_required_command: &str) -> String {
+    let client_name = agent_client_name(client);
+    let mcp_hint = match client {
+        AgentClient::Codex => {
+            "Use the configured Codex MCP server and prefer `callsieve_context` when tools are available."
+        }
+        AgentClient::Claude => {
+            "Use the project MCP server from `.mcp.json` and prefer `callsieve_context` when tools are available."
+        }
+        AgentClient::Cursor => {
+            "Use the Cursor MCP config and this rule file before repository search."
+        }
+        AgentClient::Cline => "Use the Cline MCP server and this rule before search tools.",
+        AgentClient::Roo => "Use the Roo MCP server and this rule before search tools.",
+        AgentClient::Generic => "Use `callsieve mcp` for MCP clients when available.",
+    };
+
+    format!(
+        "CallSieve policy for {client_name}:\n\
+1. First command for every coding task: `{first_required_command}`.\n\
+2. {mcp_hint}\n\
+3. Read the returned `read_first` files before broad grep, rg, repository-wide search, or repeated file reads.\n\
+4. grep only if the context packet is insufficient, and preserve why it was insufficient in the task notes or trace.\n\
+5. For audited sessions, run `callsieve enforce <repo> --client {client_name} --trace <trace.json> --strict`.\n"
+    )
 }
 
 fn callsieve_executable_display() -> String {
@@ -4540,7 +5486,111 @@ fn write_guard_trace(path: &Path, task: &str, context: &query::ContextOutput) ->
     Ok(path.display().to_string())
 }
 
-fn install_shim(root: &Path, force: bool) -> Result<ShimOutput> {
+fn record_shim_grep_event(
+    root: &Path,
+    shim_command: Option<&str>,
+    pattern: &str,
+) -> Result<serde_json::Value> {
+    let path = shim_trace_path(root);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+
+    let mut value = if path.is_file() {
+        fs::read_to_string(&path)
+            .ok()
+            .and_then(|json| serde_json::from_str(&json).ok())
+            .unwrap_or_else(|| shim_trace_template(root))
+    } else {
+        shim_trace_template(root)
+    };
+    let existing_commands = value
+        .get("events")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|event| event.get("command").and_then(serde_json::Value::as_str))
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    let context_seen = existing_commands
+        .iter()
+        .any(|command| is_callsieve_context_command_local(command));
+    let policy_violation = !context_seen;
+    let grep_command = shim_command
+        .filter(|command| !command.trim().is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("rg {pattern}"));
+    let context_command = format!("callsieve grep {} {:?}", root.display(), pattern);
+    let events = value
+        .as_object_mut()
+        .context("shim trace root must be a JSON object")?
+        .entry("events")
+        .or_insert_with(|| serde_json::json!([]))
+        .as_array_mut()
+        .context("shim trace events must be an array")?;
+    events.push(serde_json::json!({
+        "timestamp": now_unix_seconds(),
+        "command": grep_command,
+        "files_read": [],
+        "tokens": 0,
+        "classification": "grep",
+        "phase": "callsieve",
+        "policy_violation": policy_violation,
+        "event_kind": if policy_violation { "grep_before_context" } else { "grep_after_context" }
+    }));
+    events.push(serde_json::json!({
+        "timestamp": now_unix_seconds(),
+        "command": context_command,
+        "files_read": [],
+        "tokens": 0,
+        "classification": "callsieve_context",
+        "phase": "callsieve"
+    }));
+    normalize_session_trace(&mut value)?;
+    fs::write(&path, serde_json::to_vec_pretty(&value)?)
+        .with_context(|| format!("failed to write {}", path.display()))?;
+
+    Ok(serde_json::json!({
+        "trace": path.display().to_string(),
+        "policy_violation": policy_violation,
+        "event_kind": if policy_violation { "grep_before_context" } else { "grep_after_context" },
+        "message": if policy_violation {
+            "grep shim ran before any context event in this shim trace; context was printed before running real grep"
+        } else {
+            "grep shim ran after a context event in this shim trace"
+        }
+    }))
+}
+
+fn shim_trace_template(root: &Path) -> serde_json::Value {
+    serde_json::json!({
+        "metadata": {
+            "collection": "shim_trace",
+            "repo": root_label(root),
+            "strict": true,
+            "started_at": now_unix_seconds(),
+            "updated_at": now_unix_seconds()
+        },
+        "task": "project-local grep shim usage",
+        "expected_files": [],
+        "critical_files": [],
+        "baseline": empty_session_metrics(),
+        "callsieve": empty_session_metrics(),
+        "session": {
+            "baseline": empty_session_metrics(),
+            "callsieve": empty_session_metrics()
+        },
+        "events": [],
+        "misses": [],
+        "policy": {
+            "context_first": true,
+            "strict_trace_check": true
+        }
+    })
+}
+
+fn install_shim(root: &Path, force: bool, strict: bool) -> Result<ShimOutput> {
     let bin_dir = shim_bin_dir(root);
     fs::create_dir_all(&bin_dir)
         .with_context(|| format!("failed to create {}", bin_dir.display()))?;
@@ -4569,8 +5619,11 @@ fn install_shim(root: &Path, force: bool) -> Result<ShimOutput> {
                     path.display()
                 );
             }
-            write_executable_file(&path, &shim_script(root, real_command.as_deref(), &path))
-                .with_context(|| format!("failed to write {}", path.display()))?;
+            write_executable_file(
+                &path,
+                &shim_script(root, name, real_command.as_deref(), &path, strict),
+            )
+            .with_context(|| format!("failed to write {}", path.display()))?;
             files.push(path.display().to_string());
         }
     }
@@ -4580,6 +5633,8 @@ fn install_shim(root: &Path, force: bool) -> Result<ShimOutput> {
         status: "pass".to_string(),
         root: root_label(root),
         bin_dir: bin_dir.display().to_string(),
+        strict,
+        trace: strict.then(|| shim_trace_path(root).display().to_string()),
         files,
         path_instruction: shim_path_instruction(&bin_dir),
     })
@@ -4612,9 +5667,7 @@ fn shim_doctor(root: &Path) -> ShimDoctorOutput {
         ));
     }
 
-    let on_path = env::var_os("PATH")
-        .map(|paths| env::split_paths(&paths).any(|path| same_path(&path, &bin_dir)))
-        .unwrap_or(false);
+    let on_path = shim_dir_on_path(&bin_dir);
     checks.push(enforce_check(
         "path_contains_shim_dir",
         on_path,
@@ -4659,6 +5712,8 @@ fn uninstall_shim(root: &Path) -> Result<ShimOutput> {
         status: "pass".to_string(),
         root: root_label(root),
         bin_dir: bin_dir.display().to_string(),
+        strict: false,
+        trace: None,
         files: removed,
         path_instruction: shim_path_instruction(&bin_dir),
     })
@@ -4666,6 +5721,25 @@ fn uninstall_shim(root: &Path) -> Result<ShimOutput> {
 
 fn shim_bin_dir(root: &Path) -> PathBuf {
     callsieve_dir(root).join("bin")
+}
+
+fn shim_trace_path(root: &Path) -> PathBuf {
+    callsieve_dir(root).join("shim-trace.json")
+}
+
+fn shim_files_installed(root: &Path) -> bool {
+    let bin_dir = shim_bin_dir(root);
+    ["callsieve", "rg", "grep"].iter().all(|file| {
+        shim_script_paths(&bin_dir, file)
+            .iter()
+            .any(|path| path.is_file())
+    })
+}
+
+fn shim_dir_on_path(bin_dir: &Path) -> bool {
+    env::var_os("PATH")
+        .map(|paths| env::split_paths(&paths).any(|path| same_path(&path, bin_dir)))
+        .unwrap_or(false)
 }
 
 fn shim_script_paths(bin_dir: &Path, name: &str) -> Vec<PathBuf> {
@@ -4676,18 +5750,38 @@ fn shim_script_paths(bin_dir: &Path, name: &str) -> Vec<PathBuf> {
     }
 }
 
-fn shim_script(root: &Path, real_command: Option<&str>, path: &Path) -> String {
+fn shim_script(
+    root: &Path,
+    name: &str,
+    real_command: Option<&str>,
+    path: &Path,
+    strict: bool,
+) -> String {
     let root = root.display().to_string();
     if path.extension().and_then(|extension| extension.to_str()) == Some("cmd") {
         let real = real_command.unwrap_or("");
+        let strict_args = if strict {
+            format!(" --shim-strict --shim-command \"{name} %*\"")
+        } else {
+            String::new()
+        };
         return format!(
-            "@echo off\r\nsetlocal\r\nset CALLSIEVE_SHIM_ACTIVE=1\r\ncallsieve grep \"{root}\" \"%~1\"\r\nif not \"{real}\"==\"\" \"{real}\" %*\r\n"
+            "@echo off\r\nsetlocal\r\nset CALLSIEVE_SHIM_ACTIVE=1\r\ncallsieve grep \"{root}\" \"%~1\"{strict_args}\r\nif not \"{real}\"==\"\" \"{real}\" %*\r\n"
         );
     }
 
     let real = real_command.unwrap_or("");
+    let strict_args = if strict {
+        format!(" --shim-strict --shim-command \"{name} $*\"")
+    } else {
+        String::new()
+    };
     format!(
-        "#!/usr/bin/env sh\nexport CALLSIEVE_SHIM_ACTIVE=1\ncallsieve grep '{root}' \"$1\"\nif [ -n '{real}' ]; then exec '{real}' \"$@\"; fi\n"
+        "#!/usr/bin/env sh\nexport CALLSIEVE_SHIM_ACTIVE=1\ncallsieve grep '{}' \"$1\"{}\nif [ -n '{}' ]; then exec '{}' \"$@\"; fi\n",
+        sh_single_quote(&root),
+        strict_args,
+        sh_single_quote(real),
+        sh_single_quote(real)
     )
 }
 
@@ -4879,11 +5973,51 @@ mod tests {
         Cli::try_parse_from(["callsieve", "symbols", "."]).unwrap();
         Cli::try_parse_from(["callsieve", "symbol", ".", "UserService"]).unwrap();
         Cli::try_parse_from(["callsieve", "query", ".", "where is auth handled?"]).unwrap();
+        Cli::try_parse_from([
+            "callsieve",
+            "query",
+            ".",
+            "where is auth handled?",
+            "--why-debug",
+        ])
+        .unwrap();
         Cli::try_parse_from(["callsieve", "context", ".", "change token expiry"]).unwrap();
+        Cli::try_parse_from([
+            "callsieve",
+            "context",
+            ".",
+            "change token expiry",
+            "--why-debug",
+        ])
+        .unwrap();
         Cli::try_parse_from(["callsieve", "agent-context", ".", "change token expiry"]).unwrap();
+        Cli::try_parse_from([
+            "callsieve",
+            "agent-context",
+            ".",
+            "change token expiry",
+            "--why-debug",
+        ])
+        .unwrap();
         Cli::try_parse_from(["callsieve", "benchmark", ".", "change token expiry"]).unwrap();
         Cli::try_parse_from(["callsieve", "benchmark-suite", ".", "benchmarks/tasks.json"])
             .unwrap();
+        Cli::try_parse_from([
+            "callsieve",
+            "eval-retrieval",
+            "benchmarks/retrieval-fixtures.json",
+        ])
+        .unwrap();
+        Cli::try_parse_from([
+            "callsieve",
+            "perf-report",
+            ".",
+            "--tasks",
+            "benchmarks/retrieval-fixtures.json",
+            "--iterations",
+            "3",
+        ])
+        .unwrap();
         Cli::try_parse_from([
             "callsieve",
             "trace-summary",
@@ -5041,6 +6175,28 @@ mod tests {
         Cli::try_parse_from(["callsieve", "watch", "."]).unwrap();
         Cli::try_parse_from(["callsieve", "watch", ".", "--lsp"]).unwrap();
         Cli::try_parse_from(["callsieve", "agent-setup", ".", "--client", "codex"]).unwrap();
+        Cli::try_parse_from([
+            "callsieve",
+            "bootstrap",
+            ".",
+            "--client",
+            "generic",
+            "--strict",
+            "--force",
+            "--lsp",
+        ])
+        .unwrap();
+        Cli::try_parse_from(["callsieve", "doctor", ".", "--client", "generic"]).unwrap();
+        Cli::try_parse_from([
+            "callsieve",
+            "doctor",
+            ".",
+            "--client",
+            "generic",
+            "--fix",
+            "--strict",
+        ])
+        .unwrap();
         Cli::try_parse_from(["callsieve", "setup-agent", "codex", "."]).unwrap();
         Cli::try_parse_from(["callsieve", "setup-agent", "roo", "."]).unwrap();
         Cli::try_parse_from([
@@ -5063,6 +6219,17 @@ mod tests {
         Cli::try_parse_from(["callsieve", "guard", ".", "change token expiry"]).unwrap();
         Cli::try_parse_from([
             "callsieve",
+            "begin",
+            ".",
+            "change token expiry",
+            "--client",
+            "codex",
+            "--trace-out",
+            "benchmarks/begin-trace.json",
+        ])
+        .unwrap();
+        Cli::try_parse_from([
+            "callsieve",
             "codex-session",
             ".",
             "change token expiry",
@@ -5083,6 +6250,7 @@ mod tests {
         ])
         .unwrap();
         Cli::try_parse_from(["callsieve", "shim", "install", "."]).unwrap();
+        Cli::try_parse_from(["callsieve", "shim", "install", ".", "--strict"]).unwrap();
         Cli::try_parse_from(["callsieve", "shim", "doctor", "."]).unwrap();
         Cli::try_parse_from(["callsieve", "shim", "uninstall", "."]).unwrap();
         Cli::try_parse_from(["callsieve", "grep", ".", "createSession"]).unwrap();

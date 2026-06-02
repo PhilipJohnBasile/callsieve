@@ -73,9 +73,11 @@ Each repo entry should declare `proof_tier`, `scale_class`, `scale_criteria`, `l
 For each scale proxy:
 
 1. Run `callsieve index <repo> --lsp` when local language servers are available.
-2. Measure index time, index size, freshness, query latency, context packet size, recall, and failure rate.
-3. Record `audit.scale_validation.agent_context_p95_latency_ms`.
-4. Keep index failures, stale-index failures, and crashes at `0`.
+2. Run `callsieve eval-retrieval <manifest.json>` for recall and critical-file miss checks.
+3. Run `callsieve perf-report <repo> --tasks <manifest.json>` for local p50/p95 context latency.
+4. Measure index time, index size, freshness, query latency, context packet size, recall, and failure rate.
+5. Record `audit.scale_validation.agent_context_p95_latency_ms`.
+6. Keep index failures, stale-index failures, and crashes at `0`.
 
 The default p95 `agent-context` latency gate is `5000ms` on developer hardware.
 

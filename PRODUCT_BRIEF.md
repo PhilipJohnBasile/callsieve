@@ -82,11 +82,11 @@ The current app includes:
 - language detection for TypeScript, JavaScript, Python, Rust, docs, and common config files
 - symbol, import, reference, call, and related-test extraction
 - optional local LSP enrichment when language servers are already installed
-- deterministic query and `agent-context` ranking
+- deterministic query and `agent-context` ranking with optional scoring debug output
 - MCP tools for context, symbols, stats, status, trace checks, and benchmark estimates
 - watcher and daemon paths for index freshness
-- agent setup, Codex bootstrap, editor hooks, and opt-in grep shims
-- benchmark, observed trace, pilot, evidence-pack, proof-report, and enterprise-proof-report workflows
+- first-class adoption automation with `bootstrap`, `doctor`, `begin`, agent setup, Codex bootstrap, editor hooks, and opt-in grep shims
+- benchmark, retrieval-eval, perf-report, observed trace, pilot, evidence-pack, proof-report, and enterprise-proof-report workflows
 
 ## Current CLI Entry Points
 
@@ -96,6 +96,11 @@ callsieve agent-context <path> "<task>"
 callsieve symbol <path> <symbol_name>
 callsieve status <path>
 callsieve mcp
+callsieve bootstrap <path> --client <client> [--strict] [--force] [--lsp]
+callsieve doctor <path> --client <client> [--fix] [--strict]
+callsieve begin <path> "<task>" --client <client> [--trace-out <trace.json>]
+callsieve eval-retrieval <manifest.json>
+callsieve perf-report <path>
 callsieve benchmark-report <manifest.json>
 callsieve proof-report <manifest.json>
 callsieve enterprise-proof-report <manifest.json>
@@ -118,6 +123,7 @@ The next product work should harden the same local-first path:
 - richer call graph and ownership hints
 - broader language coverage
 - better task-category and repo-scale reporting
+- tighter retrieval fixtures and p95 latency gates before broad claims
 - editor and agent integrations that make `agent-context` the default first step
 - optional semantic reranking only after deterministic retrieval proves the core loop
 
