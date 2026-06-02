@@ -1,0 +1,86 @@
+{
+  "protocol": "enterprise-proof",
+  "thresholds": {
+    "minimum_recall": 1.0,
+    "minimum_token_reduction_percent": 0.0,
+    "minimum_repos": 50,
+    "minimum_observed_sessions": 1000,
+    "minimum_external_repos": 10,
+    "minimum_scale_proxy_repos": 10,
+    "minimum_clients": 3,
+    "required_clients": ["codex", "claude", "cursor"],
+    "minimum_languages": 5,
+    "minimum_task_categories": 10,
+    "minimum_observed_token_reduction_percent": 50.0,
+    "minimum_positive_savings_session_percent": 90.0,
+    "minimum_sessions_over_30_percent_savings_percent": 75.0,
+    "maximum_controlled_replay_ratio": 0.0,
+    "maximum_trace_violations": 0,
+    "maximum_critical_misses": 0,
+    "minimum_planned_tasks": 1200,
+    "require_fresh_index": true,
+    "require_lsp_where_available": true,
+    "require_codex_bootstrap": false,
+    "require_transcript_token_accounting": true,
+    "minimum_pilot_teams": 5,
+    "minimum_paid_or_converted_teams": 3,
+    "minimum_teams_with_20_sessions": 4,
+    "minimum_meaningfully_worse_without_teams": 3,
+    "minimum_case_study_teams": 2,
+    "minimum_renewal_or_loi_teams": 1,
+    "maximum_agent_context_p95_latency_ms": 5000.0,
+    "maximum_scale_index_failures": 0,
+    "maximum_stale_index_failures": 0,
+    "maximum_scale_crashes": 0
+  },
+  "audit": {
+    "planned_tasks": 1200,
+    "rejected_sessions": 0,
+    "token_accounting_sources": ["transcript_context_tokens"],
+    "product_market": {
+      "teams_completed_pilots": 0,
+      "paid_pilot_or_converted_teams": 0,
+      "teams_with_20_plus_sessions": 0,
+      "meaningfully_worse_without_teams": 0,
+      "quote_approved_case_study_teams": 0,
+      "renewal_expansion_or_loi_teams": 0
+    },
+    "scale_validation": {
+      "agent_context_p95_latency_ms": 0.0,
+      "index_failures": 0,
+      "stale_index_failures": 0,
+      "crashes": 0
+    }
+  },
+  "repos": [
+    {
+      "label": "oss-vscode-scale-proxy",
+      "path": "C:/repos/vscode",
+      "external": true,
+      "proof_tier": "oss_scale_proxy",
+      "scale_class": "microsoft_scale_oss_proxy",
+      "scale_criteria": ["100k_files", "multi_language_monorepo"],
+      "languages": ["typescript", "javascript", "json", "markdown"],
+      "clients": ["codex", "claude", "cursor"],
+      "task_categories": ["bug_fix", "feature_change", "refactor"],
+      "suite_paths": ["benchmarks/evidence/enterprise/suites/vscode.json"],
+      "trace_paths": ["benchmarks/evidence/enterprise/traces/vscode-observed.json"],
+      "policy_trace_paths": ["benchmarks/evidence/enterprise/traces/vscode-observed.json"]
+    },
+    {
+      "label": "pilot-team-alpha",
+      "team": "Example Team Alpha",
+      "path": "C:/repos/private-alpha",
+      "external": false,
+      "proof_tier": "paid_pilot",
+      "scale_class": "private_enterprise",
+      "scale_criteria": ["multi_language_monorepo"],
+      "languages": ["typescript", "python", "rust"],
+      "clients": ["codex", "claude"],
+      "task_categories": ["bug_fix", "test_failure", "dependency_change"],
+      "suite_paths": ["benchmarks/evidence/enterprise/suites/pilot-team-alpha.json"],
+      "trace_paths": ["benchmarks/evidence/enterprise/traces/pilot-team-alpha-observed.json"],
+      "policy_trace_paths": ["benchmarks/evidence/enterprise/traces/pilot-team-alpha-observed.json"]
+    }
+  ]
+}

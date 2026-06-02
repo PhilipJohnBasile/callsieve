@@ -9,6 +9,8 @@
 - `callsieve_trace_check`
 - `callsieve_benchmark`
 
+The MCP server is the integration surface for agents. It does not replace the CLI: indexing, watching, daemon refresh, evidence collection, proof reports, and enterprise-proof reports still run through `callsieve` commands.
+
 Build or install CallSieve first, then index each repository before using the MCP tools:
 
 ```bash
@@ -23,7 +25,7 @@ For higher-confidence reference edges, index with local LSP enrichment before st
 callsieve index /path/to/repo --lsp
 ```
 
-The MCP server reads the existing `.callsieve/index.json`; it does not install language servers or rebuild indexes.
+The MCP server reads the existing `.callsieve/index.json`; it does not install language servers, rebuild indexes, mutate traces, or send code to a remote service.
 
 If you do not install the binary, replace `callsieve` in the examples with:
 
@@ -43,6 +45,7 @@ callsieve agent-setup /path/to/repo --client generic
 ```
 
 Pass `--force` to replace existing generated files.
+Generated MCP configs use the resolved CallSieve executable path so client startup does not depend on the agent shell PATH. Manual examples below use `callsieve` for readability; replace it with an absolute path when the client shell cannot resolve the binary.
 
 Audit generated setup with:
 
@@ -61,7 +64,7 @@ Project-scoped `.codex/config.toml`:
 
 ```toml
 [mcp_servers.callsieve]
-command = "callsieve"
+command = "/absolute/path/to/callsieve"
 args = ["mcp"]
 startup_timeout_sec = 20
 tool_timeout_sec = 60
@@ -82,7 +85,7 @@ callsieve codex-session /path/to/repo "change login token expiry behavior" --tra
 callsieve enforce /path/to/repo --client codex --trace /path/to/repo/.callsieve/codex-session.json --strict
 ```
 
-Use a different `--model` label for each Codex/ChatGPT model you test. CallSieve records and audits those sessions; it does not invoke hidden ChatGPT models itself.
+Use a different `--model` label for each Codex/ChatGPT model you test. `codex-session` is controlled replay evidence: useful for setup checks, but not counted as observed-session proof. For claim-counted sessions, use `session-start`, `session-event`, and `session-finish` with transcript token accounting.
 
 Reference: https://developers.openai.com/codex/mcp
 
@@ -191,6 +194,8 @@ The `callsieve_context` tool metadata marks it as the preferred first tool for c
 
 Use `callsieve_trace_check` on captured trace JSON to detect sessions that ran grep before CallSieve. Pass `"strict": true` to also fail common file reads before `callsieve_context`.
 
+For proof work, pair MCP usage with CLI trace collection. The agent should call `callsieve_context` first, then the operator should record the exact commands, files read, client, model, and token counts in observed-session traces.
+
 ## Grep Shims
 
 For opt-in PATH-level interception, install local wrappers:
@@ -200,7 +205,7 @@ callsieve shim install /path/to/repo --force
 callsieve shim doctor /path/to/repo
 ```
 
-Then prepend `/path/to/repo/.callsieve/bin` to the PATH used by the agent shell. The wrappers call `callsieve grep` before passing through to the real `rg` or `grep` command captured during install. Remove them with:
+Then prepend `/path/to/repo/.callsieve/bin` to the PATH used by the agent shell. The install writes a local `callsieve` launcher plus `rg` and `grep` wrappers. The search wrappers call `callsieve grep` before passing through to the real `rg` or `grep` command captured during install. Remove them with:
 
 ```bash
 callsieve shim uninstall /path/to/repo

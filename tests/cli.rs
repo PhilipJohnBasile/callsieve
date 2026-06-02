@@ -999,6 +999,97 @@ fn pilot_harness_records_pair_and_finalizes_proof() {
 }
 
 #[test]
+fn pilot_qa_allows_uncollected_buffer_tasks_after_target_is_met() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+    json(&run(&["index", root]));
+    let manifest_root = tempfile::tempdir().unwrap();
+    let manifest_path = manifest_root.path().join("pilot.json");
+
+    json(&run(&[
+        "pilot-init",
+        manifest_path.to_str().unwrap(),
+        "--sessions",
+        "1",
+    ]));
+    for id in ["auth", "buffer"] {
+        json(&run(&[
+            "pilot-task",
+            "add",
+            manifest_path.to_str().unwrap(),
+            root,
+            "change createSession token behavior",
+            "--id",
+            id,
+            "--expected-file",
+            "src/auth/session.ts",
+            "--critical-file",
+            "src/auth/session.ts",
+        ]));
+    }
+
+    json(&run(&[
+        "pilot-run",
+        manifest_path.to_str().unwrap(),
+        "--task-id",
+        "auth",
+        "--mode",
+        "baseline",
+        "--command",
+        "rg createSession",
+        "--files-read",
+        "src/auth/session.ts",
+        "--tokens",
+        "10000",
+    ]));
+    json(&run(&[
+        "pilot-run",
+        manifest_path.to_str().unwrap(),
+        "--task-id",
+        "auth",
+        "--mode",
+        "callsieve",
+        "--command",
+        "callsieve agent-context . \"change createSession token behavior\"",
+        "--files-read",
+        "src/auth/session.ts",
+        "--tokens",
+        "3000",
+    ]));
+
+    let qa = json(&run(&["pilot-qa", manifest_path.to_str().unwrap()]));
+    assert_eq!(qa["status"], "pass");
+    assert_eq!(qa["observed_sessions"], 1);
+    assert_eq!(qa["failures"], 0);
+    assert!(qa["results"].as_array().unwrap().iter().any(|check| {
+        check["task_id"] == "buffer"
+            && check["check"] == "combined_trace_exists"
+            && check["status"] == "pass"
+            && check["message"]
+                .as_str()
+                .unwrap()
+                .contains("uncollected planned buffer task")
+    }));
+
+    let proof_path = manifest_root.path().join("proof.json");
+    let finalized = json(&run(&[
+        "pilot-finalize",
+        manifest_path.to_str().unwrap(),
+        "--out",
+        proof_path.to_str().unwrap(),
+        "--limit",
+        "5",
+    ]));
+    assert_eq!(finalized["command"], "pilot-finalize");
+    let proof_manifest_path = manifest_root.path().join("proof.manifest.json");
+    assert_eq!(
+        finalized["proof_manifest"],
+        proof_manifest_path.to_string_lossy().into_owned()
+    );
+    assert!(manifest_root.path().join("proof.manifest.json").is_file());
+}
+
+#[test]
 fn pilot_init_defaults_to_strict_100_session_claim_protocol() {
     let manifest_root = tempfile::tempdir().unwrap();
     let manifest_path = manifest_root.path().join("pilot.json");
@@ -1009,6 +1100,10 @@ fn pilot_init_defaults_to_strict_100_session_claim_protocol() {
     let manifest: Value = serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
     assert_eq!(manifest["target_sessions"], 100);
     assert_eq!(manifest["protocol"]["minimum_planned_tasks"], 120);
+    assert_eq!(
+        manifest["protocol"]["collection"],
+        "real_paired_developer_sessions"
+    );
     assert_eq!(manifest["thresholds"]["minimum_observed_sessions"], 100);
     assert_eq!(manifest["thresholds"]["minimum_external_repos"], 6);
     assert_eq!(manifest["thresholds"]["minimum_planned_tasks"], 120);
@@ -1352,6 +1447,320 @@ fn proof_report_requires_transcript_token_provenance_when_strict() {
 }
 
 #[test]
+fn enterprise_proof_report_fails_below_1000_observed_sessions() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+    json(&run(&["index", root]));
+    let suite = repo.path().join("tasks.json");
+    write(
+        &suite,
+        r#"{"tasks":[{"id":"auth","task":"change createSession token behavior","expected_files":["src/auth/session.ts"],"task_category":"bug_fix"}]}"#,
+    );
+    let trace = repo.path().join("observed.json");
+    write(
+        &trace,
+        r#"{
+  "metadata": {"collection": "observed_session", "client": "codex", "model": "gpt-5-codex"},
+  "token_accounting": {"source": "transcript_context_tokens"},
+  "task": "change createSession token behavior",
+  "task_category": "bug_fix",
+  "expected_files": ["src/auth/session.ts"],
+  "baseline": {
+    "grep_commands": 4,
+    "file_reads": 5,
+    "tokens": 10000,
+    "commands": ["rg createSession"],
+    "files_read": ["src/auth/session.ts"]
+  },
+  "callsieve": {
+    "grep_commands": 0,
+    "file_reads": 2,
+    "tokens": 3000,
+    "commands": ["callsieve agent-context . \"change auth\""],
+    "files_read": ["src/auth/session.ts"]
+  }
+}"#,
+    );
+    let manifest_root = tempfile::tempdir().unwrap();
+    let manifest_path = manifest_root.path().join("enterprise.json");
+    let escaped_root = root.replace('\\', "\\\\");
+    let escaped_suite = suite.to_string_lossy().replace('\\', "\\\\");
+    let escaped_trace = trace.to_string_lossy().replace('\\', "\\\\");
+    write(
+        &manifest_path,
+        &format!(
+            r#"{{
+  "protocol": "enterprise-proof",
+  "thresholds": {{
+    "minimum_recall": 1.0,
+    "minimum_token_reduction_percent": -300.0,
+    "minimum_observed_sessions": 1000,
+    "minimum_observed_token_reduction_percent": 50.0,
+    "maximum_controlled_replay_ratio": 0.0,
+    "maximum_trace_violations": 0,
+    "maximum_critical_misses": 0,
+    "require_transcript_token_accounting": true
+  }},
+  "repos": [
+    {{
+      "label": "fixture",
+      "path": "{escaped_root}",
+      "suite_path": "{escaped_suite}",
+      "trace_path": "{escaped_trace}",
+      "clients": ["codex"],
+      "task_categories": ["bug_fix"]
+    }}
+  ]
+}}"#
+        ),
+    );
+
+    let proof = json(&run(&[
+        "enterprise-proof-report",
+        manifest_path.to_str().unwrap(),
+        "--limit",
+        "5",
+    ]));
+
+    assert_eq!(proof["command"], "enterprise-proof-report");
+    assert_eq!(proof["status"], "fail");
+    assert_eq!(proof["proof"]["observed_sessions"], 1);
+    assert!(
+        proof["failures"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|failure| failure["check"] == "minimum_observed_sessions")
+    );
+}
+
+#[test]
+fn enterprise_proof_report_requires_clients_and_session_savings_ratios() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+    json(&run(&["index", root]));
+    let suite = repo.path().join("tasks.json");
+    write(
+        &suite,
+        r#"{"tasks":[
+  {"id":"bug","task":"change createSession token behavior","expected_files":["src/auth/session.ts"],"task_category":"bug_fix"},
+  {"id":"docs","task":"update auth documentation","expected_files":["src/auth/session.ts"],"task_category":"docs"}
+]}"#,
+    );
+    let trace = repo.path().join("observed.json");
+    write(
+        &trace,
+        r#"{
+  "metadata": {"collection": "observed_session", "client": "codex", "model": "gpt-5-codex"},
+  "token_accounting": {"source": "transcript_context_tokens"},
+  "tasks": [
+    {
+      "id": "bug",
+      "task": "change createSession token behavior",
+      "task_category": "bug_fix",
+      "expected_files": ["src/auth/session.ts"],
+      "session": {
+        "baseline": {
+          "grep_commands": 4,
+          "file_reads": 5,
+          "tokens": 10000,
+          "commands": ["rg createSession"],
+          "files_read": ["src/auth/session.ts"]
+        },
+        "callsieve": {
+          "grep_commands": 0,
+          "file_reads": 2,
+          "tokens": 5000,
+          "commands": ["callsieve agent-context . \"change auth\""],
+          "files_read": ["src/auth/session.ts"]
+        }
+      }
+    },
+    {
+      "id": "docs",
+      "task": "update auth documentation",
+      "task_category": "docs",
+      "expected_files": ["src/auth/session.ts"],
+      "session": {
+        "baseline": {
+          "grep_commands": 2,
+          "file_reads": 3,
+          "tokens": 10000,
+          "commands": ["rg auth"],
+          "files_read": ["src/auth/session.ts"]
+        },
+        "callsieve": {
+          "grep_commands": 0,
+          "file_reads": 2,
+          "tokens": 12000,
+          "commands": ["callsieve agent-context . \"update auth docs\""],
+          "files_read": ["src/auth/session.ts"]
+        }
+      }
+    }
+  ]
+}"#,
+    );
+    let manifest_root = tempfile::tempdir().unwrap();
+    let manifest_path = manifest_root.path().join("enterprise.json");
+    let escaped_root = root.replace('\\', "\\\\");
+    let escaped_suite = suite.to_string_lossy().replace('\\', "\\\\");
+    let escaped_trace = trace.to_string_lossy().replace('\\', "\\\\");
+    write(
+        &manifest_path,
+        &format!(
+            r#"{{
+  "protocol": "enterprise-proof",
+  "thresholds": {{
+    "minimum_recall": 1.0,
+    "minimum_token_reduction_percent": -300.0,
+    "minimum_observed_sessions": 2,
+    "minimum_clients": 3,
+    "required_clients": ["codex", "claude", "cursor"],
+    "minimum_positive_savings_session_percent": 90.0,
+    "minimum_sessions_over_30_percent_savings_percent": 75.0,
+    "maximum_controlled_replay_ratio": 0.0,
+    "maximum_trace_violations": 0,
+    "maximum_critical_misses": 0,
+    "require_transcript_token_accounting": true
+  }},
+  "repos": [
+    {{
+      "label": "fixture",
+      "path": "{escaped_root}",
+      "suite_path": "{escaped_suite}",
+      "trace_path": "{escaped_trace}",
+      "clients": ["codex"],
+      "task_categories": ["bug_fix", "docs"]
+    }}
+  ]
+}}"#
+        ),
+    );
+
+    let proof = json(&run(&[
+        "enterprise-proof-report",
+        manifest_path.to_str().unwrap(),
+        "--limit",
+        "5",
+    ]));
+
+    assert_eq!(proof["status"], "fail");
+    assert_eq!(proof["proof"]["observed_sessions"], 2);
+    assert_eq!(proof["proof"]["positive_savings_sessions"], 1);
+    assert_eq!(proof["proof"]["sessions_over_30_percent_savings"], 1);
+    assert!(
+        proof["failures"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|failure| failure["check"] == "minimum_clients")
+    );
+    assert!(
+        proof["failures"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|failure| failure["check"] == "required_clients")
+    );
+    assert!(
+        proof["failures"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|failure| failure["check"] == "minimum_positive_savings_session_percent")
+    );
+    assert!(
+        proof["failures"].as_array().unwrap().iter().any(|failure| {
+            failure["check"] == "minimum_sessions_over_30_percent_savings_percent"
+        })
+    );
+}
+
+#[test]
+fn evidence_pack_preserves_pmf_metrics_and_redacts_team_identifiers() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+    json(&run(&["index", root]));
+    let suite = repo.path().join("tasks.json");
+    write(
+        &suite,
+        r#"{"tasks":[{"id":"auth","task":"change createSession token behavior","expected_files":["src/auth/session.ts"],"task_category":"bug_fix"}]}"#,
+    );
+    let manifest_root = tempfile::tempdir().unwrap();
+    let manifest_path = manifest_root.path().join("enterprise.json");
+    let escaped_root = root.replace('\\', "\\\\");
+    let escaped_suite = suite.to_string_lossy().replace('\\', "\\\\");
+    write(
+        &manifest_path,
+        &format!(
+            r#"{{
+  "protocol": "enterprise-proof",
+  "thresholds": {{
+    "minimum_recall": 1.0,
+    "minimum_token_reduction_percent": -300.0,
+    "minimum_pilot_teams": 5,
+    "minimum_paid_or_converted_teams": 3,
+    "minimum_teams_with_20_sessions": 4,
+    "minimum_meaningfully_worse_without_teams": 3,
+    "minimum_case_study_teams": 2,
+    "minimum_renewal_or_loi_teams": 1
+  }},
+  "audit": {{
+    "product_market": {{
+      "teams_completed_pilots": 5,
+      "paid_pilot_or_converted_teams": 3,
+      "teams_with_20_plus_sessions": 4,
+      "meaningfully_worse_without_teams": 3,
+      "quote_approved_case_study_teams": 2,
+      "renewal_expansion_or_loi_teams": 1
+    }}
+  }},
+  "repos": [
+    {{
+      "label": "enterprise-alpha",
+      "team": "Payments Platform",
+      "path": "{escaped_root}",
+      "suite_path": "{escaped_suite}",
+      "clients": ["codex"],
+      "task_categories": ["bug_fix"],
+      "scale_class": "paid_pilot"
+    }}
+  ]
+}}"#
+        ),
+    );
+
+    let evidence = json(&run(&[
+        "evidence-pack",
+        manifest_path.to_str().unwrap(),
+        "--anonymize",
+        "--limit",
+        "5",
+    ]));
+
+    assert_eq!(evidence["command"], "evidence-pack");
+    assert_eq!(evidence["anonymized"], true);
+    assert!(
+        evidence["protocol"]
+            .as_str()
+            .unwrap()
+            .contains("enterprise-proof")
+    );
+    assert_eq!(evidence["evidence"]["status"], "pass");
+    assert_eq!(
+        evidence["evidence"]["proof"]["product_market"]["teams_completed_pilots"],
+        5
+    );
+    assert_eq!(evidence["evidence"]["repos"][0]["label"], "<redacted>");
+    assert_eq!(evidence["evidence"]["repos"][0]["team"], "<redacted>");
+    assert_eq!(
+        evidence["evidence"]["benchmark"]["repos"][0]["team"],
+        "<redacted>"
+    );
+}
+
+#[test]
 fn codex_bootstrap_generates_local_files_and_enforce_passes_with_path_shim() {
     let repo = fixture_repo();
     let root = repo.path().to_str().unwrap();
@@ -1368,6 +1777,26 @@ fn codex_bootstrap_generates_local_files_and_enforce_passes_with_path_shim() {
     assert!(repo.path().join(".codex/CALLSIEVE.md").is_file());
     assert!(repo.path().join(".callsieve/codex-launch.ps1").is_file());
     assert!(repo.path().join(".callsieve/codex-launch.sh").is_file());
+    let config = fs::read_to_string(repo.path().join(".codex/config.toml")).unwrap();
+    assert!(config.contains("[mcp_servers.callsieve]"));
+    assert!(!config.contains("command = \"callsieve\""));
+    assert!(config.contains("callsieve"));
+    let callsieve_launcher = if cfg!(windows) {
+        repo.path().join(".callsieve/bin/callsieve.cmd")
+    } else {
+        repo.path().join(".callsieve/bin/callsieve")
+    };
+    assert!(callsieve_launcher.is_file());
+    let launcher_output = Command::new(callsieve_launcher)
+        .arg("--version")
+        .output()
+        .expect("failed to run project-local callsieve launcher");
+    assert!(
+        launcher_output.status.success(),
+        "launcher failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&launcher_output.stdout),
+        String::from_utf8_lossy(&launcher_output.stderr)
+    );
 
     let trace = repo.path().join("observed.json");
     write(
@@ -1801,7 +2230,9 @@ fn setup_agent_generates_policy_files() {
             .iter()
             .any(|file| file == ".codex/config.toml")
     );
-    assert!(repo.path().join(".codex/config.toml").is_file());
+    let config = fs::read_to_string(repo.path().join(".codex/config.toml")).unwrap();
+    assert!(config.contains("[mcp_servers.callsieve]"));
+    assert!(!config.contains("command = \"callsieve\""));
     assert!(
         fs::read_to_string(repo.path().join(".codex/CALLSIEVE.md"))
             .unwrap()

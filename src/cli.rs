@@ -1,6 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     env, fs,
+    io::Write,
     path::{Path, PathBuf},
     process::{Command as ProcessCommand, Stdio},
     thread,
@@ -10,6 +11,8 @@ use std::{
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
@@ -256,6 +259,30 @@ pub enum Command {
         tokens: usize,
     },
 
+    /// Collect audited local Ollama paired sessions for pending pilot tasks.
+    #[command(name = "pilot-collect-ollama")]
+    PilotCollectOllama {
+        manifest: PathBuf,
+
+        #[arg(long, default_value = "qwen2.5-coder:7b")]
+        model: String,
+
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
+
+        #[arg(long = "context-limit", default_value_t = 24)]
+        context_limit: usize,
+
+        #[arg(long, default_value_t = 2)]
+        snippets_per_file: usize,
+
+        #[arg(long = "baseline-file-limit", default_value_t = 48)]
+        baseline_file_limit: usize,
+
+        #[arg(long = "baseline-line-limit", default_value_t = 240)]
+        baseline_line_limit: usize,
+    },
+
     /// Validate paired observed pilot evidence before final proof generation.
     PilotQa { manifest: PathBuf },
 
@@ -292,6 +319,21 @@ pub enum Command {
 
     /// Build the top-level claim proof artifact with observed and controlled evidence separated.
     ProofReport {
+        manifest: PathBuf,
+
+        #[arg(long, default_value_t = 8)]
+        limit: usize,
+
+        #[arg(long, default_value_t = 2)]
+        snippets_per_file: usize,
+
+        #[arg(long)]
+        no_snippets: bool,
+    },
+
+    /// Build the broad enterprise-proof artifact with strict observed-session gates.
+    #[command(name = "enterprise-proof-report")]
+    EnterpriseProofReport {
         manifest: PathBuf,
 
         #[arg(long, default_value_t = 8)]
@@ -711,7 +753,7 @@ struct EvidencePackOutput {
     command: &'static str,
     anonymized: bool,
     generated_at: u64,
-    protocol: &'static str,
+    protocol: String,
     evidence: serde_json::Value,
 }
 
@@ -851,6 +893,77 @@ struct PilotRunOutput {
 }
 
 #[derive(Debug, Serialize)]
+struct PilotCollectOllamaOutput {
+    command: &'static str,
+    manifest: String,
+    model: String,
+    requested_sessions: usize,
+    collected_sessions: usize,
+    skipped_sessions: usize,
+    observed_sessions: usize,
+    qa_status: String,
+    sessions: Vec<PilotCollectOllamaSessionOutput>,
+}
+
+#[derive(Debug, Serialize)]
+struct PilotCollectOllamaSessionOutput {
+    task_id: String,
+    repo: String,
+    status: String,
+    baseline_tokens: usize,
+    callsieve_tokens: usize,
+    token_reduction_percent: f64,
+    baseline_files: usize,
+    callsieve_files: usize,
+    baseline_artifact: String,
+    callsieve_artifact: String,
+}
+
+#[derive(Debug, Serialize)]
+struct OllamaTranscriptArtifact {
+    schema_version: u32,
+    collection: &'static str,
+    collector: &'static str,
+    task_id: String,
+    phase: String,
+    repo: String,
+    model: String,
+    command: String,
+    files_read: Vec<String>,
+    prompt: String,
+    response: String,
+    token_accounting: OllamaTokenAccounting,
+    created_at: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct OllamaTokenAccounting {
+    source: &'static str,
+    counted_tokens: usize,
+    prompt_eval_count: usize,
+    eval_count: usize,
+}
+
+struct OllamaRun {
+    response: String,
+    prompt_eval_count: usize,
+    eval_count: usize,
+}
+
+struct PilotPromptPlan {
+    command: String,
+    files_read: Vec<String>,
+    prompt: String,
+}
+
+struct FileSearchEvidence {
+    path: String,
+    content: String,
+    match_lines: Vec<usize>,
+    result_lines: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
 struct PilotQaOutput {
     command: &'static str,
     manifest: String,
@@ -884,7 +997,7 @@ struct PilotFinalizeOutput {
 fn default_pilot_protocol() -> PilotEvidenceProtocol {
     PilotEvidenceProtocol {
         evidence_standard: "observed_session_only".to_string(),
-        collection: "real_codex_chatgpt_developer_sessions".to_string(),
+        collection: "real_paired_developer_sessions".to_string(),
         pairing: "paired_baseline_and_callsieve_phases".to_string(),
         token_accounting: "transcript_context_tokens".to_string(),
         controlled_replay_policy: "reported_separately_never_counted_as_observed".to_string(),
@@ -1299,6 +1412,26 @@ pub fn run() -> Result<()> {
             )?;
             output::json::print(&output)?;
         }
+        Command::PilotCollectOllama {
+            manifest,
+            model,
+            limit,
+            context_limit,
+            snippets_per_file,
+            baseline_file_limit,
+            baseline_line_limit,
+        } => {
+            let output = pilot_collect_ollama(
+                &manifest,
+                &model,
+                limit,
+                context_limit,
+                snippets_per_file,
+                baseline_file_limit,
+                baseline_line_limit,
+            )?;
+            output::json::print(&output)?;
+        }
         Command::PilotQa { manifest } => {
             let output = pilot_qa(&manifest)?;
             output::json::print(&output)?;
@@ -1345,6 +1478,29 @@ pub fn run() -> Result<()> {
             let output = query::proof_report(manifest, limit, snippets_per_file, !no_snippets)?;
             output::json::print(&output)?;
         }
+        Command::EnterpriseProofReport {
+            manifest,
+            limit,
+            snippets_per_file,
+            no_snippets,
+        } => {
+            let manifest_json = fs::read_to_string(&manifest).with_context(|| {
+                format!(
+                    "failed to read enterprise proof manifest: {}",
+                    manifest.display()
+                )
+            })?;
+            let manifest: query::BenchmarkReportManifest = serde_json::from_str(&manifest_json)
+                .with_context(|| {
+                    format!(
+                        "failed to parse enterprise proof manifest: {}",
+                        manifest.display()
+                    )
+                })?;
+            let output =
+                query::enterprise_proof_report(manifest, limit, snippets_per_file, !no_snippets)?;
+            output::json::print(&output)?;
+        }
         Command::PilotDoctor { manifest } => {
             let manifest_json = fs::read_to_string(&manifest).with_context(|| {
                 format!("failed to read pilot manifest: {}", manifest.display())
@@ -1377,7 +1533,7 @@ pub fn run() -> Result<()> {
                 command: "evidence-pack",
                 anonymized: anonymize,
                 generated_at: now_unix_seconds(),
-                protocol: "local repos only; index with --lsp; collect observed traces; run strict policy checks; publish aggregate JSON",
+                protocol: evidence_pack_protocol(&manifest_json),
                 evidence,
             };
             output::json::print(&output)?;
@@ -2058,16 +2214,723 @@ fn pilot_run(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
+fn pilot_collect_ollama(
+    manifest_path: &Path,
+    model: &str,
+    limit: usize,
+    context_limit: usize,
+    snippets_per_file: usize,
+    baseline_file_limit: usize,
+    baseline_line_limit: usize,
+) -> Result<PilotCollectOllamaOutput> {
+    let manifest = read_pilot_manifest(manifest_path)?;
+    let candidates: Vec<PilotHarnessTask> = manifest
+        .tasks
+        .iter()
+        .filter(|task| task.status == "pending" || task.status == "baseline_recorded")
+        .filter(|task| pilot_task_matches_ollama_model(task, model))
+        .take(limit)
+        .cloned()
+        .collect();
+    let skipped_sessions = manifest
+        .tasks
+        .iter()
+        .filter(|task| !candidates.iter().any(|candidate| candidate.id == task.id))
+        .filter(|task| task.status == "complete" || task.status == "rejected")
+        .count();
+    let mut sessions = Vec::new();
+
+    for task in candidates {
+        let session = collect_ollama_task(
+            manifest_path,
+            &task,
+            model,
+            context_limit,
+            snippets_per_file,
+            baseline_file_limit,
+            baseline_line_limit,
+        )
+        .with_context(|| format!("failed to collect Ollama pilot task {}", task.id))?;
+        sessions.push(session);
+    }
+
+    let qa = pilot_qa(manifest_path)?;
+    Ok(PilotCollectOllamaOutput {
+        command: "pilot-collect-ollama",
+        manifest: manifest_path.display().to_string(),
+        model: model.to_string(),
+        requested_sessions: limit,
+        collected_sessions: sessions.len(),
+        skipped_sessions,
+        observed_sessions: qa.observed_sessions,
+        qa_status: qa.status,
+        sessions,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn collect_ollama_task(
+    manifest_path: &Path,
+    task: &PilotHarnessTask,
+    model: &str,
+    context_limit: usize,
+    snippets_per_file: usize,
+    baseline_file_limit: usize,
+    baseline_line_limit: usize,
+) -> Result<PilotCollectOllamaSessionOutput> {
+    let root = Path::new(&task.repo);
+    let index = load_or_build_index(root)?;
+    let task_dir = Path::new(&task.trace_path)
+        .parent()
+        .unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(task_dir)
+        .with_context(|| format!("failed to create {}", task_dir.display()))?;
+    let baseline_artifact = task_dir.join("baseline-ollama-transcript.local.json");
+    let callsieve_artifact = task_dir.join("callsieve-ollama-transcript.local.json");
+    let mut baseline_tokens = 0;
+    let mut baseline_files = 0;
+
+    if task.status == "pending" {
+        let baseline_plan = build_baseline_prompt_plan(
+            root,
+            &index,
+            task,
+            baseline_file_limit,
+            baseline_line_limit,
+        )?;
+        let baseline_run = run_ollama_verbose(model, &baseline_plan.prompt)
+            .with_context(|| format!("ollama baseline failed for {}", task.id))?;
+        baseline_tokens = baseline_run.prompt_eval_count;
+        baseline_files = baseline_plan.files_read.len();
+        write_ollama_artifact(
+            &baseline_artifact,
+            task,
+            model,
+            "baseline",
+            &baseline_plan,
+            &baseline_run,
+        )?;
+        pilot_run(
+            manifest_path,
+            &task.id,
+            PilotSessionMode::Baseline,
+            &baseline_plan.command,
+            baseline_plan.files_read,
+            baseline_tokens,
+        )?;
+    } else if Path::new(&task.trace_path).is_file() {
+        let trace_json = fs::read_to_string(&task.trace_path)
+            .with_context(|| format!("failed to read trace: {}", task.trace_path))?;
+        let summary = query::trace_summary_from_str(&trace_json)?;
+        let summary_value = serde_json::to_value(&summary)?;
+        baseline_tokens = summary_number(&summary_value, "baseline_tokens");
+    }
+
+    let callsieve_plan =
+        build_callsieve_prompt_plan(root, &index, task, context_limit, snippets_per_file)?;
+    let callsieve_run = run_ollama_verbose(model, &callsieve_plan.prompt)
+        .with_context(|| format!("ollama CallSieve phase failed for {}", task.id))?;
+    let callsieve_tokens = callsieve_run.prompt_eval_count;
+    let callsieve_files = callsieve_plan.files_read.len();
+    write_ollama_artifact(
+        &callsieve_artifact,
+        task,
+        model,
+        "callsieve",
+        &callsieve_plan,
+        &callsieve_run,
+    )?;
+    let output = pilot_run(
+        manifest_path,
+        &task.id,
+        PilotSessionMode::Callsieve,
+        &callsieve_plan.command,
+        callsieve_plan.files_read,
+        callsieve_tokens,
+    )?;
+    let summary_value = serde_json::to_value(&output.summary)?;
+    if baseline_tokens == 0 {
+        baseline_tokens = summary_number(&summary_value, "baseline_tokens");
+    }
+    let token_savings = baseline_tokens as isize - callsieve_tokens as isize;
+    let token_reduction_percent = if baseline_tokens == 0 {
+        0.0
+    } else {
+        (token_savings as f64 / baseline_tokens as f64) * 100.0
+    };
+
+    Ok(PilotCollectOllamaSessionOutput {
+        task_id: task.id.clone(),
+        repo: task.repo.clone(),
+        status: pilot_task_status(&summary_value),
+        baseline_tokens,
+        callsieve_tokens,
+        token_reduction_percent,
+        baseline_files,
+        callsieve_files,
+        baseline_artifact: baseline_artifact.display().to_string(),
+        callsieve_artifact: callsieve_artifact.display().to_string(),
+    })
+}
+
+fn pilot_task_matches_ollama_model(task: &PilotHarnessTask, model: &str) -> bool {
+    task.model
+        .strip_prefix("ollama:")
+        .is_some_and(|registered| registered == model)
+        || task.model == model
+}
+
+fn load_or_build_index(root: &Path) -> Result<store::CodeIndex> {
+    match store::json_store::load_index(root) {
+        Ok(index) => Ok(index),
+        Err(_) => {
+            let index = indexer::build_index(root)?;
+            store::json_store::save_index(root, &index)?;
+            Ok(index)
+        }
+    }
+}
+
+fn build_baseline_prompt_plan(
+    root: &Path,
+    index: &store::CodeIndex,
+    task: &PilotHarnessTask,
+    file_limit: usize,
+    line_limit: usize,
+) -> Result<PilotPromptPlan> {
+    let search_task = task_search_text(&task.task);
+    let terms = pilot_search_terms(&search_task);
+    let mut evidence = baseline_search_evidence(root, index, &terms)?;
+    evidence.sort_by(|left, right| {
+        right
+            .match_lines
+            .len()
+            .cmp(&left.match_lines.len())
+            .then(left.path.cmp(&right.path))
+    });
+    let selected: Vec<FileSearchEvidence> = evidence.into_iter().take(file_limit).collect();
+    let files_read: Vec<String> = selected.iter().map(|file| file.path.clone()).collect();
+    let mut result_lines = Vec::new();
+    for file in &selected {
+        for line in &file.result_lines {
+            if result_lines.len() >= line_limit {
+                break;
+            }
+            result_lines.push(line.clone());
+        }
+        if result_lines.len() >= line_limit {
+            break;
+        }
+    }
+    let command = format!("rg -n {:?} {}", terms.join("|"), root.display());
+    let mut prompt = String::new();
+    prompt.push_str("You are an audited local coding agent baseline phase.\n");
+    prompt.push_str("Do not use CallSieve in this phase. Use only the raw rg-style evidence and file snippets below.\n");
+    prompt.push_str("Return compact JSON with likely_files and a one-sentence rationale.\n\n");
+    prompt.push_str(&format!("TASK: {}\n", task.task));
+    prompt.push_str(&format!("PRIMARY_TASK: {search_task}\n"));
+    prompt.push_str(&format!("REPO: {}\n", root.display()));
+    prompt.push_str(&format!("COMMAND: {command}\n"));
+    prompt.push_str(&format!("SEARCH_TERMS: {}\n", terms.join(", ")));
+    prompt.push_str("AUDITED_FILES:\n");
+    for file in &files_read {
+        prompt.push_str("- ");
+        prompt.push_str(file);
+        prompt.push('\n');
+    }
+    prompt.push_str("\nRG_OUTPUT:\n");
+    for line in &result_lines {
+        prompt.push_str(line);
+        prompt.push('\n');
+    }
+    prompt.push_str("\nFILE_SNIPPETS:\n");
+    for file in &selected {
+        prompt.push_str(&format!("--- {} ---\n", file.path));
+        prompt.push_str(&snippet_for_match_lines(
+            &file.content,
+            &file.match_lines,
+            2,
+            28,
+        ));
+        prompt.push('\n');
+    }
+    prompt.push_str("\nReturn JSON only.\n");
+
+    Ok(PilotPromptPlan {
+        command,
+        files_read,
+        prompt,
+    })
+}
+
+fn build_callsieve_prompt_plan(
+    root: &Path,
+    index: &store::CodeIndex,
+    task: &PilotHarnessTask,
+    context_limit: usize,
+    snippets_per_file: usize,
+) -> Result<PilotPromptPlan> {
+    let context = query::build_context(
+        root,
+        index,
+        &task.task,
+        context_limit,
+        snippets_per_file,
+        true,
+    )?;
+    let context_value = serde_json::to_value(&context)?;
+    let files_read = context_read_first_files(&context_value);
+    let compact_context = compact_agent_context_value(&context_value);
+    let command = format!(
+        "callsieve agent-context {} {:?} --limit {context_limit} --snippets-per-file {snippets_per_file}",
+        root.display(),
+        task.task
+    );
+    let mut prompt = String::new();
+    prompt.push_str("You are an audited local coding agent CallSieve phase.\n");
+    prompt.push_str("Use the CallSieve read-first context below before any broad search.\n");
+    prompt.push_str("Return compact JSON with files_read copied from the read_first packet and a one-sentence rationale.\n\n");
+    prompt.push_str(&format!("TASK: {}\n", task.task));
+    prompt.push_str(&format!("REPO: {}\n", root.display()));
+    prompt.push_str(&format!("COMMAND: {command}\n"));
+    prompt.push_str("AUDITED_FILES:\n");
+    for file in &files_read {
+        prompt.push_str("- ");
+        prompt.push_str(file);
+        prompt.push('\n');
+    }
+    prompt.push_str("\nCALLSIEVE_AGENT_CONTEXT_JSON:\n");
+    prompt.push_str(&serde_json::to_string_pretty(&compact_context)?);
+    prompt.push_str("\n\nReturn JSON only.\n");
+
+    Ok(PilotPromptPlan {
+        command,
+        files_read,
+        prompt,
+    })
+}
+
+fn baseline_search_evidence(
+    root: &Path,
+    index: &store::CodeIndex,
+    terms: &[String],
+) -> Result<Vec<FileSearchEvidence>> {
+    let mut files = Vec::new();
+    for file in &index.files {
+        let content = match fs::read_to_string(root.join(&file.path)) {
+            Ok(content) => content,
+            Err(_) => continue,
+        };
+        let mut match_lines = Vec::new();
+        let mut result_lines = Vec::new();
+        for (line_index, line) in content.lines().enumerate() {
+            let line_lower = line.to_ascii_lowercase();
+            if terms.iter().any(|term| line_lower.contains(term)) {
+                let line_number = line_index + 1;
+                match_lines.push(line_number);
+                result_lines.push(format!("{}:{}:{}", file.path, line_number, line.trim()));
+            }
+        }
+        if !match_lines.is_empty() {
+            files.push(FileSearchEvidence {
+                path: file.path.clone(),
+                content,
+                match_lines,
+                result_lines,
+            });
+        }
+    }
+    Ok(files)
+}
+
+fn snippet_for_match_lines(
+    content: &str,
+    match_lines: &[usize],
+    radius: usize,
+    max_lines: usize,
+) -> String {
+    let lines: Vec<&str> = content.lines().collect();
+    let mut selected = BTreeSet::new();
+    for line in match_lines {
+        let start = line.saturating_sub(radius + 1);
+        let end = (*line + radius).min(lines.len());
+        for index in start..end {
+            selected.insert(index);
+            if selected.len() >= max_lines {
+                break;
+            }
+        }
+        if selected.len() >= max_lines {
+            break;
+        }
+    }
+    let mut snippet = String::new();
+    let mut previous = None;
+    for index in selected {
+        if previous.is_some_and(|last: usize| index > last + 1) {
+            snippet.push_str("...\n");
+        }
+        snippet.push_str(&format!("{:>5}: {}\n", index + 1, lines[index]));
+        previous = Some(index);
+    }
+    snippet
+}
+
+fn task_search_text(task: &str) -> String {
+    task.split(';').next().unwrap_or(task).trim().to_string()
+}
+
+fn pilot_search_terms(task: &str) -> Vec<String> {
+    let stopwords = BTreeSet::from([
+        "about",
+        "and",
+        "behavior",
+        "change",
+        "code",
+        "file",
+        "find",
+        "fix",
+        "for",
+        "from",
+        "handling",
+        "how",
+        "implement",
+        "make",
+        "observed",
+        "ollama",
+        "round",
+        "the",
+        "this",
+        "update",
+        "what",
+        "where",
+        "with",
+    ]);
+    let mut terms = Vec::new();
+    let mut current = String::new();
+    for character in task.chars() {
+        if character.is_ascii_alphanumeric() || character == '_' {
+            current.push(character.to_ascii_lowercase());
+        } else if !current.is_empty() {
+            if current.len() >= 3 && !stopwords.contains(current.as_str()) {
+                terms.push(current.clone());
+            }
+            current.clear();
+        }
+    }
+    if !current.is_empty() && current.len() >= 3 && !stopwords.contains(current.as_str()) {
+        terms.push(current);
+    }
+    terms.sort();
+    terms.dedup();
+    if terms.is_empty() {
+        terms.push(task.to_ascii_lowercase());
+    }
+    terms
+}
+
+fn context_read_first_files(context_value: &serde_json::Value) -> Vec<String> {
+    context_value
+        .get("read_first")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|file| file.get("file").and_then(serde_json::Value::as_str))
+        .map(str::to_string)
+        .collect()
+}
+
+fn compact_agent_context_value(context: &serde_json::Value) -> serde_json::Value {
+    let read_first = context
+        .get("read_first")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(compact_context_file_value)
+        .collect::<Vec<_>>();
+    serde_json::json!({
+        "task": context.get("task").cloned().unwrap_or(serde_json::Value::Null),
+        "root": context.get("root").cloned().unwrap_or(serde_json::Value::Null),
+        "read_first": read_first
+    })
+}
+
+fn compact_context_file_value(file: &serde_json::Value) -> serde_json::Value {
+    let symbols = file
+        .get("symbols")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .take(6)
+        .map(|symbol| {
+            serde_json::json!({
+                "name": symbol.get("name").cloned().unwrap_or(serde_json::Value::Null),
+                "kind": symbol.get("kind").cloned().unwrap_or(serde_json::Value::Null),
+                "lines": symbol.get("lines").cloned().unwrap_or(serde_json::Value::Null),
+                "signature": symbol.get("signature").cloned().unwrap_or(serde_json::Value::Null)
+            })
+        })
+        .collect::<Vec<_>>();
+    let snippets = file
+        .get("snippets")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .take(1)
+        .cloned()
+        .collect::<Vec<_>>();
+    let related_tests = file
+        .get("related_tests")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .take(4)
+        .map(|test| {
+            serde_json::json!({
+                "file": test.get("file").cloned().unwrap_or(serde_json::Value::Null)
+            })
+        })
+        .collect::<Vec<_>>();
+    let why = file
+        .get("why")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .take(4)
+        .cloned()
+        .collect::<Vec<_>>();
+    serde_json::json!({
+        "rank": file.get("rank").cloned().unwrap_or(serde_json::Value::Null),
+        "score": file.get("score").cloned().unwrap_or(serde_json::Value::Null),
+        "file": file.get("file").cloned().unwrap_or(serde_json::Value::Null),
+        "risk": file
+            .get("blast_radius")
+            .and_then(|blast_radius| blast_radius.get("risk"))
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
+        "symbols": symbols,
+        "snippets": snippets,
+        "related_tests": related_tests,
+        "why": why
+    })
+}
+
+fn write_ollama_artifact(
+    path: &Path,
+    task: &PilotHarnessTask,
+    model: &str,
+    phase: &str,
+    plan: &PilotPromptPlan,
+    run: &OllamaRun,
+) -> Result<()> {
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    let artifact = OllamaTranscriptArtifact {
+        schema_version: 1,
+        collection: "observed_session",
+        collector: "callsieve pilot-collect-ollama",
+        task_id: task.id.clone(),
+        phase: phase.to_string(),
+        repo: task.repo.clone(),
+        model: model.to_string(),
+        command: plan.command.clone(),
+        files_read: plan.files_read.clone(),
+        prompt: plan.prompt.clone(),
+        response: run.response.clone(),
+        token_accounting: OllamaTokenAccounting {
+            source: "ollama_verbose_prompt_eval_count",
+            counted_tokens: run.prompt_eval_count,
+            prompt_eval_count: run.prompt_eval_count,
+            eval_count: run.eval_count,
+        },
+        created_at: now_unix_seconds(),
+    };
+    fs::write(path, serde_json::to_vec_pretty(&artifact)?)
+        .with_context(|| format!("failed to write {}", path.display()))
+}
+
+fn run_ollama_verbose(model: &str, prompt: &str) -> Result<OllamaRun> {
+    let mut command = ProcessCommand::new("ollama");
+    command
+        .arg("run")
+        .arg(model)
+        .arg("--verbose")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command
+        .spawn()
+        .with_context(|| "failed to start ollama; verify `ollama list` works")?;
+    {
+        let mut stdin = child.stdin.take().context("failed to open ollama stdin")?;
+        stdin
+            .write_all(prompt.as_bytes())
+            .context("failed to write prompt to ollama stdin")?;
+    }
+    let output = child
+        .wait_with_output()
+        .context("failed to wait for ollama")?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let raw = format!("{stdout}\n{stderr}");
+    let clean = strip_ansi(&raw);
+    if !output.status.success() {
+        anyhow::bail!("ollama exited with status {}\n{clean}", output.status);
+    }
+    let (prompt_eval_count, eval_count) = parse_ollama_verbose_counts(&clean)?;
+    let response = clean
+        .split("total duration:")
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    Ok(OllamaRun {
+        response,
+        prompt_eval_count,
+        eval_count,
+    })
+}
+
+fn parse_ollama_verbose_counts(output: &str) -> Result<(usize, usize)> {
+    let prompt_eval_count = extract_ollama_count(output, "prompt eval count:")
+        .context("ollama verbose output did not include prompt eval count")?;
+    let eval_count = extract_ollama_count(output, "eval count:")
+        .context("ollama verbose output missing eval count")?;
+    Ok((prompt_eval_count, eval_count))
+}
+
+fn extract_ollama_count(output: &str, label: &str) -> Option<usize> {
+    output.lines().find_map(|line| {
+        let line = line.trim_start();
+        let rest = line.strip_prefix(label)?.trim();
+        let number = rest.split_whitespace().next()?;
+        number.parse().ok()
+    })
+}
+
+fn strip_ansi(input: &str) -> String {
+    let mut output = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+    while let Some(character) = chars.next() {
+        if character == '\u{1b}' {
+            if chars.peek() == Some(&'[') {
+                chars.next();
+                for next in chars.by_ref() {
+                    if ('@'..='~').contains(&next) {
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+        if character != '\r' {
+            output.push(character);
+        }
+    }
+    output
+}
+
+fn count_countable_pilot_sessions(
+    manifest: &PilotHarnessManifest,
+    require_transcript_token_accounting: bool,
+) -> Result<usize> {
+    let mut count = 0;
+    for task in &manifest.tasks {
+        if task.status == "rejected" || !Path::new(&task.trace_path).is_file() {
+            continue;
+        }
+        if pilot_task_is_countable(task, require_transcript_token_accounting)? {
+            count += 1;
+        }
+    }
+    Ok(count)
+}
+
+fn pilot_task_is_countable(
+    task: &PilotHarnessTask,
+    require_transcript_token_accounting: bool,
+) -> Result<bool> {
+    let pair_id = task.pair_id.as_deref().unwrap_or(&task.id);
+    let preregistered = task.preregistered
+        && !task.task.trim().is_empty()
+        && !pair_id.trim().is_empty()
+        && !task.task_category.trim().is_empty()
+        && !task.condition.trim().is_empty()
+        && !task.expected_files.is_empty()
+        && !task.critical_files.is_empty();
+    let registered_token_source = if require_transcript_token_accounting {
+        task.token_accounting_source == "transcript_context_tokens"
+    } else {
+        !task.token_accounting_source.trim().is_empty()
+    };
+    let trace_path = Path::new(&task.trace_path);
+    let trace_json = fs::read_to_string(trace_path)
+        .with_context(|| format!("failed to read trace: {}", trace_path.display()))?;
+    let trace_value: serde_json::Value = serde_json::from_str(&trace_json)
+        .with_context(|| format!("failed to parse trace: {}", trace_path.display()))?;
+    let summary = query::trace_summary_from_str(&trace_json)?;
+    let summary_value = serde_json::to_value(&summary)?;
+    let task_text_matches = trace_value
+        .get("task")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|trace_task| trace_task == task.task);
+    let observed = summary_number(&summary_value, "observed_sessions");
+    let controlled = summary_number(&summary_value, "controlled_replay_sessions");
+    let baseline_tokens = summary_number(&summary_value, "baseline_tokens");
+    let callsieve_tokens = summary_number(&summary_value, "callsieve_tokens");
+    let critical_misses = summary_number(&summary_value, "critical_files_still_missed");
+    let complete_metrics =
+        observed == 1 && controlled == 0 && baseline_tokens > 0 && callsieve_tokens > 0;
+    let violations = if Path::new(&task.callsieve_trace_path).is_file() {
+        let callsieve_trace_json = fs::read_to_string(&task.callsieve_trace_path)
+            .with_context(|| format!("failed to read trace: {}", task.callsieve_trace_path))?;
+        let policy = query::trace_check_from_str_with_options(&callsieve_trace_json, true)?;
+        let policy_value = serde_json::to_value(policy)?;
+        summary_number(&policy_value, "violations")
+    } else {
+        1
+    };
+    let observed_collection = trace_value
+        .get("metadata")
+        .and_then(|metadata| metadata.get("collection"))
+        .and_then(serde_json::Value::as_str)
+        == Some("observed_session");
+    let trace_token_source = trace_token_accounting_source(&trace_value);
+    let transcript_token_accounting = if require_transcript_token_accounting {
+        trace_token_source == "transcript_context_tokens"
+    } else {
+        !trace_token_source.is_empty()
+    };
+
+    Ok(preregistered
+        && registered_token_source
+        && task_text_matches
+        && complete_metrics
+        && critical_misses == 0
+        && violations == 0
+        && observed_collection
+        && !trace_has_controlled_replay_marker(&trace_json)
+        && transcript_token_accounting)
+}
+
 fn pilot_qa(manifest_path: &Path) -> Result<PilotQaOutput> {
     let manifest = read_pilot_manifest(manifest_path)?;
     let mut results = Vec::new();
-    let mut complete_observed_sessions = 0usize;
     let mut external_repos = BTreeSet::new();
     let minimum_planned_tasks = threshold_number(&manifest.thresholds, "minimum_planned_tasks")
         .max(manifest.protocol.minimum_planned_tasks);
     let minimum_external_repos = threshold_number(&manifest.thresholds, "minimum_external_repos");
     let require_transcript_token_accounting =
         threshold_bool(&manifest.thresholds, "require_transcript_token_accounting");
+    let complete_observed_sessions =
+        count_countable_pilot_sessions(&manifest, require_transcript_token_accounting)?;
+    let allow_uncollected_buffer_tasks = complete_observed_sessions >= manifest.target_sessions;
 
     for task in &manifest.tasks {
         if task.status == "rejected" {
@@ -2123,32 +2986,68 @@ fn pilot_qa(manifest_path: &Path) -> Result<PilotQaOutput> {
 
         let trace_path = Path::new(&task.trace_path);
         let trace_exists = trace_path.is_file();
+        let baseline_trace_exists = Path::new(&task.baseline_trace_path).is_file();
+        let callsieve_trace_exists = Path::new(&task.callsieve_trace_path).is_file();
+        let uncollected_buffer_task = allow_uncollected_buffer_tasks
+            && !trace_exists
+            && !baseline_trace_exists
+            && !callsieve_trace_exists;
         push_qa(
             &mut results,
             &task.id,
             "combined_trace_exists",
-            trace_exists,
-            format!("combined trace exists at {}", task.trace_path),
-            format!("combined trace is missing at {}", task.trace_path),
+            trace_exists || uncollected_buffer_task,
+            if uncollected_buffer_task {
+                "uncollected planned buffer task is allowed after target sessions are met"
+                    .to_string()
+            } else {
+                format!("combined trace exists at {}", task.trace_path)
+            },
+            if uncollected_buffer_task {
+                "uncollected planned buffer task is allowed after target sessions are met"
+                    .to_string()
+            } else {
+                format!("combined trace is missing at {}", task.trace_path)
+            },
         );
         push_qa(
             &mut results,
             &task.id,
             "baseline_trace_exists",
-            Path::new(&task.baseline_trace_path).is_file(),
-            format!("baseline trace exists at {}", task.baseline_trace_path),
-            format!("baseline trace is missing at {}", task.baseline_trace_path),
+            baseline_trace_exists || uncollected_buffer_task,
+            if uncollected_buffer_task {
+                "uncollected planned buffer task is allowed after target sessions are met"
+                    .to_string()
+            } else {
+                format!("baseline trace exists at {}", task.baseline_trace_path)
+            },
+            if uncollected_buffer_task {
+                "uncollected planned buffer task is allowed after target sessions are met"
+                    .to_string()
+            } else {
+                format!("baseline trace is missing at {}", task.baseline_trace_path)
+            },
         );
         push_qa(
             &mut results,
             &task.id,
             "callsieve_trace_exists",
-            Path::new(&task.callsieve_trace_path).is_file(),
-            format!("CallSieve trace exists at {}", task.callsieve_trace_path),
-            format!(
-                "CallSieve trace is missing at {}",
-                task.callsieve_trace_path
-            ),
+            callsieve_trace_exists || uncollected_buffer_task,
+            if uncollected_buffer_task {
+                "uncollected planned buffer task is allowed after target sessions are met"
+                    .to_string()
+            } else {
+                format!("CallSieve trace exists at {}", task.callsieve_trace_path)
+            },
+            if uncollected_buffer_task {
+                "uncollected planned buffer task is allowed after target sessions are met"
+                    .to_string()
+            } else {
+                format!(
+                    "CallSieve trace is missing at {}",
+                    task.callsieve_trace_path
+                )
+            },
         );
         if !trace_exists {
             continue;
@@ -2260,9 +3159,6 @@ fn pilot_qa(manifest_path: &Path) -> Result<PilotQaOutput> {
             && observed_collection
             && no_controlled_markers
             && transcript_token_accounting;
-        if countable {
-            complete_observed_sessions += 1;
-        }
         push_qa(
             &mut results,
             &task.id,
@@ -2590,15 +3486,34 @@ fn build_proof_manifest(
         )
         .with_context(|| format!("failed to write {}", suite_path.display()))?;
 
-        let trace_paths: Vec<String> = tasks.iter().map(|task| task.trace_path.clone()).collect();
+        let trace_paths: Vec<String> = tasks
+            .iter()
+            .filter(|task| Path::new(&task.trace_path).is_file())
+            .map(|task| task.trace_path.clone())
+            .collect();
         let policy_trace_paths: Vec<String> = tasks
             .iter()
+            .filter(|task| Path::new(&task.callsieve_trace_path).is_file())
             .map(|task| task.callsieve_trace_path.clone())
+            .collect();
+        let clients: Vec<String> = tasks
+            .iter()
+            .map(|task| task.client.clone())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        let task_categories: Vec<String> = tasks
+            .iter()
+            .map(|task| task.task_category.clone())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
             .collect();
         repos.push(serde_json::json!({
             "label": label,
             "path": repo,
             "external": tasks.iter().any(|task| task.external),
+            "clients": clients,
+            "task_categories": task_categories,
             "suite_path": suite_path.display().to_string(),
             "trace_paths": trace_paths,
             "policy_trace_paths": policy_trace_paths
@@ -2606,6 +3521,7 @@ fn build_proof_manifest(
     }
 
     Ok(serde_json::json!({
+        "protocol": manifest.protocol.evidence_standard,
         "thresholds": manifest.thresholds,
         "audit": {
             "protocol": manifest.protocol,
@@ -3250,51 +4166,115 @@ fn enforce_check(
 
 fn agent_files(client: AgentClient, root: &Path) -> Vec<(PathBuf, String)> {
     let policy = "CallSieve policy: call callsieve_context with the repository path and task before broad grep, rg, repository-wide search, or repeated file reads. Read read_first files first; grep only if the context packet is insufficient.\n";
+    let callsieve_command = callsieve_executable_display();
     match client {
         AgentClient::Codex => vec![
             (
                 root.join(".codex/config.toml"),
-                "[mcp_servers.callsieve]\ncommand = \"callsieve\"\nargs = [\"mcp\"]\nstartup_timeout_sec = 20\ntool_timeout_sec = 60\n".to_string(),
+                format!(
+                    "[mcp_servers.callsieve]\ncommand = {}\nargs = [\"mcp\"]\nstartup_timeout_sec = 20\ntool_timeout_sec = 60\n",
+                    toml_basic_string(&callsieve_command)
+                ),
             ),
             (root.join(".codex/CALLSIEVE.md"), policy.to_string()),
         ],
         AgentClient::Claude => vec![
             (
                 root.join(".mcp.json"),
-                "{\n  \"mcpServers\": {\n    \"callsieve\": {\n      \"type\": \"stdio\",\n      \"command\": \"callsieve\",\n      \"args\": [\"mcp\"],\n      \"env\": {}\n    }\n  }\n}\n".to_string(),
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "mcpServers": {
+                        "callsieve": {
+                            "type": "stdio",
+                            "command": callsieve_command,
+                            "args": ["mcp"],
+                            "env": {}
+                        }
+                    }
+                }))
+                .unwrap_or_else(|_| "{}".to_string()),
             ),
             (root.join("CLAUDE.md"), policy.to_string()),
         ],
         AgentClient::Cursor => vec![
             (
                 root.join(".cursor/mcp.json"),
-                "{\n  \"mcpServers\": {\n    \"callsieve\": {\n      \"type\": \"stdio\",\n      \"command\": \"callsieve\",\n      \"args\": [\"mcp\"]\n    }\n  }\n}\n".to_string(),
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "mcpServers": {
+                        "callsieve": {
+                            "type": "stdio",
+                            "command": callsieve_command,
+                            "args": ["mcp"]
+                        }
+                    }
+                }))
+                .unwrap_or_else(|_| "{}".to_string()),
             ),
             (root.join(".cursor/rules/callsieve.mdc"), policy.to_string()),
         ],
         AgentClient::Cline => vec![
             (
                 root.join(".cline/mcp.json"),
-                "{\n  \"mcpServers\": {\n    \"callsieve\": {\n      \"command\": \"callsieve\",\n      \"args\": [\"mcp\"],\n      \"env\": {},\n      \"disabled\": false,\n      \"autoApprove\": []\n    }\n  }\n}\n".to_string(),
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "mcpServers": {
+                        "callsieve": {
+                            "command": callsieve_command,
+                            "args": ["mcp"],
+                            "env": {},
+                            "disabled": false,
+                            "autoApprove": []
+                        }
+                    }
+                }))
+                .unwrap_or_else(|_| "{}".to_string()),
             ),
             (root.join(".clinerules/callsieve.md"), policy.to_string()),
         ],
         AgentClient::Roo => vec![
             (
                 root.join(".roo/mcp.json"),
-                "{\n  \"mcpServers\": {\n    \"callsieve\": {\n      \"command\": \"callsieve\",\n      \"args\": [\"mcp\"],\n      \"env\": {},\n      \"disabled\": false\n    }\n  }\n}\n".to_string(),
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "mcpServers": {
+                        "callsieve": {
+                            "command": callsieve_command,
+                            "args": ["mcp"],
+                            "env": {},
+                            "disabled": false
+                        }
+                    }
+                }))
+                .unwrap_or_else(|_| "{}".to_string()),
             ),
             (root.join(".roo/rules/callsieve.md"), policy.to_string()),
         ],
-        AgentClient::Generic => vec![
-            (
-                root.join(".callsieve/agent-policy.md"),
-                format!(
-                    "{policy}\nUse `callsieve mcp` for MCP clients, or `callsieve agent-context <repo> \"<task>\"` before broad search.\n"
-                ),
+        AgentClient::Generic => vec![(
+            root.join(".callsieve/agent-policy.md"),
+            format!(
+                "{policy}\nUse `callsieve mcp` for MCP clients, or `callsieve agent-context <repo> \"<task>\"` before broad search.\n"
             ),
-        ],
+        )],
     }
+}
+
+fn callsieve_executable_display() -> String {
+    env::current_exe()
+        .unwrap_or_else(|_| PathBuf::from("callsieve"))
+        .display()
+        .to_string()
+}
+
+fn toml_basic_string(value: &str) -> String {
+    let mut escaped = String::new();
+    for character in value.chars() {
+        match character {
+            '\\' => escaped.push_str("\\\\"),
+            '"' => escaped.push_str("\\\""),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            character => escaped.push(character),
+        }
+    }
+    format!("\"{escaped}\"")
 }
 
 fn agent_client_name(client: AgentClient) -> &'static str {
@@ -3568,6 +4548,18 @@ fn install_shim(root: &Path, force: bool) -> Result<ShimOutput> {
     let real_grep = resolve_command_excluding_shim("grep", &bin_dir);
     let mut files = Vec::new();
 
+    for path in shim_script_paths(&bin_dir, "callsieve") {
+        if path.exists() && !force {
+            anyhow::bail!(
+                "refusing to overwrite {}; pass --force to replace it",
+                path.display()
+            );
+        }
+        write_executable_file(&path, &callsieve_launcher_script(&path))
+            .with_context(|| format!("failed to write {}", path.display()))?;
+        files.push(path.display().to_string());
+    }
+
     for (name, real_command) in [("rg", real_rg), ("grep", real_grep)] {
         let script_files = shim_script_paths(&bin_dir, name);
         for path in script_files {
@@ -3577,7 +4569,7 @@ fn install_shim(root: &Path, force: bool) -> Result<ShimOutput> {
                     path.display()
                 );
             }
-            fs::write(&path, shim_script(root, real_command.as_deref(), &path))
+            write_executable_file(&path, &shim_script(root, real_command.as_deref(), &path))
                 .with_context(|| format!("failed to write {}", path.display()))?;
             files.push(path.display().to_string());
         }
@@ -3606,7 +4598,7 @@ fn shim_doctor(root: &Path) -> ShimDoctorOutput {
         },
     ));
 
-    for file in ["rg", "grep"] {
+    for file in ["callsieve", "rg", "grep"] {
         let paths = shim_script_paths(&bin_dir, file);
         let installed = paths.iter().any(|path| path.is_file());
         checks.push(enforce_check(
@@ -3652,7 +4644,7 @@ fn shim_doctor(root: &Path) -> ShimDoctorOutput {
 fn uninstall_shim(root: &Path) -> Result<ShimOutput> {
     let bin_dir = shim_bin_dir(root);
     let mut removed = Vec::new();
-    for name in ["rg", "grep"] {
+    for name in ["callsieve", "rg", "grep"] {
         for path in shim_script_paths(&bin_dir, name) {
             if path.is_file() {
                 fs::remove_file(&path)
@@ -3697,6 +4689,37 @@ fn shim_script(root: &Path, real_command: Option<&str>, path: &Path) -> String {
     format!(
         "#!/usr/bin/env sh\nexport CALLSIEVE_SHIM_ACTIVE=1\ncallsieve grep '{root}' \"$1\"\nif [ -n '{real}' ]; then exec '{real}' \"$@\"; fi\n"
     )
+}
+
+fn callsieve_launcher_script(path: &Path) -> String {
+    let exe = callsieve_executable_display();
+    if path.extension().and_then(|extension| extension.to_str()) == Some("cmd") {
+        let exe = exe.replace('%', "%%");
+        return format!("@echo off\r\nsetlocal\r\n\"{exe}\" %*\r\n");
+    }
+
+    format!(
+        "#!/usr/bin/env sh\nexec '{}' \"$@\"\n",
+        sh_single_quote(&exe)
+    )
+}
+
+fn sh_single_quote(value: &str) -> String {
+    value.replace('\'', "'\\''")
+}
+
+fn write_executable_file(path: &Path, content: &str) -> Result<()> {
+    fs::write(path, content).with_context(|| format!("failed to write {}", path.display()))?;
+    #[cfg(unix)]
+    {
+        let mut permissions = fs::metadata(path)
+            .with_context(|| format!("failed to stat {}", path.display()))?
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(path, permissions)
+            .with_context(|| format!("failed to chmod {}", path.display()))?;
+    }
+    Ok(())
 }
 
 fn resolve_command_excluding_shim(command: &str, shim_bin: &Path) -> Option<String> {
@@ -3756,12 +4779,27 @@ fn anonymize_evidence(value: &mut serde_json::Value) {
             for (key, value) in object.iter_mut() {
                 if matches!(
                     key.as_str(),
-                    "path" | "root" | "suite_path" | "trace_path" | "policy_trace_path" | "label"
+                    "path"
+                        | "root"
+                        | "suite_path"
+                        | "trace_path"
+                        | "policy_trace_path"
+                        | "label"
+                        | "team"
+                        | "team_id"
+                        | "team_name"
+                        | "case_study"
+                        | "case_study_id"
                 ) {
                     *value = serde_json::Value::String("<redacted>".to_string());
                 } else if matches!(
                     key.as_str(),
-                    "suite_paths" | "trace_paths" | "policy_trace_paths"
+                    "suite_paths"
+                        | "trace_paths"
+                        | "policy_trace_paths"
+                        | "teams"
+                        | "team_ids"
+                        | "case_studies"
                 ) {
                     if let Some(values) = value.as_array_mut() {
                         for item in values {
@@ -3782,6 +4820,30 @@ fn anonymize_evidence(value: &mut serde_json::Value) {
         }
         _ => {}
     }
+}
+
+fn evidence_pack_protocol(manifest_json: &str) -> String {
+    let protocol = serde_json::from_str::<serde_json::Value>(manifest_json)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("protocol")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+                .or_else(|| {
+                    value
+                        .get("audit")
+                        .and_then(|audit| audit.get("protocol"))
+                        .and_then(|protocol| protocol.get("evidence_standard"))
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_string)
+                })
+        })
+        .unwrap_or_else(|| "pilot-proof".to_string());
+
+    format!(
+        "{protocol}; local repos only; collect observed traces; run strict policy checks; publish aggregate JSON"
+    )
 }
 
 fn run_rg(root: &Path, pattern: &str) -> Result<RgOutput> {
@@ -3932,6 +4994,18 @@ mod tests {
             "200",
         ])
         .unwrap();
+        Cli::try_parse_from([
+            "callsieve",
+            "pilot-collect-ollama",
+            "benchmarks/evidence/pilot.json",
+            "--model",
+            "qwen2.5-coder:7b",
+            "--limit",
+            "10",
+            "--context-limit",
+            "24",
+        ])
+        .unwrap();
         Cli::try_parse_from(["callsieve", "pilot-qa", "benchmarks/evidence/pilot.json"]).unwrap();
         Cli::try_parse_from([
             "callsieve",
@@ -3943,6 +5017,12 @@ mod tests {
         .unwrap();
         Cli::try_parse_from(["callsieve", "pilot-report", "benchmarks/manifest.json"]).unwrap();
         Cli::try_parse_from(["callsieve", "proof-report", "benchmarks/manifest.json"]).unwrap();
+        Cli::try_parse_from([
+            "callsieve",
+            "enterprise-proof-report",
+            "benchmarks/manifest.json",
+        ])
+        .unwrap();
         Cli::try_parse_from(["callsieve", "pilot-doctor", "benchmarks/manifest.json"]).unwrap();
         Cli::try_parse_from(["callsieve", "evidence-pack", "benchmarks/manifest.json"]).unwrap();
         Cli::try_parse_from([
@@ -4007,5 +5087,20 @@ mod tests {
         Cli::try_parse_from(["callsieve", "shim", "uninstall", "."]).unwrap();
         Cli::try_parse_from(["callsieve", "grep", ".", "createSession"]).unwrap();
         Cli::try_parse_from(["callsieve", "stats", "."]).unwrap();
+    }
+
+    #[test]
+    fn parses_ollama_verbose_token_counts_after_stripping_ansi() {
+        let raw = "\u{1b}[?25l{\"ok\":true}\u{1b}[?25h\r\n\
+total duration:       3.36s\n\
+prompt eval count:    44 token(s)\n\
+prompt eval duration: 87ms\n\
+eval count:           21 token(s)\n\
+eval duration:        235ms\n";
+        let clean = strip_ansi(raw);
+        assert!(!clean.contains('\u{1b}'));
+        let (prompt, eval) = parse_ollama_verbose_counts(&clean).unwrap();
+        assert_eq!(prompt, 44);
+        assert_eq!(eval, 21);
     }
 }

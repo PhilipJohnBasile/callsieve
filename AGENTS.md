@@ -38,28 +38,35 @@ The codebase filter for AI coding agents.
 Longer pitch:
 CallSieve gives Claude, Codex, Cursor, Cline, Roo, and local coding agents the exact symbols, call paths, files, tests, and snippets they need without wasting tokens on grep.
 
-## MVP Scope
+## Current Product Scope
 
-Build a local CLI-first Rust project.
+Keep CallSieve a local CLI-first Rust project. The current implementation already has indexing, retrieval, MCP tools, context-first enforcement, daemon/watch freshness, observed-session evidence collection, proof reports, and enterprise-proof gates.
 
-Initial MVP commands:
+Core user-facing commands:
 
 ```bash
-callsieve index <path>
+callsieve index <path> [--lsp]
+callsieve agent-context <path> "<task>"
+callsieve context <path> "<task>"
 callsieve query <path> "<natural language question>"
-callsieve symbols <path>
 callsieve symbol <path> <symbol_name>
-callsieve stats <path>
+callsieve status <path>
+callsieve mcp
+callsieve proof-report <manifest.json>
+callsieve enterprise-proof-report <manifest.json>
 ```
 
-The MVP should:
+The product should continue to:
 
 - index a repository locally
 - parse source files
 - extract symbols
 - extract imports
+- extract references, calls, related tests, and blast-radius hints
 - store an index locally
 - return compact JSON or human-readable output
+- enforce a context-first workflow before broad grep where possible
+- keep observed proof separate from controlled replay
 - favor useful results over perfect static analysis
 - avoid requiring cloud services
 - avoid requiring API keys
@@ -160,13 +167,12 @@ Embeddings and rerankers can come later, after the CLI proves the core retrieval
 
 Later phases:
 
-- MCP server
-- LSP integration
 - richer call graph
 - semantic embeddings
 - Git history graph
 - agent memory cache
-- editor integrations
+- deeper editor integrations
+- wider language ecosystem coverage
 
 ## Design Principles
 
@@ -222,19 +228,17 @@ Do not operate in Dropbox or Dropbox-synced paths.
 
 ## Current Goal
 
-Bootstrap the MVP:
+Harden the local-first agent-context and proof workflow:
 
-- Rust CLI workspace
-- basic repo walker
-- language detection
-- symbol extraction skeleton
-- JSON output
-- simple query ranking
-- tests
-- README with the product pitch and usage examples
+- keep deterministic retrieval compact and explainable
+- improve references, call paths, tests, and blast-radius quality
+- keep MCP and agent setup aligned with the CLI
+- keep trace, pilot, proof-report, evidence-pack, and enterprise-proof-report schemas honest
+- add tests for evidence gates and retrieval behavior
+- keep README, product brief, and docs aligned with the actual app
 
 Do not start with a SaaS app.
 Do not start with auth.
 Do not start with a web dashboard.
 Do not start with vector DB infrastructure.
-Do not start with MCP until the CLI proves the core value.
+Do not add vector DB infrastructure or cloud dependencies until the local CLI proves the core value.

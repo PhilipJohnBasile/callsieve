@@ -72,31 +72,54 @@ The first implementation should use deterministic ranking:
 
 Later versions can add semantic reranking, embeddings, richer call graphs, and long-term agent memory.
 
-## Initial Product
+## Current Product
 
-A local CLI that indexes a repo and answers compact codebase questions.
+CallSieve is a local Rust CLI and MCP-compatible context server. It indexes a repository into `.callsieve/index.json`, ranks relevant files and symbols for a task, returns compact read-first context packets, and audits whether agents used CallSieve before broad grep or repeated reads.
 
-## MVP Commands
+The current app includes:
+
+- repository walking with ignore-rule support
+- language detection for TypeScript, JavaScript, Python, Rust, docs, and common config files
+- symbol, import, reference, call, and related-test extraction
+- optional local LSP enrichment when language servers are already installed
+- deterministic query and `agent-context` ranking
+- MCP tools for context, symbols, stats, status, trace checks, and benchmark estimates
+- watcher and daemon paths for index freshness
+- agent setup, Codex bootstrap, editor hooks, and opt-in grep shims
+- benchmark, observed trace, pilot, evidence-pack, proof-report, and enterprise-proof-report workflows
+
+## Current CLI Entry Points
 
 ```bash
-callsieve index .
-callsieve symbols .
-callsieve symbol . UserService
-callsieve query . "where is login handled?"
-callsieve stats .
+callsieve index <path> [--lsp]
+callsieve agent-context <path> "<task>"
+callsieve symbol <path> <symbol_name>
+callsieve status <path>
+callsieve mcp
+callsieve benchmark-report <manifest.json>
+callsieve proof-report <manifest.json>
+callsieve enterprise-proof-report <manifest.json>
 ```
 
-## Future Product
+## Proof Program
 
-CallSieve becomes:
+CallSieve now has three evidence layers:
 
-- MCP server
-- codebase graph
-- symbol memory
-- call path retriever
-- test impact mapper
-- blast radius analyzer
-- agent context runtime
+- local harness and benchmark evidence for fast iteration
+- observed-session proof reports that separate human or agent telemetry from controlled replay
+- enterprise-proof gates for broad claims: 1,000 observed sessions, Codex/Claude/Cursor coverage, Microsoft-scale OSS proxies, strict trace policy, transcript-token accounting, and paid-pilot PMF evidence
+
+The product claim stays gated. Broad developer-session language should wait until `enterprise-proof-report` returns `pass`.
+
+## Near-Term Product Direction
+
+The next product work should harden the same local-first path:
+
+- richer call graph and ownership hints
+- broader language coverage
+- better task-category and repo-scale reporting
+- editor and agent integrations that make `agent-context` the default first step
+- optional semantic reranking only after deterministic retrieval proves the core loop
 
 ## Core Differentiator
 

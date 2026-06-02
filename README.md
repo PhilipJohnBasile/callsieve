@@ -18,7 +18,17 @@ Stop paying AI agents to grep your repo.
 
 CallSieve is not another coding agent. It is the context and retrieval layer underneath coding agents.
 
-## MVP Commands
+## Current State
+
+CallSieve is now a local Rust CLI with a JSON index, deterministic retrieval, optional LSP reference enrichment, MCP tools, context-first guardrails, daemon/watch freshness support, benchmark reports, observed-session traces, and gated proof reports. The product is still local-first and CLI-first, but it has moved beyond the original bootstrap into an agent-context and evidence collection layer.
+
+The core workflow is:
+
+```text
+index repo -> ask for agent context -> read returned files first -> grep only if needed -> audit traces and savings
+```
+
+## Current CLI Surface
 
 ```bash
 callsieve index <path> [--lsp]
@@ -41,10 +51,12 @@ callsieve pilot-init <manifest.json> [--sessions <n>]
 callsieve pilot-task add <manifest.json> <repo> "<task>" [--id <id>] [--expected-file <path>] [--critical-file <path>] [--external] [--pair-id <id>] [--task-category <name>] [--difficulty <name>] [--condition <name>] [--token-source transcript_context_tokens]
 callsieve pilot-task reject <manifest.json> --task-id <id> --reason <reason>
 callsieve pilot-run <manifest.json> --task-id <id> --mode baseline|callsieve --command <cmd> [--files-read <path>...] --tokens <n>
+callsieve pilot-collect-ollama <manifest.json> [--model qwen2.5-coder:7b] [--limit <n>] [--context-limit <n>]
 callsieve pilot-qa <manifest.json>
 callsieve pilot-finalize <manifest.json> --out <proof.json>
 callsieve pilot-report <manifest.json> [--limit <n>] [--snippets-per-file <n>] [--no-snippets]
 callsieve proof-report <manifest.json> [--limit <n>] [--snippets-per-file <n>] [--no-snippets]
+callsieve enterprise-proof-report <manifest.json> [--limit <n>] [--snippets-per-file <n>] [--no-snippets]
 callsieve pilot-doctor <manifest.json>
 callsieve evidence-pack <manifest.json> [--anonymize]
 callsieve policy-check <trace.json> [--strict]
@@ -91,10 +103,12 @@ cargo run -- pilot-init benchmarks/evidence/pilot.local.json --sessions 1
 cargo run -- pilot-task add benchmarks/evidence/pilot.local.json . "change login token expiry behavior" --id auth-expiry --expected-file src/auth/session.ts --critical-file src/auth/session.ts
 cargo run -- pilot-run benchmarks/evidence/pilot.local.json --task-id auth-expiry --mode baseline --command "rg login token expiry" --files-read src/auth/session.ts --tokens 12000
 cargo run -- pilot-run benchmarks/evidence/pilot.local.json --task-id auth-expiry --mode callsieve --command "callsieve agent-context . \"change login token expiry behavior\"" --files-read src/auth/session.ts --tokens 3000
+cargo run -- pilot-collect-ollama benchmarks/evidence/observed-generic-ollama-100.local.json --model qwen2.5-coder:7b --limit 10 --context-limit 24
 cargo run -- pilot-qa benchmarks/evidence/pilot.local.json
 cargo run -- pilot-finalize benchmarks/evidence/pilot.local.json --out benchmarks/evidence/proof.local.json
 cargo run -- pilot-report benchmarks/pilot-manifest.example.json
 cargo run -- proof-report benchmarks/pilot-manifest.example.json
+cargo run -- enterprise-proof-report benchmarks/evidence/enterprise-proof-manifest.example.json
 cargo run -- pilot-doctor benchmarks/pilot-manifest.example.json
 cargo run -- evidence-pack benchmarks/pilot-manifest.example.json --anonymize
 cargo run -- policy-check benchmarks/session-trace.example.json --strict
@@ -123,7 +137,7 @@ cargo run -- pilot-task reject benchmarks/evidence/pilot.local.json --task-id au
 
 `pilot-init` defaults to the strict 100-session claim protocol. Use `--sessions 1` only for local workflow shakedowns.
 
-## What The MVP Does
+## Current Capabilities
 
 - walks a repository while respecting common ignore rules
 - detects TypeScript, JavaScript, Python, and Rust source files plus agent-relevant docs and config files
@@ -140,10 +154,11 @@ cargo run -- pilot-task reject benchmarks/evidence/pilot.local.json --task-id au
 - provides an `agent-context` wrapper agents can call before grep
 - exposes a minimal MCP stdio server so agents can call CallSieve before grep
 - estimates context-packet token savings versus a naive grep/read loop
-- records real observed Codex/ChatGPT session events and summarizes baseline versus CallSieve-assisted phases
+- records real observed agent session events and summarizes baseline versus CallSieve-assisted phases
 - keeps controlled replay evidence separate from observed-session evidence
 - aggregates benchmark evidence across multiple local repositories
 - produces pilot and top-level proof reports that combine benchmark, observed trace, controlled replay, policy, freshness, bootstrap, daemon, and LSP evidence
+- produces an opt-in enterprise proof report that gates broad claims on 1,000 observed sessions, multi-client coverage, scale proxies, strict trace policy, and PMF evidence
 - produces anonymized evidence packs for external pilot aggregation
 - provides CI-friendly strict policy checks for context-first sessions
 - validates evidence manifests before reports
@@ -151,10 +166,10 @@ cargo run -- pilot-task reject benchmarks/evidence/pilot.local.json --task-id au
 - generates client-specific agent rules that require CallSieve before broad grep
 - guards context-first sessions and can write trace stubs for policy audits
 - starts controlled Codex/ChatGPT context-first replay traces with model tags
-- bootstraps project-local Codex launchers, config, rules, and grep shims without global PATH/profile mutation
+- bootstraps project-local Codex launchers, resolved MCP config, rules, and grep shims without global PATH/profile mutation
 - generates project-local editor hooks for VS Code, Cursor, and generic editors
 - audits agent setup, traces, index freshness, and optional shim state with `enforce`
-- installs opt-in local `rg`/`grep` shims for PATH-level interception
+- installs an opt-in local `callsieve` launcher plus `rg`/`grep` shims for PATH-level interception
 - wraps grep workflows so CallSieve context is returned before optional `rg`
 
 ## Example Query Output
@@ -304,7 +319,7 @@ cargo run -- pilot-task reject benchmarks/evidence/pilot.local.json --task-id au
 
 `trace-replay` generates deterministic baseline versus CallSieve trace JSON from a suite. It is tagged with `metadata.collection = "controlled_replay"` and is useful before real observed session evidence exists.
 
-Use `session-start`, `session-event`, and `session-finish` for real Codex/ChatGPT observations. These traces are tagged with `metadata.collection = "observed_session"` and keep ordered events with command classification, files read, optional token counts, and phase (`baseline` or `callsieve`).
+Use `session-start`, `session-event`, and `session-finish` for real observed agent sessions across Codex, Claude, Cursor, and local agents. These traces are tagged with `metadata.collection = "observed_session"` and keep ordered events with command classification, files read, optional token counts, and phase (`baseline` or `callsieve`).
 
 See [docs/BENCHMARKS.md](docs/BENCHMARKS.md) for the real-repo benchmark pack, session trace format, replay traces, and miss analysis fields.
 
@@ -383,6 +398,8 @@ Use `benchmark-doctor` before a report to catch missing repos, missing indexes, 
 
 `proof-report` is the top-level claim artifact. It exposes planned tasks, rejected-session audit count, observed sessions, transcript-token provenance, controlled replay sessions, external repo coverage, observed token reduction, controlled replay ratio, freshness, daemon, bootstrap, and LSP status in one JSON object. Controlled replay is never counted as observed evidence.
 
+`enterprise-proof-report` is the broad-claim artifact. It is opt-in and fails unless the manifest meets the enterprise gates: 1,000 paired observed sessions, 50 repos, 10 Microsoft-scale OSS proxies, Codex/Claude/Cursor coverage, 5 languages, 10 task categories, 90% positive per-session savings, 75% of sessions above 30% savings, zero critical misses, zero strict trace violations, zero controlled replay, full transcript token accounting, and paid-pilot PMF evidence. See [docs/ENTERPRISE_PROOF.md](docs/ENTERPRISE_PROOF.md) and [benchmarks/evidence/enterprise-proof-manifest.example.json](benchmarks/evidence/enterprise-proof-manifest.example.json).
+
 Use `evidence-pack` when you need a shareable aggregate for external pilots:
 
 ```bash
@@ -412,7 +429,7 @@ cargo run -- enforce . --client codex --trace .callsieve/session-trace.json --st
 
 `policy-check` exits nonzero when a trace violates the context-first rule, so it can be used in CI. `enforce` checks generated agent files, index freshness, optional trace policy, and shim state. Missing shims are a warning unless `--require-shim` is set.
 
-For Codex/ChatGPT-only pilots, use `codex-session` instead of a generic guard. It writes a trace with `client: codex-chatgpt`, a model label, a deterministic grep/read baseline, and a CallSieve-first assisted side:
+For Codex/ChatGPT controlled replay, use `codex-session` instead of a generic guard. It writes a trace with `client: codex-chatgpt`, a model label, a deterministic grep/read baseline, and a CallSieve-first assisted side:
 
 ```bash
 cargo run -- codex-session . "change login token expiry behavior" --trace-out .callsieve/codex-session.json --model gpt-5-codex
@@ -436,7 +453,7 @@ Use `codex-bootstrap` for Codex-first project setup without mutating global shel
 cargo run -- codex-bootstrap . --model gpt-5-codex --force
 ```
 
-It writes `.codex/config.toml`, `.codex/CALLSIEVE.md`, `.callsieve/bin` shims, and `.callsieve/codex-launch.ps1` / `.callsieve/codex-launch.sh`. The launchers start `callsieve daemon --background --lsp`, prepend `.callsieve/bin` only for that launched process, and print the first required `callsieve agent-context` command.
+It writes `.codex/config.toml`, `.codex/CALLSIEVE.md`, `.callsieve/bin` launchers/shims, and `.callsieve/codex-launch.ps1` / `.callsieve/codex-launch.sh`. The MCP config points at the resolved CallSieve executable instead of relying on a global PATH entry. The launchers start `callsieve daemon --background --lsp`, prepend `.callsieve/bin` only for that launched process, and print the first required `callsieve agent-context` command.
 
 This repo includes `benchmarks/codex-chatgpt-manifest.local.json` as the local Codex pilot manifest.
 
@@ -447,7 +464,7 @@ cargo run -- shim install . --force
 cargo run -- shim doctor .
 ```
 
-The shim wrappers call `callsieve grep` before passing through to the real `rg` or `grep` command captured at install time.
+The install writes a local `callsieve` launcher plus wrappers that call `callsieve grep` before passing through to the real `rg` or `grep` command captured at install time.
 
 ## Fresh Indexes
 
@@ -510,7 +527,7 @@ See [docs/MCP.md](docs/MCP.md) for Codex, Claude Code, Claude Desktop, Cursor, C
 - no cloud services
 - no API keys
 - no proprietary code leaves the machine
-- no SaaS app, auth system, web dashboard, or vector DB in the MVP
+- no SaaS app, auth system, web dashboard, or vector DB in the current local-first product
 
 ## Retrieval Model
 
@@ -524,7 +541,7 @@ User question
   -> agent context
 ```
 
-The MVP uses deterministic ranking first:
+The current retrieval model uses deterministic ranking first:
 
 - exact symbol match
 - exact path or filename match

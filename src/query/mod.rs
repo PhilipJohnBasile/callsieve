@@ -370,6 +370,8 @@ struct ObservedSessionSummary {
 pub struct BenchmarkReportManifest {
     repos: Vec<BenchmarkReportRepoInput>,
     #[serde(default)]
+    protocol: Option<String>,
+    #[serde(default)]
     thresholds: PilotThresholds,
     #[serde(default)]
     audit: ProofAuditInput,
@@ -383,6 +385,10 @@ struct ProofAuditInput {
     rejected_sessions: usize,
     #[serde(default)]
     token_accounting_sources: Vec<String>,
+    #[serde(default)]
+    product_market: ProductMarketInput,
+    #[serde(default)]
+    scale_validation: ScaleValidationInput,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -391,7 +397,19 @@ struct BenchmarkReportRepoInput {
     #[serde(default)]
     label: Option<String>,
     #[serde(default)]
+    team: Option<String>,
+    #[serde(default)]
     languages: Vec<String>,
+    #[serde(default)]
+    clients: Vec<String>,
+    #[serde(default)]
+    task_categories: Vec<String>,
+    #[serde(default)]
+    scale_class: Option<String>,
+    #[serde(default)]
+    scale_criteria: Vec<String>,
+    #[serde(default)]
+    proof_tier: Option<String>,
     #[serde(default)]
     external: bool,
     #[serde(default, alias = "suite", alias = "suite_path", alias = "tasks")]
@@ -451,6 +469,34 @@ impl BenchmarkReportRepoInput {
     }
 }
 
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+struct ProductMarketInput {
+    #[serde(default)]
+    teams_completed_pilots: usize,
+    #[serde(default, alias = "paid_or_converted_teams")]
+    paid_pilot_or_converted_teams: usize,
+    #[serde(default, alias = "teams_with_20_sessions")]
+    teams_with_20_plus_sessions: usize,
+    #[serde(default, alias = "disappointed_teams")]
+    meaningfully_worse_without_teams: usize,
+    #[serde(default, alias = "case_study_teams")]
+    quote_approved_case_study_teams: usize,
+    #[serde(default, alias = "renewal_or_loi_teams")]
+    renewal_expansion_or_loi_teams: usize,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+struct ScaleValidationInput {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    agent_context_p95_latency_ms: Option<f64>,
+    #[serde(default)]
+    index_failures: usize,
+    #[serde(default)]
+    stale_index_failures: usize,
+    #[serde(default)]
+    crashes: usize,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct PilotThresholds {
     #[serde(default = "default_min_recall")]
@@ -458,11 +504,27 @@ pub struct PilotThresholds {
     #[serde(default = "default_min_token_reduction_percent")]
     minimum_token_reduction_percent: f64,
     #[serde(default)]
+    minimum_repos: usize,
+    #[serde(default)]
     minimum_observed_sessions: usize,
     #[serde(default)]
     minimum_external_repos: usize,
+    #[serde(default)]
+    minimum_scale_proxy_repos: usize,
+    #[serde(default)]
+    minimum_clients: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    required_clients: Vec<String>,
+    #[serde(default)]
+    minimum_languages: usize,
+    #[serde(default)]
+    minimum_task_categories: usize,
     #[serde(default = "default_min_observed_token_reduction_percent")]
     minimum_observed_token_reduction_percent: f64,
+    #[serde(default)]
+    minimum_positive_savings_session_percent: f64,
+    #[serde(default)]
+    minimum_sessions_over_30_percent_savings_percent: f64,
     #[serde(default = "default_maximum_controlled_replay_ratio")]
     maximum_controlled_replay_ratio: f64,
     #[serde(default)]
@@ -479,6 +541,26 @@ pub struct PilotThresholds {
     require_codex_bootstrap: bool,
     #[serde(default)]
     require_transcript_token_accounting: bool,
+    #[serde(default, alias = "minimum_paid_pilot_teams")]
+    minimum_pilot_teams: usize,
+    #[serde(default)]
+    minimum_paid_or_converted_teams: usize,
+    #[serde(default)]
+    minimum_teams_with_20_sessions: usize,
+    #[serde(default)]
+    minimum_meaningfully_worse_without_teams: usize,
+    #[serde(default)]
+    minimum_case_study_teams: usize,
+    #[serde(default)]
+    minimum_renewal_or_loi_teams: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    maximum_agent_context_p95_latency_ms: Option<f64>,
+    #[serde(default)]
+    maximum_scale_index_failures: usize,
+    #[serde(default)]
+    maximum_stale_index_failures: usize,
+    #[serde(default)]
+    maximum_scale_crashes: usize,
 }
 
 impl Default for PilotThresholds {
@@ -486,10 +568,18 @@ impl Default for PilotThresholds {
         Self {
             minimum_recall: default_min_recall(),
             minimum_token_reduction_percent: default_min_token_reduction_percent(),
+            minimum_repos: 0,
             minimum_observed_sessions: 0,
             minimum_external_repos: 0,
+            minimum_scale_proxy_repos: 0,
+            minimum_clients: 0,
+            required_clients: Vec::new(),
+            minimum_languages: 0,
+            minimum_task_categories: 0,
             minimum_observed_token_reduction_percent: default_min_observed_token_reduction_percent(
             ),
+            minimum_positive_savings_session_percent: 0.0,
+            minimum_sessions_over_30_percent_savings_percent: 0.0,
             maximum_controlled_replay_ratio: default_maximum_controlled_replay_ratio(),
             maximum_trace_violations: 0,
             maximum_critical_misses: 0,
@@ -498,6 +588,16 @@ impl Default for PilotThresholds {
             require_lsp_where_available: false,
             require_codex_bootstrap: false,
             require_transcript_token_accounting: false,
+            minimum_pilot_teams: 0,
+            minimum_paid_or_converted_teams: 0,
+            minimum_teams_with_20_sessions: 0,
+            minimum_meaningfully_worse_without_teams: 0,
+            minimum_case_study_teams: 0,
+            minimum_renewal_or_loi_teams: 0,
+            maximum_agent_context_p95_latency_ms: None,
+            maximum_scale_index_failures: 0,
+            maximum_stale_index_failures: 0,
+            maximum_scale_crashes: 0,
         }
     }
 }
@@ -547,8 +647,20 @@ struct BenchmarkReportRepoOutput {
     #[serde(skip_serializing_if = "Option::is_none")]
     label: Option<String>,
     path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    team: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     languages: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    clients: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    task_categories: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scale_class: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    scale_criteria: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    proof_tier: Option<String>,
     external: bool,
     suite_path: String,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -631,14 +743,24 @@ struct PilotProofSummary {
     planned_tasks: usize,
     rejected_sessions: usize,
     token_accounting_sources: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    protocol: Option<String>,
     observed_sessions: usize,
     controlled_replay_sessions: usize,
     unclassified_sessions: usize,
     external_repos: usize,
+    scale_proxy_repos: usize,
+    scale_classes: Vec<BreakdownCount>,
+    clients: Vec<String>,
     languages: Vec<String>,
+    task_categories: Vec<String>,
     expected_file_recall: f64,
     token_reduction_percent: f64,
     observed_token_reduction_percent: f64,
+    positive_savings_sessions: usize,
+    positive_savings_session_percent: f64,
+    sessions_over_30_percent_savings: usize,
+    sessions_over_30_percent_savings_percent: f64,
     controlled_replay_ratio: f64,
     token_savings: isize,
     avoided_grep_commands: usize,
@@ -646,6 +768,12 @@ struct PilotProofSummary {
     trace_policy_violations: usize,
     critical_files_still_missed: usize,
     transcript_token_accounting_sessions: usize,
+    transcript_token_accounting_percent: f64,
+    per_client: Vec<BreakdownCount>,
+    per_scale_class: Vec<BreakdownCount>,
+    per_task_category: Vec<BreakdownCount>,
+    product_market: ProductMarketInput,
+    scale_validation: ScaleValidationInput,
     fresh_indexes: usize,
     daemon_fresh_repos: usize,
     lsp_enriched_repos: usize,
@@ -654,11 +782,27 @@ struct PilotProofSummary {
 }
 
 #[derive(Debug, Serialize)]
+struct BreakdownCount {
+    name: String,
+    count: usize,
+}
+
+#[derive(Debug, Serialize)]
 struct PilotRepoOutput {
     #[serde(skip_serializing_if = "Option::is_none")]
     label: Option<String>,
     path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    team: Option<String>,
     languages: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    clients: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    task_categories: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scale_class: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    proof_tier: Option<String>,
     status: IndexStatusOutput,
     trace_check: TraceCheckOutput,
     threshold_status: String,
@@ -1594,7 +1738,13 @@ pub fn benchmark_report(
         repos.push(BenchmarkReportRepoOutput {
             label: repo.label,
             path: repo.path.display().to_string(),
+            team: repo.team,
             languages: repo.languages,
+            clients: repo.clients,
+            task_categories: repo.task_categories,
+            scale_class: repo.scale_class,
+            scale_criteria: repo.scale_criteria,
+            proof_tier: repo.proof_tier,
             external: is_external,
             suite_path: suite_paths
                 .first()
@@ -1670,6 +1820,10 @@ pub fn pilot_report(
     let mut repos = Vec::new();
     let mut failures = Vec::new();
     let mut language_set = BTreeSet::new();
+    let mut client_set = BTreeSet::new();
+    let mut task_category_set = BTreeSet::new();
+    let mut scale_class_counts = BTreeMap::new();
+    let mut observed_session_evidence = ObservedTraceEvidence::default();
     let mut trace_policy_violations = 0usize;
     let mut fresh_indexes = 0usize;
     let mut daemon_fresh_repos = 0usize;
@@ -1677,6 +1831,7 @@ pub fn pilot_report(
     let mut lsp_available_repos = 0usize;
     let mut codex_bootstrap_repos = 0usize;
     let mut external_repos = 0usize;
+    let mut scale_proxy_repos = 0usize;
     let mut transcript_token_accounting_sessions = 0usize;
     let mut observed_trace_accumulator = TraceAccumulator::default();
     let mut controlled_trace_accumulator = TraceAccumulator::default();
@@ -1686,10 +1841,28 @@ pub fn pilot_report(
         let index = store::json_store::load_index(&repo.path).ok();
         let status = index_status(&repo.path, index.as_ref());
         let is_external = repo_is_external(repo);
+        let repo_scale_class = repo_scale_class_name(repo);
         let codex_bootstrap = codex_bootstrap_installed(&repo.path);
         let daemon_fresh = daemon_is_fresh(&repo.path);
         if is_external {
             external_repos += 1;
+        }
+        if repo_is_scale_proxy(repo) {
+            scale_proxy_repos += 1;
+        }
+        *scale_class_counts
+            .entry(repo_scale_class.clone())
+            .or_insert(0usize) += 1;
+        for client in &repo.clients {
+            client_set.insert(normalized_dimension(client));
+        }
+        for category in &repo.task_categories {
+            task_category_set.insert(normalized_dimension(category));
+        }
+        for suite_path in repo.suite_paths() {
+            for category in task_categories_from_suite(&suite_path)? {
+                task_category_set.insert(normalized_dimension(&category));
+            }
         }
         if status.fresh {
             fresh_indexes += 1;
@@ -1737,6 +1910,13 @@ pub fn pilot_report(
                     if trace_token_accounting_source(&trace_value) == "transcript_context_tokens" {
                         transcript_token_accounting_sessions += trace_summary.observed_sessions;
                     }
+                    observed_session_evidence.add_trace(
+                        &trace_value,
+                        repo,
+                        &repo_scale_class,
+                        &mut client_set,
+                        &mut task_category_set,
+                    )?;
                     if repo
                         .thresholds(&manifest.thresholds)
                         .require_transcript_token_accounting
@@ -1883,7 +2063,12 @@ pub fn pilot_report(
         repos.push(PilotRepoOutput {
             label: repo.label.clone(),
             path: repo.path.display().to_string(),
+            team: repo.team.clone(),
             languages,
+            clients: repo.clients.clone(),
+            task_categories: repo.task_categories.clone(),
+            scale_class: repo.scale_class.clone(),
+            proof_tier: repo.proof_tier.clone(),
             status,
             trace_check,
             threshold_status: if repo_failed { "fail" } else { "pass" }.to_string(),
@@ -1928,6 +2113,24 @@ pub fn pilot_report(
     } else {
         controlled_replay_sessions as f64 / total_trace_sessions as f64
     };
+    let positive_savings_session_percent = percent(
+        observed_session_evidence.positive_savings_sessions,
+        observed_session_evidence.sessions,
+    );
+    let sessions_over_30_percent_savings_percent = percent(
+        observed_session_evidence.sessions_over_30_percent_savings,
+        observed_session_evidence.sessions,
+    );
+    let transcript_token_accounting_percent =
+        percent(transcript_token_accounting_sessions, observed_sessions);
+    let clients: Vec<String> = client_set
+        .into_iter()
+        .filter(|client| !client.is_empty())
+        .collect();
+    let task_categories: Vec<String> = task_category_set
+        .into_iter()
+        .filter(|category| !category.is_empty())
+        .collect();
 
     let proof = PilotProofSummary {
         repos: benchmark.summary.repos,
@@ -1935,14 +2138,24 @@ pub fn pilot_report(
         planned_tasks: manifest.audit.planned_tasks,
         rejected_sessions: manifest.audit.rejected_sessions,
         token_accounting_sources: manifest.audit.token_accounting_sources.clone(),
+        protocol: manifest.protocol.clone(),
         observed_sessions,
         controlled_replay_sessions,
         unclassified_sessions,
         external_repos,
+        scale_proxy_repos,
+        scale_classes: breakdown_counts(scale_class_counts),
+        clients,
         languages: language_set.into_iter().collect(),
+        task_categories,
         expected_file_recall: benchmark.summary.expected_file_recall,
         token_reduction_percent: benchmark.summary.average_estimated_token_reduction_percent,
         observed_token_reduction_percent,
+        positive_savings_sessions: observed_session_evidence.positive_savings_sessions,
+        positive_savings_session_percent,
+        sessions_over_30_percent_savings: observed_session_evidence
+            .sessions_over_30_percent_savings,
+        sessions_over_30_percent_savings_percent,
         controlled_replay_ratio,
         token_savings: benchmark.summary.total_estimated_token_savings,
         avoided_grep_commands: benchmark.summary.total_avoided_grep_commands,
@@ -1950,6 +2163,12 @@ pub fn pilot_report(
         trace_policy_violations,
         critical_files_still_missed,
         transcript_token_accounting_sessions,
+        transcript_token_accounting_percent,
+        per_client: breakdown_counts(observed_session_evidence.client_sessions),
+        per_scale_class: breakdown_counts(observed_session_evidence.scale_class_sessions),
+        per_task_category: breakdown_counts(observed_session_evidence.task_category_sessions),
+        product_market: manifest.audit.product_market.clone(),
+        scale_validation: manifest.audit.scale_validation.clone(),
         fresh_indexes,
         daemon_fresh_repos,
         lsp_enriched_repos,
@@ -1957,6 +2176,16 @@ pub fn pilot_report(
         codex_bootstrap_repos,
     };
     let session_count = proof.sessions;
+    if proof.repos < manifest.thresholds.minimum_repos {
+        push_global_failure(
+            &mut failures,
+            "minimum_repos",
+            format!(
+                "repos {} are below threshold {}",
+                proof.repos, manifest.thresholds.minimum_repos
+            ),
+        );
+    }
     if proof.observed_sessions < manifest.thresholds.minimum_observed_sessions {
         failures.push(PilotFailure {
             label: None,
@@ -1990,6 +2219,68 @@ pub fn pilot_report(
             ),
         });
     }
+    if proof.scale_proxy_repos < manifest.thresholds.minimum_scale_proxy_repos {
+        push_global_failure(
+            &mut failures,
+            "minimum_scale_proxy_repos",
+            format!(
+                "scale proxy repos {} are below threshold {}",
+                proof.scale_proxy_repos, manifest.thresholds.minimum_scale_proxy_repos
+            ),
+        );
+    }
+    let observed_clients: BTreeSet<String> = proof
+        .per_client
+        .iter()
+        .map(|client| client.name.clone())
+        .collect();
+    if observed_clients.len() < manifest.thresholds.minimum_clients {
+        push_global_failure(
+            &mut failures,
+            "minimum_clients",
+            format!(
+                "observed clients {} are below threshold {}",
+                observed_clients.len(),
+                manifest.thresholds.minimum_clients
+            ),
+        );
+    }
+    let missing_clients: Vec<String> = manifest
+        .thresholds
+        .required_clients
+        .iter()
+        .map(|client| normalized_dimension(client))
+        .filter(|client| !observed_clients.contains(client))
+        .collect();
+    if !missing_clients.is_empty() {
+        push_global_failure(
+            &mut failures,
+            "required_clients",
+            format!("missing required clients: {}", missing_clients.join(", ")),
+        );
+    }
+    if proof.languages.len() < manifest.thresholds.minimum_languages {
+        push_global_failure(
+            &mut failures,
+            "minimum_languages",
+            format!(
+                "languages {} are below threshold {}",
+                proof.languages.len(),
+                manifest.thresholds.minimum_languages
+            ),
+        );
+    }
+    if proof.task_categories.len() < manifest.thresholds.minimum_task_categories {
+        push_global_failure(
+            &mut failures,
+            "minimum_task_categories",
+            format!(
+                "task categories {} are below threshold {}",
+                proof.task_categories.len(),
+                manifest.thresholds.minimum_task_categories
+            ),
+        );
+    }
     if manifest.thresholds.require_transcript_token_accounting
         && proof.transcript_token_accounting_sessions < proof.observed_sessions
     {
@@ -2002,6 +2293,36 @@ pub fn pilot_report(
                 proof.transcript_token_accounting_sessions, proof.observed_sessions
             ),
         });
+    }
+    if proof.positive_savings_session_percent
+        < manifest.thresholds.minimum_positive_savings_session_percent
+    {
+        push_global_failure(
+            &mut failures,
+            "minimum_positive_savings_session_percent",
+            format!(
+                "positive-savings sessions {:.1}% are below threshold {:.1}%",
+                proof.positive_savings_session_percent,
+                manifest.thresholds.minimum_positive_savings_session_percent
+            ),
+        );
+    }
+    if proof.sessions_over_30_percent_savings_percent
+        < manifest
+            .thresholds
+            .minimum_sessions_over_30_percent_savings_percent
+    {
+        push_global_failure(
+            &mut failures,
+            "minimum_sessions_over_30_percent_savings_percent",
+            format!(
+                "sessions above 30% savings {:.1}% are below threshold {:.1}%",
+                proof.sessions_over_30_percent_savings_percent,
+                manifest
+                    .thresholds
+                    .minimum_sessions_over_30_percent_savings_percent
+            ),
+        );
     }
     if proof.observed_token_reduction_percent
         < manifest.thresholds.minimum_observed_token_reduction_percent
@@ -2016,6 +2337,134 @@ pub fn pilot_report(
                 manifest.thresholds.minimum_observed_token_reduction_percent
             ),
         });
+    }
+    if proof.product_market.teams_completed_pilots < manifest.thresholds.minimum_pilot_teams {
+        push_global_failure(
+            &mut failures,
+            "minimum_pilot_teams",
+            format!(
+                "pilot teams {} are below threshold {}",
+                proof.product_market.teams_completed_pilots,
+                manifest.thresholds.minimum_pilot_teams
+            ),
+        );
+    }
+    if proof.product_market.paid_pilot_or_converted_teams
+        < manifest.thresholds.minimum_paid_or_converted_teams
+    {
+        push_global_failure(
+            &mut failures,
+            "minimum_paid_or_converted_teams",
+            format!(
+                "paid or converted teams {} are below threshold {}",
+                proof.product_market.paid_pilot_or_converted_teams,
+                manifest.thresholds.minimum_paid_or_converted_teams
+            ),
+        );
+    }
+    if proof.product_market.teams_with_20_plus_sessions
+        < manifest.thresholds.minimum_teams_with_20_sessions
+    {
+        push_global_failure(
+            &mut failures,
+            "minimum_teams_with_20_sessions",
+            format!(
+                "teams with 20+ sessions {} are below threshold {}",
+                proof.product_market.teams_with_20_plus_sessions,
+                manifest.thresholds.minimum_teams_with_20_sessions
+            ),
+        );
+    }
+    if proof.product_market.meaningfully_worse_without_teams
+        < manifest.thresholds.minimum_meaningfully_worse_without_teams
+    {
+        push_global_failure(
+            &mut failures,
+            "minimum_meaningfully_worse_without_teams",
+            format!(
+                "meaningfully worse without teams {} are below threshold {}",
+                proof.product_market.meaningfully_worse_without_teams,
+                manifest.thresholds.minimum_meaningfully_worse_without_teams
+            ),
+        );
+    }
+    if proof.product_market.quote_approved_case_study_teams
+        < manifest.thresholds.minimum_case_study_teams
+    {
+        push_global_failure(
+            &mut failures,
+            "minimum_case_study_teams",
+            format!(
+                "case-study teams {} are below threshold {}",
+                proof.product_market.quote_approved_case_study_teams,
+                manifest.thresholds.minimum_case_study_teams
+            ),
+        );
+    }
+    if proof.product_market.renewal_expansion_or_loi_teams
+        < manifest.thresholds.minimum_renewal_or_loi_teams
+    {
+        push_global_failure(
+            &mut failures,
+            "minimum_renewal_or_loi_teams",
+            format!(
+                "renewal, expansion, or LOI teams {} are below threshold {}",
+                proof.product_market.renewal_expansion_or_loi_teams,
+                manifest.thresholds.minimum_renewal_or_loi_teams
+            ),
+        );
+    }
+    if let Some(max_latency) = manifest.thresholds.maximum_agent_context_p95_latency_ms {
+        match proof.scale_validation.agent_context_p95_latency_ms {
+            Some(actual) if actual <= max_latency => {}
+            Some(actual) => push_global_failure(
+                &mut failures,
+                "maximum_agent_context_p95_latency_ms",
+                format!(
+                    "p95 agent-context latency {:.1}ms exceeds threshold {:.1}ms",
+                    actual, max_latency
+                ),
+            ),
+            None => push_global_failure(
+                &mut failures,
+                "maximum_agent_context_p95_latency_ms",
+                "p95 agent-context latency is missing".to_string(),
+            ),
+        }
+    }
+    if proof.scale_validation.index_failures > manifest.thresholds.maximum_scale_index_failures {
+        push_global_failure(
+            &mut failures,
+            "maximum_scale_index_failures",
+            format!(
+                "scale index failures {} exceed threshold {}",
+                proof.scale_validation.index_failures,
+                manifest.thresholds.maximum_scale_index_failures
+            ),
+        );
+    }
+    if proof.scale_validation.stale_index_failures
+        > manifest.thresholds.maximum_stale_index_failures
+    {
+        push_global_failure(
+            &mut failures,
+            "maximum_stale_index_failures",
+            format!(
+                "stale index failures {} exceed threshold {}",
+                proof.scale_validation.stale_index_failures,
+                manifest.thresholds.maximum_stale_index_failures
+            ),
+        );
+    }
+    if proof.scale_validation.crashes > manifest.thresholds.maximum_scale_crashes {
+        push_global_failure(
+            &mut failures,
+            "maximum_scale_crashes",
+            format!(
+                "scale validation crashes {} exceed threshold {}",
+                proof.scale_validation.crashes, manifest.thresholds.maximum_scale_crashes
+            ),
+        );
     }
     if proof.controlled_replay_ratio > manifest.thresholds.maximum_controlled_replay_ratio {
         failures.push(PilotFailure {
@@ -2071,6 +2520,217 @@ pub fn proof_report(
         repos: pilot.repos,
         failures: pilot.failures,
     })
+}
+
+pub fn enterprise_proof_report(
+    manifest: BenchmarkReportManifest,
+    limit: usize,
+    snippets_per_file: usize,
+    include_snippets: bool,
+) -> Result<ProofReportOutput> {
+    let mut output = proof_report(manifest, limit, snippets_per_file, include_snippets)?;
+    output.command = "enterprise-proof-report";
+    output.claim = "Broad developer-session proof is gated on 1,000 observed paired sessions, multi-client coverage, scale-proxy repositories, strict trace policy, and paid-pilot PMF evidence. Do not claim broad coverage until status is pass.";
+    Ok(output)
+}
+
+#[derive(Default)]
+struct ObservedTraceEvidence {
+    sessions: usize,
+    positive_savings_sessions: usize,
+    sessions_over_30_percent_savings: usize,
+    client_sessions: BTreeMap<String, usize>,
+    scale_class_sessions: BTreeMap<String, usize>,
+    task_category_sessions: BTreeMap<String, usize>,
+}
+
+impl ObservedTraceEvidence {
+    fn add_trace(
+        &mut self,
+        value: &serde_json::Value,
+        repo: &BenchmarkReportRepoInput,
+        scale_class: &str,
+        client_set: &mut BTreeSet<String>,
+        task_category_set: &mut BTreeSet<String>,
+    ) -> Result<()> {
+        let default_client = trace_metadata_string(value, "client")
+            .or_else(|| repo.clients.first().cloned())
+            .unwrap_or_else(|| "unknown".to_string());
+        let default_category = task_category_from_value(value)
+            .or_else(|| repo.task_categories.first().cloned())
+            .unwrap_or_else(|| "unknown".to_string());
+        let scale_class = normalized_dimension(scale_class);
+
+        for task in trace_tasks_from_value(value.clone()) {
+            let Some(comparison) = observed_comparison_from_task(&task)? else {
+                continue;
+            };
+            let client = trace_metadata_string(&task, "client")
+                .or_else(|| trace_metadata_string(value, "client"))
+                .or_else(|| repo.clients.first().cloned())
+                .unwrap_or_else(|| default_client.clone());
+            let task_category = task_category_from_value(&task)
+                .or_else(|| task_category_from_value(value))
+                .or_else(|| repo.task_categories.first().cloned())
+                .unwrap_or_else(|| default_category.clone());
+            let client = normalized_or_unknown(&client);
+            let task_category = normalized_or_unknown(&task_category);
+            let observed = observed_session_output(comparison);
+
+            self.sessions += 1;
+            if observed.savings.token_savings > 0 {
+                self.positive_savings_sessions += 1;
+            }
+            if observed.savings.token_reduction_percent > 30.0 {
+                self.sessions_over_30_percent_savings += 1;
+            }
+            increment_count(&mut self.client_sessions, client.clone());
+            increment_count(&mut self.scale_class_sessions, scale_class.clone());
+            increment_count(&mut self.task_category_sessions, task_category.clone());
+            client_set.insert(client);
+            task_category_set.insert(task_category);
+        }
+
+        Ok(())
+    }
+}
+
+fn observed_comparison_from_task(
+    task: &serde_json::Value,
+) -> Result<Option<ObservedSessionComparison>> {
+    for key in ["session", "trace", "observed"] {
+        if let Some(value) = task.get(key)
+            && value.get("baseline").is_some()
+            && value.get("callsieve").is_some()
+        {
+            return Ok(Some(serde_json::from_value(value.clone())?));
+        }
+    }
+
+    if task.get("baseline").is_some() && task.get("callsieve").is_some() {
+        return Ok(Some(serde_json::from_value(task.clone())?));
+    }
+
+    Ok(None)
+}
+
+fn task_categories_from_suite(path: &Path) -> Result<Vec<String>> {
+    let json = fs::read_to_string(path)?;
+    let value: serde_json::Value = serde_json::from_str(&json)?;
+    let mut categories = Vec::new();
+
+    categories.extend(string_array(value.get("task_categories")));
+    if let Some(tasks) = value.get("tasks").and_then(serde_json::Value::as_array) {
+        for task in tasks {
+            if let Some(category) = task_category_from_value(task) {
+                categories.push(category);
+            }
+        }
+    }
+
+    categories.sort();
+    categories.dedup();
+    Ok(categories)
+}
+
+fn task_category_from_value(value: &serde_json::Value) -> Option<String> {
+    optional_string(value.get("task_category"))
+        .or_else(|| optional_string(value.get("category")))
+        .or_else(|| trace_metadata_string(value, "task_category"))
+        .or_else(|| trace_metadata_string(value, "category"))
+}
+
+fn trace_metadata_string(value: &serde_json::Value, key: &str) -> Option<String> {
+    value
+        .get("metadata")
+        .and_then(|metadata| metadata.get(key))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+}
+
+fn repo_scale_class_name(repo: &BenchmarkReportRepoInput) -> String {
+    repo.scale_class
+        .as_deref()
+        .or(repo.proof_tier.as_deref())
+        .map(normalized_dimension)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| {
+            if repo.external {
+                "external".to_string()
+            } else {
+                "local_harness".to_string()
+            }
+        })
+}
+
+fn repo_is_scale_proxy(repo: &BenchmarkReportRepoInput) -> bool {
+    let scale_class = repo_scale_class_name(repo);
+    scale_class.contains("scale_proxy")
+        || scale_class.contains("microsoft_scale")
+        || repo
+            .scale_criteria
+            .iter()
+            .map(|criteria| normalized_dimension(criteria))
+            .any(|criteria| {
+                criteria.contains("1m_loc")
+                    || criteria.contains("100k_files")
+                    || criteria.contains("1000_modules")
+                    || criteria.contains("monorepo")
+                    || criteria.contains("enterprise")
+            })
+}
+
+fn normalized_or_unknown(value: &str) -> String {
+    let value = normalized_dimension(value);
+    if value.is_empty() {
+        "unknown".to_string()
+    } else {
+        value
+    }
+}
+
+fn normalized_dimension(value: &str) -> String {
+    let mut normalized = String::new();
+    let mut last_separator = false;
+    for ch in value.trim().chars() {
+        if ch.is_ascii_alphanumeric() {
+            normalized.push(ch.to_ascii_lowercase());
+            last_separator = false;
+        } else if !last_separator {
+            normalized.push('_');
+            last_separator = true;
+        }
+    }
+    normalized.trim_matches('_').to_string()
+}
+
+fn increment_count(counts: &mut BTreeMap<String, usize>, key: String) {
+    *counts.entry(key).or_insert(0) += 1;
+}
+
+fn breakdown_counts(counts: BTreeMap<String, usize>) -> Vec<BreakdownCount> {
+    counts
+        .into_iter()
+        .filter(|(name, _)| !name.is_empty())
+        .map(|(name, count)| BreakdownCount { name, count })
+        .collect()
+}
+
+fn percent(numerator: usize, denominator: usize) -> f64 {
+    if denominator == 0 {
+        0.0
+    } else {
+        (numerator as f64 / denominator as f64) * 100.0
+    }
+}
+
+fn push_global_failure(failures: &mut Vec<PilotFailure>, check: &str, message: String) {
+    failures.push(PilotFailure {
+        label: None,
+        path: ".".to_string(),
+        check: check.to_string(),
+        message,
+    });
 }
 
 pub fn benchmark_doctor_from_str(manifest_json: &str) -> Result<BenchmarkDoctorOutput> {
@@ -4101,13 +4761,20 @@ mod tests {
         );
 
         let manifest = BenchmarkReportManifest {
+            protocol: None,
             thresholds: PilotThresholds::default(),
             audit: ProofAuditInput::default(),
             repos: vec![
                 BenchmarkReportRepoInput {
                     path: repo_a.path().to_path_buf(),
                     label: Some("repo-a".to_string()),
+                    team: None,
                     languages: Vec::new(),
+                    clients: Vec::new(),
+                    task_categories: Vec::new(),
+                    scale_class: None,
+                    scale_criteria: Vec::new(),
+                    proof_tier: None,
                     external: false,
                     suite_path: Some(suite_a),
                     suite_paths: Vec::new(),
@@ -4120,7 +4787,13 @@ mod tests {
                 BenchmarkReportRepoInput {
                     path: repo_b.path().to_path_buf(),
                     label: Some("repo-b".to_string()),
+                    team: None,
                     languages: Vec::new(),
+                    clients: Vec::new(),
+                    task_categories: Vec::new(),
+                    scale_class: None,
+                    scale_criteria: Vec::new(),
+                    proof_tier: None,
                     external: false,
                     suite_path: Some(suite_b),
                     suite_paths: Vec::new(),
