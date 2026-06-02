@@ -8,12 +8,6 @@ CallSieve is the local codebase filter for AI coding agents.
 
 Agentic coding tools waste massive context and cost rediscovering codebases through repeated grep, ripgrep, file reads, directory scans, and duplicate exploration.
 
-The keystone observation:
-
-> "Almost all context windows for developer sessions, truly massive percentages, are filled up by grepping. If people came up with a solution for less grepping in projects, that would save a lot of tokens and would probably be worth money."
->
-> - Microsoft engineer
-
 This makes coding agents:
 - slower
 - more expensive
@@ -108,11 +102,15 @@ callsieve enterprise-proof-report <manifest.json>
 
 ## Proof Program
 
-CallSieve now has three evidence layers:
+CallSieve now has three evidence tiers:
 
-- local harness and benchmark evidence for fast iteration
-- observed-session proof reports that separate human or agent telemetry from controlled replay
-- enterprise-proof gates for broad claims: 1,000 observed sessions, Codex/Claude/Cursor coverage, Microsoft-scale OSS proxies, strict trace policy, transcript-token accounting, and paid-pilot PMF evidence
+- rehearsal evidence from deterministic retrieval fixtures, benchmark reports, platform-neutral context payload reduction, perf reports, and controlled replay
+- supplemental evidence from Ollama or local-model runs that can test prompts and expected files without counting as Codex proof
+- claim-counted evidence from real paired Codex sessions with transcript token accounting, transcript-backed files read, strict trace policy, and `pilot-qa` passing before `proof-report`
+
+`context_payload_reduction` is the cross-agent proxy metric. It estimates the repo context payload CallSieve avoids versus deterministic grep/read replay, and can be compared across Codex, Claude, Gemini, Kimi, Cursor, Cline, Roo, and local agents. It is not observed whole-session token savings.
+
+The rehearsal layer should be self-healing for local-safe issues: rebuild indexes, regenerate controlled traces, resume passed steps, retry transient process failures, and emit scheduler-friendly JSON. Claim-counted proof should stay gated on real transcript evidence.
 
 The product claim stays gated. Broad developer-session language should wait until `enterprise-proof-report` returns `pass`.
 

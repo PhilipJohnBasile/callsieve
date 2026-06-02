@@ -1,8 +1,8 @@
 {
   "metadata": {
-    "collection": "controlled_replay",
     "client": "callsieve",
-    "model": "controlled-replay"
+    "model": "controlled-replay",
+    "collection": "controlled_replay"
   },
   "tasks": [
     {
@@ -16,8 +16,8 @@
       "session": {
         "baseline": {
           "grep_commands": 4,
-          "file_reads": 76,
-          "tokens": 236629,
+          "file_reads": 77,
+          "tokens": 236679,
           "commands": [
             "rg -n client benchmarks/github-httpx",
             "rg -n configuration benchmarks/github-httpx",
@@ -25,6 +25,7 @@
             "rg -n timeout benchmarks/github-httpx"
           ],
           "files_read": [
+            ".codex/config.toml",
             ".github/CONTRIBUTING.md",
             ".github/ISSUE_TEMPLATE/1-issue.md",
             ".github/workflows/test-suite.yml",
@@ -109,32 +110,36 @@
         },
         "callsieve": {
           "grep_commands": 0,
-          "file_reads": 20,
-          "tokens": 117789,
+          "file_reads": 24,
+          "tokens": 105082,
           "commands": [
-            "callsieve context benchmarks/github-httpx \"change timeout configuration and client request behavior\" --limit 20 --snippets-per-file 2"
+            "callsieve context benchmarks/github-httpx \"change timeout configuration and client request behavior\" --limit 24 --snippets-per-file 2"
           ],
           "files_read": [
+            "tests/test_timeouts.py",
+            "tests/client/test_properties.py",
             "httpx/_config.py",
             "httpx/_client.py",
             "httpx/_exceptions.py",
             "httpx/_models.py",
             "docs/advanced/timeouts.md",
+            "tests/test_config.py",
             "httpx/_api.py",
             "tests/client/test_async_client.py",
             "tests/client/test_auth.py",
             "tests/client/test_client.py",
             "tests/client/test_redirects.py",
-            "httpx/_auth.py",
             "CHANGELOG.md",
             "docs/advanced/transports.md",
+            "httpx/_auth.py",
+            ".codex/config.toml",
             "httpx/_main.py",
             "httpx/_transports/default.py",
-            "tests/test_timeouts.py",
             "docs/quickstart.md",
-            "httpx/_content.py",
             ".github/ISSUE_TEMPLATE/config.yml",
-            "httpx/_transports/asgi.py"
+            "httpx/_content.py",
+            "httpx/_urls.py",
+            "httpx/__init__.py"
           ],
           "notes": [
             "Controlled local replay, not human-session telemetry.",
@@ -241,32 +246,36 @@
         },
         "callsieve": {
           "grep_commands": 0,
-          "file_reads": 20,
-          "tokens": 97309,
+          "file_reads": 24,
+          "tokens": 90472,
           "commands": [
-            "callsieve context benchmarks/github-httpx \"change redirect handling and client redirect tests\" --limit 20 --snippets-per-file 2"
+            "callsieve context benchmarks/github-httpx \"change redirect handling and client redirect tests\" --limit 24 --snippets-per-file 2"
           ],
           "files_read": [
-            "httpx/_client.py",
-            "tests/client/test_async_client.py",
             "tests/client/test_client.py",
-            "tests/client/test_auth.py",
             "tests/client/test_redirects.py",
-            "tests/conftest.py",
+            "tests/client/test_async_client.py",
             "tests/client/test_headers.py",
+            "tests/client/test_event_hooks.py",
+            "tests/client/test_cookies.py",
+            "tests/client/test_properties.py",
+            "tests/client/test_queryparams.py",
+            "httpx/_client.py",
+            "tests/test_utils.py",
+            "tests/test_timeouts.py",
+            "tests/client/test_auth.py",
+            "tests/conftest.py",
             "httpx/__init__.py",
             "httpx/_exceptions.py",
             "httpx/_models.py",
             "httpx/_urls.py",
             "tests/client/__init__.py",
-            "tests/client/test_event_hooks.py",
             "tests/__init__.py",
-            "tests/client/test_proxies.py",
-            "tests/test_wsgi.py",
             "httpx/_auth.py",
-            "tests/client/test_cookies.py",
-            "tests/client/test_properties.py",
-            "tests/test_multipart.py"
+            "tests/test_wsgi.py",
+            "tests/client/test_proxies.py",
+            "httpx/_config.py",
+            "tests/models/test_responses.py"
           ],
           "notes": [
             "Controlled local replay, not human-session telemetry.",

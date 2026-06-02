@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeSet,
     fs,
     io::Write,
     path::{Path, PathBuf},
@@ -1359,6 +1360,335 @@ fn pilot_init_defaults_to_strict_100_session_claim_protocol() {
 }
 
 #[test]
+fn observed_codex_oss_50_milestone_matrix_is_exact() {
+    #[derive(Clone)]
+    struct ExternalTask {
+        repo: &'static str,
+        id: String,
+        expected_files: Vec<String>,
+    }
+
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let suites = [
+        (
+            "benchmarks/github-ripgrep",
+            "benchmarks/external-ripgrep-suite.json",
+        ),
+        ("benchmarks/github-fd", "benchmarks/external-fd-suite.json"),
+        (
+            "benchmarks/github-axum",
+            "benchmarks/external-axum-suite.json",
+        ),
+        (
+            "benchmarks/github-flask",
+            "benchmarks/external-flask-suite.json",
+        ),
+        (
+            "benchmarks/github-black",
+            "benchmarks/external-black-suite.json",
+        ),
+        (
+            "benchmarks/github-httpx",
+            "benchmarks/external-httpx-suite.json",
+        ),
+    ];
+
+    let mut base_tasks = Vec::new();
+    for (repo, suite_path) in suites {
+        let suite: Value =
+            serde_json::from_slice(&fs::read(root.join(suite_path)).unwrap()).unwrap();
+        for task in suite["tasks"].as_array().unwrap() {
+            assert!(
+                task.get("critical_files").is_none(),
+                "source suites should leave critical file expansion to the milestone setup"
+            );
+            let expected_files: Vec<String> = task["expected_files"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|file| file.as_str().unwrap().to_string())
+                .collect();
+            assert!(!expected_files.is_empty());
+            base_tasks.push(ExternalTask {
+                repo,
+                id: task["id"].as_str().unwrap().to_string(),
+                expected_files,
+            });
+        }
+    }
+
+    assert_eq!(base_tasks.len(), 12);
+
+    let mut rows = Vec::new();
+    for round in 1..=4 {
+        for task in &base_tasks {
+            rows.push((
+                format!("{}-codex-r{round:02}", task.id),
+                task.repo,
+                task.expected_files.clone(),
+                task.expected_files.clone(),
+            ));
+        }
+    }
+    for extra_id in ["ripgrep-ignore-walk", "httpx-timeouts-client"] {
+        let task = base_tasks
+            .iter()
+            .find(|task| task.id == extra_id)
+            .expect("extra repeat task should exist in base suites");
+        rows.push((
+            format!("{}-codex-r05", task.id),
+            task.repo,
+            task.expected_files.clone(),
+            task.expected_files.clone(),
+        ));
+    }
+
+    assert_eq!(rows.len(), 50);
+    let ids: BTreeSet<String> = rows.iter().map(|row| row.0.clone()).collect();
+    assert_eq!(ids.len(), 50);
+    assert!(ids.contains("ripgrep-ignore-walk-codex-r01"));
+    assert!(ids.contains("ripgrep-ignore-walk-codex-r05"));
+    assert!(ids.contains("httpx-timeouts-client-codex-r05"));
+
+    let repos: BTreeSet<&str> = rows.iter().map(|row| row.1).collect();
+    assert_eq!(repos.len(), 6);
+    for (_id, _repo, expected_files, critical_files) in rows {
+        assert_eq!(critical_files, expected_files);
+    }
+
+    let manifest: Value = serde_json::from_slice(
+        &fs::read(root.join("benchmarks/evidence/50-session-manifest.example.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(manifest["target_sessions"], 50);
+    assert_eq!(manifest["thresholds"]["minimum_observed_sessions"], 50);
+    assert_eq!(manifest["thresholds"]["minimum_external_repos"], 6);
+    assert_eq!(
+        manifest["thresholds"]["require_transcript_token_accounting"],
+        true
+    );
+    assert_eq!(
+        manifest["thresholds"]["maximum_controlled_replay_ratio"],
+        0.0
+    );
+}
+
+#[test]
+fn proof_rehearsal_rust_command_matrix_is_honest() {
+    let ledger_root = tempfile::tempdir().unwrap();
+    let ledger_path = ledger_root.path().join("rehearsal-run.local.json");
+    let output = run(&[
+        "proof-rehearsal",
+        "--preflight",
+        "--ledger",
+        ledger_path.to_str().unwrap(),
+    ]);
+    let rehearsal = json_allow_failure(&output);
+    assert_eq!(rehearsal["command"], "proof-rehearsal");
+    assert_eq!(rehearsal["mode"], "preflight");
+    assert_eq!(rehearsal["command_matrix"]["report_limit"], 24);
+    assert_eq!(
+        rehearsal["command_matrix"]["context_payload_reduction_included"],
+        true
+    );
+    assert_eq!(
+        rehearsal["command_matrix"]["context_payload_scope"],
+        "agent_platform_neutral"
+    );
+    assert_eq!(rehearsal["command_matrix"]["includes_proof_report"], false);
+    assert_eq!(rehearsal["claim_proof_included"], false);
+
+    let fixtures = rehearsal["command_matrix"]["external_fixtures"]
+        .as_array()
+        .unwrap();
+    assert_eq!(fixtures.len(), 6);
+    let repos: BTreeSet<&str> = fixtures
+        .iter()
+        .map(|fixture| fixture["repo"].as_str().unwrap())
+        .collect();
+    let suites: BTreeSet<&str> = fixtures
+        .iter()
+        .map(|fixture| fixture["suite"].as_str().unwrap())
+        .collect();
+    let traces: BTreeSet<&str> = fixtures
+        .iter()
+        .map(|fixture| fixture["trace"].as_str().unwrap())
+        .collect();
+    let expected_repos = [
+        "benchmarks/github-ripgrep",
+        "benchmarks/github-fd",
+        "benchmarks/github-axum",
+        "benchmarks/github-flask",
+        "benchmarks/github-black",
+        "benchmarks/github-httpx",
+    ];
+    let expected_suites = [
+        "benchmarks/external-ripgrep-suite.json",
+        "benchmarks/external-fd-suite.json",
+        "benchmarks/external-axum-suite.json",
+        "benchmarks/external-flask-suite.json",
+        "benchmarks/external-black-suite.json",
+        "benchmarks/external-httpx-suite.json",
+    ];
+    let expected_traces = [
+        "benchmarks/external-ripgrep-trace.json",
+        "benchmarks/external-fd-trace.json",
+        "benchmarks/external-axum-trace.json",
+        "benchmarks/external-flask-trace.json",
+        "benchmarks/external-black-trace.json",
+        "benchmarks/external-httpx-trace.json",
+    ];
+
+    for repo in expected_repos {
+        assert!(repos.contains(repo), "missing external repo {repo}");
+    }
+    for suite in expected_suites {
+        assert!(suites.contains(suite), "missing external suite {suite}");
+    }
+    for trace in expected_traces {
+        assert!(
+            traces.contains(trace),
+            "missing controlled replay trace {trace}"
+        );
+    }
+
+    let output_text = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !output_text.contains("proof-report"),
+        "rehearsal must not run claim proof"
+    );
+}
+
+#[test]
+fn setup_observed_codex_oss_50_writes_rust_manifest() {
+    let manifest_root = tempfile::tempdir().unwrap();
+    let manifest_path = manifest_root
+        .path()
+        .join("observed-codex-oss-50.local.json");
+
+    let setup = json(&run(&[
+        "setup-observed-codex-oss-50",
+        "--manifest",
+        manifest_path.to_str().unwrap(),
+        "--skip-repo-check",
+    ]));
+    assert_eq!(setup["command"], "setup-observed-codex-oss-50");
+    assert_eq!(setup["status"], "ready_for_observed_collection");
+    assert_eq!(setup["task_count"], 50);
+    assert_eq!(setup["target_sessions"], 50);
+    assert_eq!(setup["repos"].as_array().unwrap().len(), 6);
+
+    let manifest: Value = serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+    assert_eq!(manifest["target_sessions"], 50);
+    assert_eq!(manifest["tasks"].as_array().unwrap().len(), 50);
+    assert_eq!(
+        manifest["protocol"]["collection"],
+        "real_codex_chatgpt_developer_sessions"
+    );
+    assert_eq!(manifest["thresholds"]["minimum_external_repos"], 6);
+    assert_eq!(
+        manifest["thresholds"]["require_transcript_token_accounting"],
+        true
+    );
+    assert!(manifest["tasks"].as_array().unwrap().iter().all(|task| {
+        task["client"] == "codex"
+            && task["model"] == "gpt-5-codex"
+            && task["external"] == true
+            && task["token_accounting_source"] == "transcript_context_tokens"
+            && task["expected_files"] == task["critical_files"]
+    }));
+}
+
+#[test]
+fn codex_observed_recording_rust_helper_validates_inputs_and_wraps_pilot_run() {
+    let manifest_root = tempfile::tempdir().unwrap();
+    let manifest_path = manifest_root.path().join("observed.json");
+
+    let dry_run = json(&run(&[
+        "record-codex-observed-session",
+        "--manifest",
+        manifest_path.to_str().unwrap(),
+        "--task-id",
+        "auth",
+        "--mode",
+        "callsieve",
+        "--command",
+        "callsieve agent-context . \"change token expiry\"",
+        "--tokens",
+        "200",
+        "--files-read",
+        "src/main.rs",
+        "--dry-run",
+    ]));
+    assert_eq!(dry_run["command"], "record-codex-observed-session");
+    assert_eq!(dry_run["status"], "dry_run");
+    assert_eq!(dry_run["task_id"], "auth");
+    assert_eq!(dry_run["mode"], "callsieve");
+    assert_eq!(dry_run["tokens"], 200);
+    assert!(dry_run.get("pilot_run").is_none());
+    let command = dry_run["pilot_run_command"].as_str().unwrap();
+    assert!(command.contains("callsieve pilot-run"));
+    assert!(command.contains("--task-id auth"));
+    assert!(command.contains("--mode callsieve"));
+    assert!(command.contains("--files-read src/main.rs"));
+    assert!(command.contains("--tokens 200"));
+    assert!(
+        dry_run["next_qa"]
+            .as_str()
+            .unwrap()
+            .contains("callsieve pilot-qa")
+    );
+
+    let zero_tokens = run(&[
+        "record-codex-observed-session",
+        "--manifest",
+        manifest_path.to_str().unwrap(),
+        "--task-id",
+        "auth",
+        "--mode",
+        "baseline",
+        "--command",
+        "rg auth",
+        "--tokens",
+        "0",
+        "--files-read",
+        "src/main.rs",
+        "--dry-run",
+    ]);
+    assert!(!zero_tokens.status.success());
+    let zero_tokens = json_allow_failure(&zero_tokens);
+    assert!(
+        zero_tokens["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Do not estimate tokens")
+    );
+
+    let missing_files = run(&[
+        "record-codex-observed-session",
+        "--manifest",
+        manifest_path.to_str().unwrap(),
+        "--task-id",
+        "auth",
+        "--mode",
+        "baseline",
+        "--command",
+        "rg auth",
+        "--tokens",
+        "100",
+        "--dry-run",
+    ]);
+    assert!(!missing_files.status.success());
+    let missing_files = json_allow_failure(&missing_files);
+    assert!(
+        missing_files["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("files_read must include at least one file")
+    );
+}
+
+#[test]
 fn pilot_task_reject_preserves_audit_and_excludes_task_from_count() {
     let repo = fixture_repo();
     let root = repo.path().to_str().unwrap();
@@ -2357,6 +2687,24 @@ fn benchmark_report_aggregates_two_local_repos() {
         report["summary"]["total_estimated_token_savings"]
             .as_i64()
             .is_some()
+    );
+    let context_payload = &report["summary"]["context_payload_reduction"];
+    assert_eq!(context_payload["label"], "context_payload_reduction");
+    assert_eq!(context_payload["evidence_tier"], "platform_neutral_proxy");
+    assert_eq!(context_payload["platform_scope"], "agent_platform_neutral");
+    assert!(
+        context_payload["warning"]
+            .as_str()
+            .unwrap()
+            .contains("not observed whole-session token savings")
+    );
+    assert_eq!(
+        report["summary"]["baseline_context_payload_tokens_estimate"],
+        context_payload["baseline_context_payload_tokens_estimate"]
+    );
+    assert_eq!(
+        report["summary"]["callsieve_context_payload_tokens_estimate"],
+        context_payload["callsieve_context_payload_tokens_estimate"]
     );
     assert!(
         report["summary"]["total_avoided_grep_commands"]

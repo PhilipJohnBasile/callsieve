@@ -1,8 +1,8 @@
 {
   "metadata": {
-    "collection": "controlled_replay",
     "client": "callsieve",
-    "model": "controlled-replay"
+    "model": "controlled-replay",
+    "collection": "controlled_replay"
   },
   "tasks": [
     {
@@ -238,32 +238,36 @@
         },
         "callsieve": {
           "grep_commands": 0,
-          "file_reads": 20,
-          "tokens": 124781,
+          "file_reads": 24,
+          "tokens": 172235,
           "commands": [
-            "callsieve context benchmarks/github-black \"change string normalization and line generation formatting\" --limit 20 --snippets-per-file 2"
+            "callsieve context benchmarks/github-black \"change string normalization and line generation formatting\" --limit 24 --snippets-per-file 2"
           ],
           "files_read": [
-            "src/black/strings.py",
             "src/black/linegen.py",
             "src/black/lines.py",
+            "src/black/strings.py",
+            "tests/test_blackd.py",
             "src/black/trans.py",
-            "tests/data/cases/preview_long_strings__regression.py",
             "src/black/nodes.py",
-            "tests/data/cases/fmtskip6.py",
-            "tests/data/cases/dummy_implementations.py",
-            "tests/data/cases/ignore_pyi.py",
-            "tests/data/cases/pyi_overload_groups.py",
-            "tests/data/cases/stub.py",
-            "tests/data/miscellaneous/decorators.py",
-            "tests/data/miscellaneous/force_pyi.py",
-            "tests/data/cases/comments6.py",
+            "src/black/ranges.py",
+            "src/black/__init__.py",
             "src/blib2to3/pytree.py",
+            "src/black/comments.py",
+            "src/black/brackets.py",
+            "src/blib2to3/pgen2/driver.py",
             "tests/data/cases/docstring_no_string_normalization.py",
-            "tests/data/cases/function2.py",
-            "tests/data/cases/python39.py",
-            "tests/data/cases/comments4.py",
-            "tests/data/cases/composition.py"
+            "src/black/report.py",
+            "tests/data/cases/raw_docstring_no_string_normalization.py",
+            "src/black/mode.py",
+            "src/black/concurrency.py",
+            "CHANGES.md",
+            "src/black/cache.py",
+            "tests/util.py",
+            "src/blib2to3/pgen2/grammar.py",
+            "src/black/files.py",
+            "src/black/handle_ipynb_magics.py",
+            "src/black/output.py"
           ],
           "notes": [
             "Controlled local replay, not human-session telemetry.",
@@ -401,32 +405,36 @@
         },
         "callsieve": {
           "grep_commands": 0,
-          "file_reads": 20,
-          "tokens": 90213,
+          "file_reads": 24,
+          "tokens": 139563,
           "commands": [
-            "callsieve context benchmarks/github-black \"change pyproject configuration parsing and include exclude file collection\" --limit 20 --snippets-per-file 2"
+            "callsieve context benchmarks/github-black \"change pyproject configuration parsing and include exclude file collection\" --limit 24 --snippets-per-file 2"
           ],
           "files_read": [
+            "tests/test_black.py",
             "src/black/files.py",
             "src/black/parsing.py",
-            "scripts/diff_shades_gha_helper.py",
             "pyproject.toml",
+            "scripts/diff_shades_gha_helper.py",
             "tests/data/invalid_gitignore_tests/pyproject.toml",
             "tests/data/invalid_nested_gitignore_tests/pyproject.toml",
             "tests/data/include_exclude_tests/pyproject.toml",
+            "CHANGES.md",
+            "docs/usage_and_configuration/file_collection_and_discovery.md",
+            "src/black/__init__.py",
+            "docs/compatible_configs/pylint/pyproject.toml",
+            "src/black/cache.py",
+            "src/black/linegen.py",
+            "tests/util.py",
+            "src/black/handle_ipynb_magics.py",
+            "src/black/output.py",
+            ".codex/config.toml",
             ".github/ISSUE_TEMPLATE/config.yml",
             "docs/compatible_configs/isort/pyproject.toml",
-            "docs/compatible_configs/pylint/pyproject.toml",
             "tests/data/nested_gitignore_tests/pyproject.toml",
-            "src/black/__init__.py",
-            "tests/test_black.py",
-            "docs/usage_and_configuration/file_collection_and_discovery.md",
-            "tests/data/cases/dummy_implementations.py",
-            "tests/data/cases/ignore_pyi.py",
-            "tests/data/cases/preview_long_strings__regression.py",
-            "tests/data/cases/pyi_overload_groups.py",
-            "tests/data/cases/stub.py",
-            "tests/data/miscellaneous/decorators.py"
+            "src/blib2to3/pgen2/driver.py",
+            "src/black/lines.py",
+            "src/black/mode.py"
           ],
           "notes": [
             "Controlled local replay, not human-session telemetry.",

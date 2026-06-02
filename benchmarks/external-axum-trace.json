@@ -1,8 +1,8 @@
 {
   "metadata": {
-    "collection": "controlled_replay",
     "client": "callsieve",
-    "model": "controlled-replay"
+    "model": "controlled-replay",
+    "collection": "controlled_replay"
   },
   "tasks": [
     {
@@ -16,8 +16,8 @@
       "session": {
         "baseline": {
           "grep_commands": 6,
-          "file_reads": 282,
-          "tokens": 479483,
+          "file_reads": 283,
+          "tokens": 479601,
           "commands": [
             "rg -n handling benchmarks/github-axum",
             "rg -n method benchmarks/github-axum",
@@ -28,6 +28,7 @@
           ],
           "files_read": [
             ".clippy.toml",
+            ".codex/CALLSIEVE.md",
             ".github/workflows/CI.yml",
             "axum-core/CHANGELOG.md",
             "axum-core/Cargo.toml",
@@ -317,32 +318,36 @@
         },
         "callsieve": {
           "grep_commands": 0,
-          "file_reads": 20,
-          "tokens": 110291,
+          "file_reads": 24,
+          "tokens": 118239,
           "commands": [
-            "callsieve context benchmarks/github-axum \"change Router route method handling and path routing\" --limit 20 --snippets-per-file 2"
+            "callsieve context benchmarks/github-axum \"change Router route method handling and path routing\" --limit 24 --snippets-per-file 2"
           ],
           "files_read": [
+            "axum/src/routing/path_router.rs",
+            "axum/src/extract/matched_path.rs",
+            "axum/src/routing/method_routing.rs",
+            "axum/src/routing/mod.rs",
+            "axum/src/routing/tests/mod.rs",
             "axum/src/routing/route.rs",
             "axum-extra/src/routing/resource.rs",
-            "axum/src/routing/mod.rs",
-            "axum/src/routing/path_router.rs",
             "axum-extra/src/routing/mod.rs",
             "axum/src/routing/method_filter.rs",
-            "axum/src/routing/tests/mod.rs",
-            "axum-extra/src/routing/typed.rs",
             "axum/src/docs/routing/route.md",
-            "axum/src/routing/method_routing.rs",
             "axum/src/extract/path/mod.rs",
-            "axum/src/handler/mod.rs",
-            "axum/src/serve/listener.rs",
+            "axum/src/routing/tests/nest.rs",
+            "axum-extra/src/routing/typed.rs",
             "axum-core/src/extract/request_parts.rs",
-            "examples/customize-path-rejection/src/main.rs",
             "examples/routes-and-handlers-close-together/src/main.rs",
+            "examples/customize-path-rejection/src/main.rs",
             "axum-extra/src/extract/with_rejection.rs",
             "axum/src/error_handling/mod.rs",
-            "axum-core/src/extract/mod.rs",
-            "axum/src/extract/matched_path.rs"
+            "axum/src/extract/mod.rs",
+            "axum/CHANGELOG.md",
+            "axum/src/docs/extract.md",
+            "axum/src/lib.rs",
+            "axum/benches/benches.rs",
+            "axum-extra/src/lib.rs"
           ],
           "notes": [
             "Controlled local replay, not human-session telemetry.",
@@ -645,32 +650,36 @@
         },
         "callsieve": {
           "grep_commands": 0,
-          "file_reads": 20,
-          "tokens": 119701,
+          "file_reads": 24,
+          "tokens": 75831,
           "commands": [
-            "callsieve context benchmarks/github-axum \"change extractor rejection behavior for JSON and form requests\" --limit 20 --snippets-per-file 2"
+            "callsieve context benchmarks/github-axum \"change extractor rejection behavior for JSON and form requests\" --limit 24 --snippets-per-file 2"
           ],
           "files_read": [
-            "axum-extra/src/extract/form.rs",
+            "axum-core/src/extract/request_parts.rs",
             "axum-core/src/ext_traits/request.rs",
             "axum/src/form.rs",
             "axum/src/json.rs",
+            "axum-extra/src/extract/form.rs",
             "axum/src/docs/extract.md",
+            "axum-extra/src/extract/with_rejection.rs",
+            "axum-macros/tests/from_request/pass/override_rejection_non_generic.rs",
+            "axum-extra/src/extract/json_deserializer.rs",
+            "examples/parse-body-based-on-content-type/src/main.rs",
             "axum-core/src/extract/rejection.rs",
             "axum/src/extract/ws.rs",
-            "axum-core/src/extract/request_parts.rs",
-            "axum-extra/src/extract/json_deserializer.rs",
-            "axum-core/src/ext_traits/request_parts.rs",
+            "axum-macros/tests/from_request/pass/override_rejection_with_via_on_struct.rs",
             "axum/src/test_helpers/test_client.rs",
             "axum-macros/src/from_request/mod.rs",
-            "axum/src/routing/tests/mod.rs",
-            "axum/src/handler/mod.rs",
-            "examples/testing/src/main.rs",
-            "axum/src/routing/method_routing.rs",
-            "axum/src/routing/method_filter.rs",
-            "axum/src/serve/mod.rs",
             "axum-extra/src/json_lines.rs",
-            "axum/src/extract/rejection.rs"
+            "axum/src/routing/tests/mod.rs",
+            "axum-core/src/ext_traits/request_parts.rs",
+            "examples/testing/src/main.rs",
+            "axum/src/extract/rejection.rs",
+            "examples/compression/src/tests.rs",
+            "examples/jwt/src/main.rs",
+            "axum-core/src/extract/mod.rs",
+            "axum-macros/tests/from_request/pass/override_rejection.rs"
           ],
           "notes": [
             "Controlled local replay, not human-session telemetry.",

@@ -18,6 +18,52 @@ use std::os::windows::process::CommandExt;
 
 use crate::{indexer, output, query, store};
 
+const REHEARSAL_RETRIEVAL_FIXTURES: &str = "benchmarks/retrieval-fixtures.json";
+const REHEARSAL_EXTERNAL_MANIFEST: &str = "benchmarks/external-github-manifest.local.json";
+const OBSERVED_CODEX_OSS_50_MANIFEST: &str = "benchmarks/evidence/observed-codex-oss-50.local.json";
+const REHEARSAL_REPORT_LIMIT: usize = 24;
+const REHEARSAL_SNIPPETS_PER_FILE: usize = 2;
+
+#[derive(Debug, Clone, Copy, Serialize)]
+struct ExternalBenchmarkFixture {
+    repo: &'static str,
+    suite: &'static str,
+    trace: &'static str,
+}
+
+const EXTERNAL_BENCHMARK_FIXTURES: &[ExternalBenchmarkFixture] = &[
+    ExternalBenchmarkFixture {
+        repo: "benchmarks/github-ripgrep",
+        suite: "benchmarks/external-ripgrep-suite.json",
+        trace: "benchmarks/external-ripgrep-trace.json",
+    },
+    ExternalBenchmarkFixture {
+        repo: "benchmarks/github-fd",
+        suite: "benchmarks/external-fd-suite.json",
+        trace: "benchmarks/external-fd-trace.json",
+    },
+    ExternalBenchmarkFixture {
+        repo: "benchmarks/github-axum",
+        suite: "benchmarks/external-axum-suite.json",
+        trace: "benchmarks/external-axum-trace.json",
+    },
+    ExternalBenchmarkFixture {
+        repo: "benchmarks/github-flask",
+        suite: "benchmarks/external-flask-suite.json",
+        trace: "benchmarks/external-flask-trace.json",
+    },
+    ExternalBenchmarkFixture {
+        repo: "benchmarks/github-black",
+        suite: "benchmarks/external-black-suite.json",
+        trace: "benchmarks/external-black-trace.json",
+    },
+    ExternalBenchmarkFixture {
+        repo: "benchmarks/github-httpx",
+        suite: "benchmarks/external-httpx-suite.json",
+        trace: "benchmarks/external-httpx-trace.json",
+    },
+];
+
 #[derive(Debug, Parser)]
 #[command(
     name = "callsieve",
@@ -270,6 +316,94 @@ pub enum Command {
 
     /// Validate a benchmark-report manifest before running evidence collection.
     BenchmarkDoctor { manifest: PathBuf },
+
+    /// Run deterministic local proof rehearsal without claim proof.
+    #[command(name = "proof-rehearsal")]
+    ProofRehearsal {
+        /// Only check local prerequisites and exit.
+        #[arg(long)]
+        preflight: bool,
+
+        /// Apply safe local fixes: create evidence dirs, rebuild indexes, and fill missing traces.
+        #[arg(long)]
+        fix: bool,
+
+        /// Skip already-passed ledger steps with matching signatures.
+        #[arg(long)]
+        resume: bool,
+
+        /// Also run supplemental Ollama collection. This is not Codex proof.
+        #[arg(long = "collect-ollama")]
+        collect_ollama: bool,
+
+        #[arg(
+            long = "ollama-manifest",
+            default_value = "benchmarks/evidence/observed-generic-ollama-100.local.json"
+        )]
+        ollama_manifest: PathBuf,
+
+        #[arg(long = "ollama-model", default_value = "qwen2.5-coder:7b")]
+        ollama_model: String,
+
+        #[arg(long = "ollama-limit", default_value_t = 10)]
+        ollama_limit: usize,
+
+        #[arg(long = "ollama-context-limit", default_value_t = 24)]
+        ollama_context_limit: usize,
+
+        #[arg(long = "retry-count", default_value_t = 1)]
+        retry_count: usize,
+
+        #[arg(long, default_value = "benchmarks/evidence/rehearsal-run.local.json")]
+        ledger: PathBuf,
+    },
+
+    /// Register the 50-session observed Codex OSS milestone manifest.
+    #[command(name = "setup-observed-codex-oss-50")]
+    SetupObservedCodexOss50 {
+        #[arg(
+            long,
+            default_value = "benchmarks/evidence/observed-codex-oss-50.local.json"
+        )]
+        manifest: PathBuf,
+
+        #[arg(long = "bootstrap-repos")]
+        bootstrap_repos: bool,
+
+        #[arg(long)]
+        force: bool,
+
+        #[arg(long = "skip-repo-check")]
+        skip_repo_check: bool,
+    },
+
+    /// Record one real observed Codex paired-session event with transcript token counts.
+    #[command(name = "record-codex-observed-session")]
+    RecordCodexObservedSession {
+        #[arg(
+            long,
+            default_value = "benchmarks/evidence/observed-codex-oss-50.local.json"
+        )]
+        manifest: PathBuf,
+
+        #[arg(long = "task-id", alias = "task_id")]
+        task_id: String,
+
+        #[arg(long, value_enum)]
+        mode: PilotSessionMode,
+
+        #[arg(long = "command")]
+        event_command: String,
+
+        #[arg(long)]
+        tokens: usize,
+
+        #[arg(long = "files-read", alias = "files_read")]
+        files_read: Vec<String>,
+
+        #[arg(long = "dry-run")]
+        dry_run: bool,
+    },
 
     /// Create a 100-session observed pilot harness manifest.
     PilotInit {
@@ -916,6 +1050,129 @@ struct PolicyCheckOutput {
     command: &'static str,
     trace: String,
     check: serde_json::Value,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct ProofRehearsalLedger {
+    schema_version: u32,
+    command_matrix: String,
+    status: String,
+    started_at: u64,
+    updated_at: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    finished_at: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+    fixes: Vec<ProofRehearsalFix>,
+    steps: Vec<ProofRehearsalStepRecord>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct ProofRehearsalFix {
+    fix: String,
+    path: String,
+    status: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct ProofRehearsalStepRecord {
+    id: String,
+    description: String,
+    command: String,
+    signature: String,
+    status: String,
+    skipped: bool,
+    attempts: usize,
+    started_at: u64,
+    finished_at: u64,
+    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
+    summary: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct ProofRehearsalOutput {
+    command: &'static str,
+    status: String,
+    mode: &'static str,
+    ledger: String,
+    command_matrix: ProofRehearsalCommandMatrix,
+    preflight: ProofRehearsalPreflightOutput,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    context_payload_reduction: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    fixes: Vec<ProofRehearsalFix>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    steps: Vec<ProofRehearsalStepRecord>,
+    claim_proof_included: bool,
+    next_observed_gate: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ProofRehearsalCommandMatrix {
+    retrieval_fixtures: String,
+    external_manifest: String,
+    external_fixtures: Vec<ExternalBenchmarkFixture>,
+    report_limit: usize,
+    perf_iterations: usize,
+    context_payload_reduction_included: bool,
+    context_payload_scope: &'static str,
+    includes_proof_report: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct ProofRehearsalPreflightOutput {
+    status: String,
+    failures: usize,
+    checks: Vec<ProofRehearsalCheck>,
+}
+
+#[derive(Debug, Serialize)]
+struct ProofRehearsalCheck {
+    check: String,
+    path: String,
+    status: String,
+    message: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ObservedCodexSetupOutput {
+    command: &'static str,
+    status: String,
+    manifest: String,
+    task_count: usize,
+    target_sessions: usize,
+    repos: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    bootstrap: Vec<serde_json::Value>,
+    next_qa: String,
+    final_proof: String,
+}
+
+#[derive(Debug, Serialize)]
+struct RecordCodexObservedSessionOutput {
+    command: &'static str,
+    status: String,
+    manifest: String,
+    task_id: String,
+    mode: PilotSessionMode,
+    files_read: Vec<String>,
+    tokens: usize,
+    pilot_run_command: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pilot_run: Option<serde_json::Value>,
+    next_qa: String,
+}
+
+#[derive(Debug, Clone)]
+struct ObservedCodexTaskRow {
+    id: String,
+    repo: String,
+    suite: String,
+    task: String,
+    expected_files: Vec<String>,
+    critical_files: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1607,6 +1864,66 @@ pub fn run() -> Result<()> {
             })?;
             output::json::print(&output)?;
         }
+        Command::ProofRehearsal {
+            preflight,
+            fix,
+            resume,
+            collect_ollama,
+            ollama_manifest,
+            ollama_model,
+            ollama_limit,
+            ollama_context_limit,
+            retry_count,
+            ledger,
+        } => {
+            let output = proof_rehearsal(ProofRehearsalOptions {
+                preflight,
+                fix,
+                resume,
+                collect_ollama,
+                ollama_manifest,
+                ollama_model,
+                ollama_limit,
+                ollama_context_limit,
+                retry_count,
+                ledger,
+            })?;
+            let failed = output.status == "fail";
+            output::json::print(&output)?;
+            if failed {
+                std::process::exit(1);
+            }
+        }
+        Command::SetupObservedCodexOss50 {
+            manifest,
+            bootstrap_repos,
+            force,
+            skip_repo_check,
+        } => {
+            let output =
+                setup_observed_codex_oss_50(&manifest, bootstrap_repos, force, skip_repo_check)?;
+            output::json::print(&output)?;
+        }
+        Command::RecordCodexObservedSession {
+            manifest,
+            task_id,
+            mode,
+            event_command,
+            tokens,
+            files_read,
+            dry_run,
+        } => {
+            let output = record_codex_observed_session(
+                &manifest,
+                &task_id,
+                mode,
+                &event_command,
+                tokens,
+                files_read,
+                dry_run,
+            )?;
+            output::json::print(&output)?;
+        }
         Command::PilotInit { manifest, sessions } => {
             let output = pilot_init(&manifest, sessions)?;
             output::json::print(&output)?;
@@ -2136,6 +2453,1088 @@ fn retrieval_manifest_root(value: &serde_json::Value) -> PathBuf {
     };
 
     PathBuf::from(raw_path)
+}
+
+struct ProofRehearsalOptions {
+    preflight: bool,
+    fix: bool,
+    resume: bool,
+    collect_ollama: bool,
+    ollama_manifest: PathBuf,
+    ollama_model: String,
+    ollama_limit: usize,
+    ollama_context_limit: usize,
+    retry_count: usize,
+    ledger: PathBuf,
+}
+
+fn proof_rehearsal(options: ProofRehearsalOptions) -> Result<ProofRehearsalOutput> {
+    let fixes = if options.fix {
+        proof_rehearsal_safe_fixes(options.retry_count)?
+    } else {
+        Vec::new()
+    };
+    let preflight = proof_rehearsal_preflight();
+    let command_matrix = proof_rehearsal_command_matrix();
+    let next_observed_gate = format!("callsieve pilot-qa {}", OBSERVED_CODEX_OSS_50_MANIFEST);
+
+    if options.preflight || preflight.status != "pass" {
+        return Ok(ProofRehearsalOutput {
+            command: "proof-rehearsal",
+            status: preflight.status.clone(),
+            mode: "preflight",
+            ledger: options.ledger.display().to_string(),
+            command_matrix,
+            preflight,
+            context_payload_reduction: None,
+            fixes,
+            steps: Vec::new(),
+            claim_proof_included: false,
+            next_observed_gate,
+        });
+    }
+
+    let previous_ledger = if options.resume && options.ledger.is_file() {
+        read_rehearsal_ledger(&options.ledger).ok()
+    } else {
+        None
+    };
+    let started_at = now_unix_seconds();
+    let mut ledger = ProofRehearsalLedger {
+        schema_version: 1,
+        command_matrix: "proof-rehearsal-v2-rust".to_string(),
+        status: "running".to_string(),
+        started_at,
+        updated_at: started_at,
+        finished_at: None,
+        error: None,
+        fixes: fixes.clone(),
+        steps: Vec::new(),
+    };
+    write_rehearsal_ledger(&options.ledger, &ledger)?;
+
+    run_proof_rehearsal_step(
+        &options.ledger,
+        &mut ledger,
+        previous_ledger.as_ref(),
+        options.resume,
+        "retrieval",
+        "retrieval fixtures",
+        &format!("callsieve eval-retrieval {REHEARSAL_RETRIEVAL_FIXTURES}"),
+        options.retry_count,
+        || {
+            let output = eval_retrieval_file(
+                Path::new(REHEARSAL_RETRIEVAL_FIXTURES),
+                8,
+                REHEARSAL_SNIPPETS_PER_FILE,
+                true,
+            )?;
+            let value = serde_json::to_value(&output)?;
+            assert_retrieval_rehearsal(&value)?;
+            Ok(step_summary(&value))
+        },
+    )?;
+
+    run_proof_rehearsal_step(
+        &options.ledger,
+        &mut ledger,
+        previous_ledger.as_ref(),
+        options.resume,
+        "perf",
+        "local perf report",
+        "callsieve perf-report . --iterations 5",
+        options.retry_count,
+        || {
+            let output = perf_report(Path::new("."), None, 5)?;
+            let value = serde_json::to_value(&output)?;
+            Ok(step_summary(&value))
+        },
+    )?;
+
+    run_proof_rehearsal_step(
+        &options.ledger,
+        &mut ledger,
+        previous_ledger.as_ref(),
+        options.resume,
+        "doctor",
+        "external benchmark doctor",
+        &format!("callsieve benchmark-doctor {REHEARSAL_EXTERNAL_MANIFEST}"),
+        options.retry_count,
+        || {
+            let output = benchmark_doctor_file(Path::new(REHEARSAL_EXTERNAL_MANIFEST))?;
+            let value = serde_json::to_value(&output)?;
+            assert_status_pass(&value, "benchmark-doctor")?;
+            Ok(serde_json::json!({
+                "status": value.get("status").cloned().unwrap_or_default(),
+                "repos": value.get("repos").cloned().unwrap_or_default(),
+                "checks": value.get("checks").cloned().unwrap_or_default(),
+                "failures": value.get("failures").cloned().unwrap_or_default()
+            }))
+        },
+    )?;
+
+    run_proof_rehearsal_step(
+        &options.ledger,
+        &mut ledger,
+        previous_ledger.as_ref(),
+        options.resume,
+        "benchmark_initial",
+        "external benchmark report before replay regeneration",
+        &format!(
+            "callsieve benchmark-report {REHEARSAL_EXTERNAL_MANIFEST} --limit {REHEARSAL_REPORT_LIMIT}"
+        ),
+        options.retry_count,
+        || {
+            let output = benchmark_report_file(
+                Path::new(REHEARSAL_EXTERNAL_MANIFEST),
+                REHEARSAL_REPORT_LIMIT,
+                REHEARSAL_SNIPPETS_PER_FILE,
+                true,
+            )?;
+            let value = serde_json::to_value(&output)?;
+            assert_external_report_complete(&value)?;
+            Ok(step_summary(&value))
+        },
+    )?;
+
+    for fixture in EXTERNAL_BENCHMARK_FIXTURES {
+        let id = format!(
+            "trace_{}",
+            Path::new(fixture.repo)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or(fixture.repo)
+                .replace('-', "_")
+        );
+        let description = format!("controlled replay {}", fixture.repo);
+        let signature = format!(
+            "callsieve trace-replay {} {} {} --limit {}",
+            fixture.repo, fixture.suite, fixture.trace, REHEARSAL_REPORT_LIMIT
+        );
+        run_proof_rehearsal_step(
+            &options.ledger,
+            &mut ledger,
+            previous_ledger.as_ref(),
+            options.resume,
+            &id,
+            &description,
+            &signature,
+            options.retry_count,
+            || {
+                let replay = trace_replay_file(
+                    Path::new(fixture.repo),
+                    Path::new(fixture.suite),
+                    Path::new(fixture.trace),
+                    REHEARSAL_REPORT_LIMIT,
+                    REHEARSAL_SNIPPETS_PER_FILE,
+                    true,
+                )?;
+                let value = serde_json::to_value(&replay)?;
+                Ok(serde_json::json!({
+                    "trace": fixture.trace,
+                    "repo": fixture.repo,
+                    "suite": fixture.suite,
+                    "collection": "controlled_replay",
+                    "tasks": value
+                        .get("tasks")
+                        .and_then(serde_json::Value::as_array)
+                        .map(Vec::len)
+                        .unwrap_or_default()
+                }))
+            },
+        )?;
+    }
+
+    run_proof_rehearsal_step(
+        &options.ledger,
+        &mut ledger,
+        previous_ledger.as_ref(),
+        options.resume,
+        "benchmark_final",
+        "external benchmark report after replay regeneration",
+        &format!(
+            "callsieve benchmark-report {REHEARSAL_EXTERNAL_MANIFEST} --limit {REHEARSAL_REPORT_LIMIT}"
+        ),
+        options.retry_count,
+        || {
+            let output = benchmark_report_file(
+                Path::new(REHEARSAL_EXTERNAL_MANIFEST),
+                REHEARSAL_REPORT_LIMIT,
+                REHEARSAL_SNIPPETS_PER_FILE,
+                true,
+            )?;
+            let value = serde_json::to_value(&output)?;
+            assert_external_report_complete(&value)?;
+            Ok(step_summary(&value))
+        },
+    )?;
+
+    if options.collect_ollama {
+        let signature = format!(
+            "callsieve pilot-collect-ollama {} --model {} --limit {} --context-limit {}",
+            options.ollama_manifest.display(),
+            options.ollama_model,
+            options.ollama_limit,
+            options.ollama_context_limit
+        );
+        let ollama_manifest = options.ollama_manifest.clone();
+        let ollama_model = options.ollama_model.clone();
+        run_proof_rehearsal_step(
+            &options.ledger,
+            &mut ledger,
+            previous_ledger.as_ref(),
+            options.resume,
+            "ollama_supplemental",
+            "supplemental Ollama collection",
+            &signature,
+            options.retry_count,
+            || {
+                let output = pilot_collect_ollama(
+                    &ollama_manifest,
+                    &ollama_model,
+                    options.ollama_limit,
+                    options.ollama_context_limit,
+                    REHEARSAL_SNIPPETS_PER_FILE,
+                    48,
+                    240,
+                )?;
+                let value = serde_json::to_value(&output)?;
+                Ok(step_summary(&value))
+            },
+        )?;
+    }
+
+    ledger.status = "pass".to_string();
+    ledger.updated_at = now_unix_seconds();
+    ledger.finished_at = Some(ledger.updated_at);
+    write_rehearsal_ledger(&options.ledger, &ledger)?;
+    let context_payload_reduction = proof_rehearsal_context_payload_reduction()?;
+
+    Ok(ProofRehearsalOutput {
+        command: "proof-rehearsal",
+        status: ledger.status.clone(),
+        mode: "rehearsal",
+        ledger: options.ledger.display().to_string(),
+        command_matrix,
+        preflight,
+        context_payload_reduction: Some(context_payload_reduction),
+        fixes,
+        steps: ledger.steps,
+        claim_proof_included: false,
+        next_observed_gate,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_proof_rehearsal_step<F>(
+    ledger_path: &Path,
+    ledger: &mut ProofRehearsalLedger,
+    previous_ledger: Option<&ProofRehearsalLedger>,
+    resume: bool,
+    id: &str,
+    description: &str,
+    signature: &str,
+    retry_count: usize,
+    mut run: F,
+) -> Result<serde_json::Value>
+where
+    F: FnMut() -> Result<serde_json::Value>,
+{
+    if resume && let Some(previous) = previous_rehearsal_step(previous_ledger, id, signature) {
+        let now = now_unix_seconds();
+        let record = ProofRehearsalStepRecord {
+            id: id.to_string(),
+            description: description.to_string(),
+            command: signature.to_string(),
+            signature: signature.to_string(),
+            status: "pass".to_string(),
+            skipped: true,
+            attempts: 0,
+            started_at: now,
+            finished_at: now,
+            summary: previous.summary.clone(),
+            error: None,
+        };
+        ledger.steps.push(record);
+        ledger.updated_at = now;
+        write_rehearsal_ledger(ledger_path, ledger)?;
+        return Ok(previous.summary.clone());
+    }
+
+    let started_at = now_unix_seconds();
+    let attempts = retry_count.saturating_add(1).max(1);
+    let mut last_error = String::new();
+    for attempt in 1..=attempts {
+        match run() {
+            Ok(summary) => {
+                let finished_at = now_unix_seconds();
+                let record = ProofRehearsalStepRecord {
+                    id: id.to_string(),
+                    description: description.to_string(),
+                    command: signature.to_string(),
+                    signature: signature.to_string(),
+                    status: "pass".to_string(),
+                    skipped: false,
+                    attempts: attempt,
+                    started_at,
+                    finished_at,
+                    summary: summary.clone(),
+                    error: None,
+                };
+                ledger.steps.push(record);
+                ledger.updated_at = finished_at;
+                write_rehearsal_ledger(ledger_path, ledger)?;
+                return Ok(summary);
+            }
+            Err(error) => {
+                last_error = error.to_string();
+            }
+        }
+    }
+
+    let finished_at = now_unix_seconds();
+    let record = ProofRehearsalStepRecord {
+        id: id.to_string(),
+        description: description.to_string(),
+        command: signature.to_string(),
+        signature: signature.to_string(),
+        status: "fail".to_string(),
+        skipped: false,
+        attempts,
+        started_at,
+        finished_at,
+        summary: serde_json::Value::Null,
+        error: Some(last_error.clone()),
+    };
+    ledger.steps.push(record);
+    ledger.status = "fail".to_string();
+    ledger.error = Some(last_error.clone());
+    ledger.updated_at = finished_at;
+    ledger.finished_at = Some(finished_at);
+    write_rehearsal_ledger(ledger_path, ledger)?;
+    anyhow::bail!("proof rehearsal step failed: {description}: {last_error}")
+}
+
+fn previous_rehearsal_step<'a>(
+    previous_ledger: Option<&'a ProofRehearsalLedger>,
+    id: &str,
+    signature: &str,
+) -> Option<&'a ProofRehearsalStepRecord> {
+    previous_ledger?
+        .steps
+        .iter()
+        .rev()
+        .find(|step| step.id == id && step.signature == signature && step.status == "pass")
+}
+
+fn read_rehearsal_ledger(path: &Path) -> Result<ProofRehearsalLedger> {
+    let json = fs::read_to_string(path)
+        .with_context(|| format!("failed to read rehearsal ledger: {}", path.display()))?;
+    serde_json::from_str(&json)
+        .with_context(|| format!("failed to parse rehearsal ledger: {}", path.display()))
+}
+
+fn write_rehearsal_ledger(path: &Path, ledger: &ProofRehearsalLedger) -> Result<()> {
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    fs::write(path, serde_json::to_vec_pretty(ledger)?)
+        .with_context(|| format!("failed to write rehearsal ledger: {}", path.display()))
+}
+
+fn proof_rehearsal_safe_fixes(retry_count: usize) -> Result<Vec<ProofRehearsalFix>> {
+    let mut fixes = Vec::new();
+    ensure_rehearsal_dir(Path::new("benchmarks/evidence"), &mut fixes)?;
+    for fixture in EXTERNAL_BENCHMARK_FIXTURES {
+        if let Some(parent) = Path::new(fixture.trace)
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
+            ensure_rehearsal_dir(parent, &mut fixes)?;
+        }
+    }
+
+    retry_rehearsal_fix("index root", retry_count, || {
+        build_index_output(Path::new("."), false)
+    })?;
+    fixes.push(ProofRehearsalFix {
+        fix: "index".to_string(),
+        path: ".".to_string(),
+        status: "applied".to_string(),
+    });
+
+    for fixture in EXTERNAL_BENCHMARK_FIXTURES {
+        let repo = Path::new(fixture.repo);
+        if repo.is_dir() {
+            retry_rehearsal_fix(&format!("index {}", fixture.repo), retry_count, || {
+                build_index_output(repo, false)
+            })?;
+            fixes.push(ProofRehearsalFix {
+                fix: "index".to_string(),
+                path: fixture.repo.to_string(),
+                status: "applied".to_string(),
+            });
+        } else {
+            fixes.push(ProofRehearsalFix {
+                fix: "index".to_string(),
+                path: fixture.repo.to_string(),
+                status: "skipped_missing_repo".to_string(),
+            });
+        }
+
+        let suite = Path::new(fixture.suite);
+        let trace = Path::new(fixture.trace);
+        if repo.is_dir() && suite.is_file() && !trace.is_file() {
+            retry_rehearsal_fix(&format!("trace {}", fixture.trace), retry_count, || {
+                trace_replay_file(
+                    repo,
+                    suite,
+                    trace,
+                    REHEARSAL_REPORT_LIMIT,
+                    REHEARSAL_SNIPPETS_PER_FILE,
+                    true,
+                )
+            })?;
+            fixes.push(ProofRehearsalFix {
+                fix: "trace-replay".to_string(),
+                path: fixture.trace.to_string(),
+                status: "applied".to_string(),
+            });
+        }
+    }
+
+    Ok(fixes)
+}
+
+fn retry_rehearsal_fix<T, F>(description: &str, retry_count: usize, mut run: F) -> Result<T>
+where
+    F: FnMut() -> Result<T>,
+{
+    let attempts = retry_count.saturating_add(1).max(1);
+    let mut last_error = String::new();
+    for _ in 0..attempts {
+        match run() {
+            Ok(output) => return Ok(output),
+            Err(error) => last_error = error.to_string(),
+        }
+    }
+    anyhow::bail!("safe fix failed: {description}: {last_error}")
+}
+
+fn ensure_rehearsal_dir(path: &Path, fixes: &mut Vec<ProofRehearsalFix>) -> Result<()> {
+    if !path.is_dir() {
+        fs::create_dir_all(path).with_context(|| format!("failed to create {}", path.display()))?;
+        fixes.push(ProofRehearsalFix {
+            fix: "create_directory".to_string(),
+            path: path.display().to_string(),
+            status: "applied".to_string(),
+        });
+    }
+    Ok(())
+}
+
+fn proof_rehearsal_preflight() -> ProofRehearsalPreflightOutput {
+    let mut checks = Vec::new();
+    push_rehearsal_check(
+        &mut checks,
+        "retrieval_fixtures",
+        REHEARSAL_RETRIEVAL_FIXTURES,
+        Path::new(REHEARSAL_RETRIEVAL_FIXTURES).is_file(),
+        "retrieval fixture manifest exists",
+        "retrieval fixture manifest is missing",
+    );
+    push_rehearsal_check(
+        &mut checks,
+        "external_manifest",
+        REHEARSAL_EXTERNAL_MANIFEST,
+        Path::new(REHEARSAL_EXTERNAL_MANIFEST).is_file(),
+        "external benchmark manifest exists",
+        "external benchmark manifest is missing",
+    );
+    push_rehearsal_check(
+        &mut checks,
+        "root_index",
+        ".callsieve/index.json",
+        store::json_store::index_path(Path::new(".")).is_file(),
+        "root index exists",
+        "root index is missing",
+    );
+
+    for fixture in EXTERNAL_BENCHMARK_FIXTURES {
+        push_rehearsal_check(
+            &mut checks,
+            "fixture_repo",
+            fixture.repo,
+            Path::new(fixture.repo).is_dir(),
+            "fixture repo exists",
+            "fixture repo is missing",
+        );
+        push_rehearsal_check(
+            &mut checks,
+            "fixture_index",
+            &store::json_store::index_path(Path::new(fixture.repo))
+                .display()
+                .to_string(),
+            store::json_store::index_path(Path::new(fixture.repo)).is_file(),
+            "fixture index exists",
+            "fixture index is missing",
+        );
+        push_rehearsal_check(
+            &mut checks,
+            "fixture_suite",
+            fixture.suite,
+            Path::new(fixture.suite).is_file(),
+            "fixture suite exists",
+            "fixture suite is missing",
+        );
+        push_rehearsal_check(
+            &mut checks,
+            "controlled_trace",
+            fixture.trace,
+            Path::new(fixture.trace).is_file(),
+            "controlled replay trace exists",
+            "controlled replay trace is missing",
+        );
+    }
+
+    let failures = checks.iter().filter(|check| check.status == "fail").count();
+    ProofRehearsalPreflightOutput {
+        status: if failures == 0 { "pass" } else { "fail" }.to_string(),
+        failures,
+        checks,
+    }
+}
+
+fn push_rehearsal_check(
+    checks: &mut Vec<ProofRehearsalCheck>,
+    check: &str,
+    path: &str,
+    passed: bool,
+    pass_message: &str,
+    fail_message: &str,
+) {
+    checks.push(ProofRehearsalCheck {
+        check: check.to_string(),
+        path: path.to_string(),
+        status: if passed { "pass" } else { "fail" }.to_string(),
+        message: if passed {
+            pass_message.to_string()
+        } else {
+            fail_message.to_string()
+        },
+    });
+}
+
+fn proof_rehearsal_command_matrix() -> ProofRehearsalCommandMatrix {
+    ProofRehearsalCommandMatrix {
+        retrieval_fixtures: REHEARSAL_RETRIEVAL_FIXTURES.to_string(),
+        external_manifest: REHEARSAL_EXTERNAL_MANIFEST.to_string(),
+        external_fixtures: EXTERNAL_BENCHMARK_FIXTURES.to_vec(),
+        report_limit: REHEARSAL_REPORT_LIMIT,
+        perf_iterations: 5,
+        context_payload_reduction_included: true,
+        context_payload_scope: "agent_platform_neutral",
+        includes_proof_report: false,
+    }
+}
+
+fn eval_retrieval_file(
+    manifest: &Path,
+    limit: usize,
+    snippets_per_file: usize,
+    include_snippets: bool,
+) -> Result<query::EvalRetrievalOutput> {
+    let manifest_json = fs::read_to_string(manifest).with_context(|| {
+        format!(
+            "failed to read retrieval eval manifest: {}",
+            manifest.display()
+        )
+    })?;
+    let manifest_value: serde_json::Value =
+        serde_json::from_str(&manifest_json).with_context(|| {
+            format!(
+                "failed to parse retrieval eval manifest: {}",
+                manifest.display()
+            )
+        })?;
+    let root = retrieval_manifest_root(&manifest_value);
+    let index = store::json_store::load_index(&root)?;
+    let suite: query::BenchmarkSuiteInput =
+        serde_json::from_value(manifest_value).with_context(|| {
+            format!(
+                "failed to parse retrieval eval tasks: {}",
+                manifest.display()
+            )
+        })?;
+    query::eval_retrieval(
+        &root,
+        &index,
+        suite,
+        limit,
+        snippets_per_file,
+        include_snippets,
+    )
+}
+
+fn benchmark_doctor_file(manifest: &Path) -> Result<query::BenchmarkDoctorOutput> {
+    let manifest_json = fs::read_to_string(manifest)
+        .with_context(|| format!("failed to read benchmark manifest: {}", manifest.display()))?;
+    query::benchmark_doctor_from_str(&manifest_json)
+        .with_context(|| format!("failed to check benchmark manifest: {}", manifest.display()))
+}
+
+fn benchmark_report_file(
+    manifest: &Path,
+    limit: usize,
+    snippets_per_file: usize,
+    include_snippets: bool,
+) -> Result<query::BenchmarkReportOutput> {
+    let manifest_json = fs::read_to_string(manifest)
+        .with_context(|| format!("failed to read benchmark manifest: {}", manifest.display()))?;
+    let manifest: query::BenchmarkReportManifest = serde_json::from_str(&manifest_json)
+        .with_context(|| format!("failed to parse benchmark manifest: {}", manifest.display()))?;
+    query::benchmark_report(manifest, limit, snippets_per_file, include_snippets)
+}
+
+fn proof_rehearsal_context_payload_reduction() -> Result<serde_json::Value> {
+    let output = benchmark_report_file(
+        Path::new(REHEARSAL_EXTERNAL_MANIFEST),
+        REHEARSAL_REPORT_LIMIT,
+        REHEARSAL_SNIPPETS_PER_FILE,
+        true,
+    )?;
+    let value = serde_json::to_value(output)?;
+    value
+        .get("summary")
+        .and_then(|summary| summary.get("context_payload_reduction"))
+        .cloned()
+        .ok_or_else(|| {
+            anyhow::anyhow!("benchmark report did not include context_payload_reduction")
+        })
+}
+
+fn trace_replay_file(
+    root: &Path,
+    tasks: &Path,
+    output: &Path,
+    limit: usize,
+    snippets_per_file: usize,
+    include_snippets: bool,
+) -> Result<query::TraceReplayOutput> {
+    let index = store::json_store::load_index(root)?;
+    let tasks_json = fs::read_to_string(tasks)
+        .with_context(|| format!("failed to read benchmark suite: {}", tasks.display()))?;
+    let suite: query::BenchmarkSuiteInput = serde_json::from_str(&tasks_json)
+        .with_context(|| format!("failed to parse benchmark suite: {}", tasks.display()))?;
+    let replay = query::trace_replay(
+        root,
+        &index,
+        suite,
+        limit,
+        snippets_per_file,
+        include_snippets,
+    )?;
+    if let Some(parent) = output
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create output directory: {}", parent.display()))?;
+    }
+    fs::write(output, serde_json::to_vec_pretty(&replay)?)
+        .with_context(|| format!("failed to write trace replay: {}", output.display()))?;
+    Ok(replay)
+}
+
+fn step_summary(value: &serde_json::Value) -> serde_json::Value {
+    let mut summary = value
+        .get("summary")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+    if let Some(object) = summary.as_object_mut() {
+        if let Some(status) = value.get("status") {
+            object.insert("status".to_string(), status.clone());
+        }
+        if let Some(command) = value.get("command") {
+            object.insert("command".to_string(), command.clone());
+        }
+    }
+    summary
+}
+
+fn assert_status_pass(value: &serde_json::Value, label: &str) -> Result<()> {
+    if value
+        .get("status")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        != "pass"
+    {
+        anyhow::bail!("{label} did not pass")
+    }
+    Ok(())
+}
+
+fn assert_retrieval_rehearsal(value: &serde_json::Value) -> Result<()> {
+    assert_status_pass(value, "eval-retrieval")?;
+    let missed = json_path_usize(value, &["summary", "missed_critical_files"]);
+    if missed != 0 {
+        anyhow::bail!("retrieval rehearsal missed {missed} critical file(s)")
+    }
+    Ok(())
+}
+
+fn assert_external_report_complete(value: &serde_json::Value) -> Result<()> {
+    let expected = json_path_usize(value, &["summary", "expected_files"]);
+    let found = json_path_usize(value, &["summary", "expected_files_found"]);
+    let missed = json_path_usize(value, &["summary", "missed_expected_files"]);
+    if expected != 28 || found != 28 || missed != 0 {
+        anyhow::bail!(
+            "external benchmark report expected 28/28 files, got {found}/{expected} with {missed} missed"
+        )
+    }
+    Ok(())
+}
+
+fn json_path_usize(value: &serde_json::Value, path: &[&str]) -> usize {
+    let mut current = value;
+    for key in path {
+        let Some(next) = current.get(*key) else {
+            return 0;
+        };
+        current = next;
+    }
+    current
+        .as_u64()
+        .and_then(|value| usize::try_from(value).ok())
+        .unwrap_or_default()
+}
+
+fn setup_observed_codex_oss_50(
+    manifest: &Path,
+    bootstrap_repos: bool,
+    force: bool,
+    skip_repo_check: bool,
+) -> Result<ObservedCodexSetupOutput> {
+    for fixture in EXTERNAL_BENCHMARK_FIXTURES {
+        if !Path::new(fixture.suite).is_file() {
+            anyhow::bail!("missing task suite: {}", fixture.suite);
+        }
+        if !skip_repo_check && !Path::new(fixture.repo).is_dir() {
+            anyhow::bail!("missing fixture repo: {}", fixture.repo);
+        }
+    }
+
+    let rows = observed_codex_oss_50_rows()?;
+    let artifact_root = pilot_artifact_root(manifest);
+    for row in &rows {
+        let task_dir = artifact_root.join("tasks").join(&row.id);
+        if task_dir.exists() {
+            anyhow::bail!(
+                "refusing to reuse existing task artifact directory: {}",
+                task_dir.display()
+            );
+        }
+    }
+
+    if manifest.exists() {
+        if !force {
+            anyhow::bail!(
+                "manifest already exists: {}. Pass --force only for an uncollected local setup.",
+                manifest.display()
+            );
+        }
+        fs::remove_file(manifest)
+            .with_context(|| format!("failed to remove {}", manifest.display()))?;
+    }
+
+    pilot_init(manifest, 50)?;
+    apply_observed_codex_oss_50_protocol(manifest)?;
+
+    for row in &rows {
+        pilot_task_add(
+            manifest,
+            Path::new(&row.repo),
+            &row.task,
+            Some(row.id.clone()),
+            row.expected_files.clone(),
+            row.critical_files.clone(),
+            true,
+            AgentClient::Codex,
+            "gpt-5-codex",
+            Some(PathBuf::from(&row.suite)),
+            Some(row.id.clone()),
+            "code_change".to_string(),
+            "unknown".to_string(),
+            "paired_observed".to_string(),
+            "transcript_context_tokens".to_string(),
+        )?;
+    }
+
+    let repos: Vec<String> = rows
+        .iter()
+        .map(|row| row.repo.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let mut bootstrap_outputs = Vec::new();
+    if bootstrap_repos {
+        for repo in &repos {
+            let bootstrap = bootstrap(Path::new(repo), AgentClient::Codex, true, true, true)?;
+            bootstrap_outputs.push(serde_json::to_value(bootstrap)?);
+            let doctor = doctor(Path::new(repo), AgentClient::Codex, false, true)?;
+            bootstrap_outputs.push(serde_json::to_value(doctor)?);
+        }
+    }
+
+    let manifest_value = read_pilot_manifest(manifest)?;
+    if manifest_value.tasks.len() != 50 {
+        anyhow::bail!(
+            "generated manifest has {} tasks; expected 50",
+            manifest_value.tasks.len()
+        );
+    }
+
+    Ok(ObservedCodexSetupOutput {
+        command: "setup-observed-codex-oss-50",
+        status: "ready_for_observed_collection".to_string(),
+        manifest: manifest.display().to_string(),
+        task_count: manifest_value.tasks.len(),
+        target_sessions: manifest_value.target_sessions,
+        repos,
+        bootstrap: bootstrap_outputs,
+        next_qa: format!("callsieve pilot-qa {}", manifest.display()),
+        final_proof: format!(
+            "callsieve pilot-finalize {} --out benchmarks/evidence/proof.local.json --limit {}",
+            manifest.display(),
+            REHEARSAL_REPORT_LIMIT
+        ),
+    })
+}
+
+fn apply_observed_codex_oss_50_protocol(manifest_path: &Path) -> Result<()> {
+    let mut manifest = read_pilot_manifest(manifest_path)?;
+    manifest.protocol = PilotEvidenceProtocol {
+        evidence_standard: "observed_session_only".to_string(),
+        collection: "real_codex_chatgpt_developer_sessions".to_string(),
+        pairing: "paired_baseline_and_callsieve_phases".to_string(),
+        token_accounting: "transcript_context_tokens".to_string(),
+        controlled_replay_policy: "reported_separately_never_counted_as_observed".to_string(),
+        planned_task_buffer_ratio: 1.2,
+        minimum_planned_tasks: 50,
+        qa_batch_size: 10,
+    };
+    manifest.thresholds = serde_json::json!({
+        "minimum_recall": 1.0,
+        "minimum_token_reduction_percent": 0.0,
+        "minimum_observed_sessions": 50,
+        "minimum_observed_token_reduction_percent": 50.0,
+        "minimum_external_repos": 6,
+        "minimum_planned_tasks": 50,
+        "maximum_controlled_replay_ratio": 0.0,
+        "maximum_trace_violations": 0,
+        "maximum_critical_misses": 0,
+        "require_fresh_index": true,
+        "require_lsp_where_available": true,
+        "require_codex_bootstrap": true,
+        "require_transcript_token_accounting": true
+    });
+    write_pilot_manifest(manifest_path, &manifest)
+}
+
+fn observed_codex_oss_50_rows() -> Result<Vec<ObservedCodexTaskRow>> {
+    let mut base_rows = Vec::new();
+    for fixture in EXTERNAL_BENCHMARK_FIXTURES {
+        let suite_json = fs::read_to_string(fixture.suite)
+            .with_context(|| format!("failed to read {}", fixture.suite))?;
+        let suite: serde_json::Value = serde_json::from_str(&suite_json)
+            .with_context(|| format!("failed to parse {}", fixture.suite))?;
+        let tasks = suite
+            .get("tasks")
+            .and_then(serde_json::Value::as_array)
+            .with_context(|| format!("suite has no tasks array: {}", fixture.suite))?;
+        for task in tasks {
+            let id = task
+                .get("id")
+                .and_then(serde_json::Value::as_str)
+                .with_context(|| format!("suite task is missing id: {}", fixture.suite))?;
+            let task_text = task
+                .get("task")
+                .and_then(serde_json::Value::as_str)
+                .with_context(|| format!("suite task is missing task text: {}", fixture.suite))?;
+            let expected_files = json_string_array(task.get("expected_files"));
+            if expected_files.is_empty() {
+                anyhow::bail!("suite task is missing expected_files: {id}");
+            }
+            let critical_files = if task.get("critical_files").is_some() {
+                json_string_array(task.get("critical_files"))
+            } else {
+                expected_files.clone()
+            };
+            base_rows.push(ObservedCodexTaskRow {
+                id: id.to_string(),
+                repo: fixture.repo.to_string(),
+                suite: fixture.suite.to_string(),
+                task: task_text.to_string(),
+                expected_files,
+                critical_files,
+            });
+        }
+    }
+
+    if base_rows.len() != 12 {
+        anyhow::bail!(
+            "expected 12 base tasks across external suites, found {}",
+            base_rows.len()
+        );
+    }
+
+    let mut rows = Vec::new();
+    for round in 1..=4 {
+        for base in &base_rows {
+            let mut row = base.clone();
+            row.id = format!("{}-codex-r{round:02}", base.id);
+            rows.push(row);
+        }
+    }
+    for extra_base_id in ["ripgrep-ignore-walk", "httpx-timeouts-client"] {
+        let base = base_rows
+            .iter()
+            .find(|row| row.id == extra_base_id)
+            .with_context(|| format!("missing extra milestone task: {extra_base_id}"))?;
+        let mut row = base.clone();
+        row.id = format!("{}-codex-r05", base.id);
+        rows.push(row);
+    }
+
+    let ids = rows
+        .iter()
+        .map(|row| row.id.clone())
+        .collect::<BTreeSet<_>>();
+    if rows.len() != 50 || ids.len() != 50 {
+        anyhow::bail!(
+            "expected 50 unique milestone task rows, found {} rows and {} unique ids",
+            rows.len(),
+            ids.len()
+        );
+    }
+    Ok(rows)
+}
+
+fn record_codex_observed_session(
+    manifest: &Path,
+    task_id: &str,
+    mode: PilotSessionMode,
+    event_command: &str,
+    tokens: usize,
+    files_read: Vec<String>,
+    dry_run: bool,
+) -> Result<RecordCodexObservedSessionOutput> {
+    let task_id = task_id.trim();
+    if task_id.is_empty() {
+        anyhow::bail!("task_id is required")
+    }
+    let event_command = event_command.trim();
+    if event_command.is_empty() {
+        anyhow::bail!("command is required")
+    }
+    if tokens == 0 {
+        anyhow::bail!(
+            "tokens must be a positive transcript context token count. Do not estimate tokens."
+        )
+    }
+    let files_read: Vec<String> = files_read
+        .into_iter()
+        .map(|file| file.trim().to_string())
+        .filter(|file| !file.is_empty())
+        .collect();
+    if files_read.is_empty() {
+        anyhow::bail!("files_read must include at least one file actually read")
+    }
+
+    let pilot_run_command =
+        record_codex_pilot_run_command(manifest, task_id, mode, event_command, tokens, &files_read);
+    let pilot_run = if dry_run {
+        None
+    } else {
+        Some(serde_json::to_value(pilot_run(
+            manifest,
+            task_id,
+            mode,
+            event_command,
+            files_read.clone(),
+            tokens,
+        )?)?)
+    };
+    let status = if dry_run { "dry_run" } else { "recorded" }.to_string();
+
+    Ok(RecordCodexObservedSessionOutput {
+        command: "record-codex-observed-session",
+        status,
+        manifest: manifest.display().to_string(),
+        task_id: task_id.to_string(),
+        mode,
+        files_read,
+        tokens,
+        pilot_run_command,
+        pilot_run,
+        next_qa: format!("callsieve pilot-qa {}", manifest.display()),
+    })
+}
+
+fn record_codex_pilot_run_command(
+    manifest: &Path,
+    task_id: &str,
+    mode: PilotSessionMode,
+    event_command: &str,
+    tokens: usize,
+    files_read: &[String],
+) -> String {
+    let mut args = vec![
+        "pilot-run".to_string(),
+        manifest.display().to_string(),
+        "--task-id".to_string(),
+        task_id.to_string(),
+        "--mode".to_string(),
+        pilot_session_mode_name(mode).to_string(),
+        "--command".to_string(),
+        event_command.to_string(),
+    ];
+    for file in files_read {
+        args.push("--files-read".to_string());
+        args.push(file.clone());
+    }
+    args.push("--tokens".to_string());
+    args.push(tokens.to_string());
+    format_callsieve_command(&args)
+}
+
+fn pilot_session_mode_name(mode: PilotSessionMode) -> &'static str {
+    match mode {
+        PilotSessionMode::Baseline => "baseline",
+        PilotSessionMode::Callsieve => "callsieve",
+    }
+}
+
+fn format_callsieve_command(args: &[String]) -> String {
+    std::iter::once("callsieve".to_string())
+        .chain(args.iter().map(|arg| quote_cli_arg(arg)))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn quote_cli_arg(arg: &str) -> String {
+    if !arg.is_empty()
+        && arg.chars().all(|ch| {
+            ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | '/' | '\\' | ':' | '=')
+        })
+    {
+        return arg.to_string();
+    }
+    format!("\"{}\"", arg.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
 fn perf_report(
@@ -6077,6 +7476,51 @@ mod tests {
         .unwrap();
         Cli::try_parse_from(["callsieve", "benchmark-report", "benchmarks/manifest.json"]).unwrap();
         Cli::try_parse_from(["callsieve", "benchmark-doctor", "benchmarks/manifest.json"]).unwrap();
+        Cli::try_parse_from([
+            "callsieve",
+            "proof-rehearsal",
+            "--fix",
+            "--resume",
+            "--retry-count",
+            "2",
+        ])
+        .unwrap();
+        Cli::try_parse_from(["callsieve", "proof-rehearsal", "--preflight"]).unwrap();
+        Cli::try_parse_from([
+            "callsieve",
+            "proof-rehearsal",
+            "--collect-ollama",
+            "--ollama-limit",
+            "2",
+            "--ollama-context-limit",
+            "24",
+        ])
+        .unwrap();
+        Cli::try_parse_from(["callsieve", "setup-observed-codex-oss-50", "--force"]).unwrap();
+        Cli::try_parse_from([
+            "callsieve",
+            "setup-observed-codex-oss-50",
+            "--manifest",
+            "benchmarks/evidence/observed-codex-oss-50.local.json",
+            "--bootstrap-repos",
+            "--skip-repo-check",
+        ])
+        .unwrap();
+        Cli::try_parse_from([
+            "callsieve",
+            "record-codex-observed-session",
+            "--task-id",
+            "auth",
+            "--mode",
+            "callsieve",
+            "--command",
+            "callsieve agent-context . \"change token expiry\"",
+            "--tokens",
+            "200",
+            "--files-read",
+            "src/main.rs",
+        ])
+        .unwrap();
         Cli::try_parse_from([
             "callsieve",
             "pilot-init",

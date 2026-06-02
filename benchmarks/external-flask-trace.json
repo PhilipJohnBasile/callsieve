@@ -1,8 +1,8 @@
 {
   "metadata": {
-    "collection": "controlled_replay",
     "client": "callsieve",
-    "model": "controlled-replay"
+    "model": "controlled-replay",
+    "collection": "controlled_replay"
   },
   "tasks": [
     {
@@ -59,32 +59,36 @@
         },
         "callsieve": {
           "grep_commands": 0,
-          "file_reads": 20,
-          "tokens": 128638,
+          "file_reads": 24,
+          "tokens": 107533,
           "commands": [
-            "callsieve context benchmarks/github-flask \"change session cookie interface signing behavior\" --limit 20 --snippets-per-file 2"
+            "callsieve context benchmarks/github-flask \"change session cookie interface signing behavior\" --limit 24 --snippets-per-file 2"
           ],
           "files_read": [
-            "src/flask/ctx.py",
-            "tests/test_blueprints.py",
-            "tests/test_session_interface.py",
             "src/flask/sessions.py",
             "tests/test_reqctx.py",
             "tests/test_basic.py",
+            "tests/test_session_interface.py",
+            "src/flask/ctx.py",
             "tests/test_testing.py",
             "src/flask/globals.py",
             "src/flask/testing.py",
-            "tests/test_helpers.py",
             "src/flask/app.py",
+            "tests/test_helpers.py",
             "src/flask/helpers.py",
             "src/flask/wrappers.py",
             "src/flask/cli.py",
-            "tests/test_json_tag.py",
-            "src/flask/sansio/blueprints.py",
             "src/flask/sansio/app.py",
-            "src/flask/templating.py",
+            "tests/test_json_tag.py",
             "src/flask/json/tag.py",
-            "src/flask/__init__.py"
+            "src/flask/__init__.py",
+            "src/flask/config.py",
+            "src/flask/templating.py",
+            "src/flask/debughelpers.py",
+            "tests/test_views.py",
+            "tests/test_config.py",
+            "tests/conftest.py",
+            "tests/test_cli.py"
           ],
           "notes": [
             "Controlled local replay, not human-session telemetry.",
@@ -164,32 +168,36 @@
         },
         "callsieve": {
           "grep_commands": 0,
-          "file_reads": 20,
-          "tokens": 132204,
+          "file_reads": 24,
+          "tokens": 121150,
           "commands": [
-            "callsieve context benchmarks/github-flask \"change blueprint route registration behavior\" --limit 20 --snippets-per-file 2"
+            "callsieve context benchmarks/github-flask \"change blueprint route registration behavior\" --limit 24 --snippets-per-file 2"
           ],
           "files_read": [
             "src/flask/sansio/blueprints.py",
             "src/flask/sansio/scaffold.py",
-            "tests/test_blueprints.py",
             "src/flask/wrappers.py",
             "src/flask/blueprints.py",
             "tests/test_basic.py",
+            "tests/test_blueprints.py",
             "src/flask/sansio/app.py",
-            "tests/test_async.py",
             "src/flask/app.py",
             "src/flask/debughelpers.py",
             "src/flask/helpers.py",
-            "tests/type_check/typing_route.py",
+            "tests/test_async.py",
             "src/flask/cli.py",
             "src/flask/ctx.py",
             "src/flask/templating.py",
             "tests/test_user_error_handler.py",
-            "tests/test_testing.py",
             "src/flask/testing.py",
+            "tests/type_check/typing_route.py",
+            "tests/test_testing.py",
             "src/flask/globals.py",
-            "src/flask/__init__.py"
+            "tests/test_helpers.py",
+            "src/flask/__init__.py",
+            "src/flask/sessions.py",
+            "src/flask/views.py",
+            "tests/test_reqctx.py"
           ],
           "notes": [
             "Controlled local replay, not human-session telemetry.",

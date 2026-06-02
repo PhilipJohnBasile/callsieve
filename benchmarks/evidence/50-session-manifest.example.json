@@ -16,7 +16,7 @@
     "minimum_token_reduction_percent": 0.0,
     "minimum_observed_sessions": 50,
     "minimum_observed_token_reduction_percent": 50.0,
-    "minimum_external_repos": 3,
+    "minimum_external_repos": 6,
     "minimum_planned_tasks": 50,
     "maximum_controlled_replay_ratio": 0.0,
     "maximum_trace_violations": 0,

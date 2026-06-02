@@ -19,6 +19,8 @@ cargo run -- session-finish .callsieve/observed-session.json --out .callsieve/ob
 cargo run -- trace-check benchmarks/session-trace.example.json --strict
 cargo run -- benchmark-doctor benchmarks/report-manifest.example.json
 cargo run -- benchmark-report benchmarks/report-manifest.example.json
+cargo run -- benchmark-report benchmarks/external-github-manifest.local.json --limit 24
+cargo run -- proof-rehearsal --fix --resume
 cargo run -- pilot-doctor benchmarks/pilot-manifest.example.json
 cargo run -- pilot-report benchmarks/pilot-manifest.example.json
 cargo run -- proof-report benchmarks/pilot-manifest.example.json
@@ -29,17 +31,17 @@ cargo run -- policy-check benchmarks/session-trace.example.json --strict
 
 Use `cargo run -- index . --lsp` when benchmark evidence should include local LSP-derived reference edges. Reports stay deterministic and local-first: CallSieve only uses language servers already installed on the machine, and falls back to the tree-sitter/heuristic graph when a server is unavailable.
 
-## Current Evidence Stack
+## Evidence Tiers
 
-CallSieve has five evidence modes:
+CallSieve evidence is intentionally split into three tiers:
 
-- `benchmark-suite`: deterministic recall and token-savings estimates for local task suites.
-- `eval-retrieval` and `perf-report`: local retrieval-quality and p95-latency gates for tuning the read-first packet before proof collection.
-- `trace-replay` and `codex-session`: controlled replay, useful for shakedown and setup checks, never counted as observed proof.
-- `session-*`, `pilot-*`, `pilot-report`, and `proof-report`: observed paired sessions with strict trace policy, transcript token provenance, critical-file miss tracking, and replay separation.
-- `enterprise-proof-report`: broad-claim proof gates for 1,000 observed sessions, multi-client coverage, scale proxy repos, per-session savings ratios, and PMF evidence.
+- Rehearsal evidence: deterministic retrieval fixtures, local perf reports, external benchmark reports, platform-neutral `context_payload_reduction`, and `trace-replay` controlled traces. This tier is repeatable and useful for engineering confidence, but it is not observed Codex proof.
+- Supplemental evidence: Ollama or other local-model collection through `pilot-collect-ollama`. This can test task wording, expected files, prompt shape, and CallSieve navigation, but it stays outside the 50-session Codex claim manifest.
+- Claim-counted evidence: real paired Codex developer sessions recorded through `pilot-run` or `session-*`, with baseline and CallSieve phases, real transcript context token counts, files read from the transcript, strict trace policy, and zero critical misses.
 
-Keep these modes separate in claims. Controlled replay can support engineering confidence, but broad token-savings claims require observed-session reports.
+`proof-report` is a claim-proof command. Run it only after `pilot-qa` passes for the claim-counted manifest. Controlled replay and supplemental Ollama runs can support the report narrative, but they must remain separate from observed session counts.
+
+For cross-agent comparison, use `context_payload_reduction`. It is a platform-neutral proxy that estimates the repo context payload CallSieve avoids versus deterministic grep/read replay. It applies across Codex, Claude, Gemini, Kimi, Cursor, Cline, Roo, and local agents because it does not depend on vendor transcript telemetry. It is not observed whole-session token savings.
 
 Latest local run on this repository:
 
@@ -205,7 +207,7 @@ cargo run -- benchmark-doctor benchmarks/report-manifest.example.json
 cargo run -- benchmark-report benchmarks/report-manifest.example.json
 ```
 
-`benchmark-doctor` validates local repo paths, indexes, suites, and trace files before collection. The report output includes per-repo expected-file recall, estimated token savings, avoided grep commands, avoided file reads, misses, and aggregate totals across all listed repos.
+`benchmark-doctor` validates local repo paths, indexes, suites, and trace files before collection. The report output includes per-repo expected-file recall, `context_payload_reduction`, estimated token-savings compatibility fields, avoided grep commands, avoided file reads, misses, and aggregate totals across all listed repos.
 
 ## External GitHub Fixture Pilot
 
@@ -227,6 +229,9 @@ cargo run -- benchmark-doctor benchmarks/external-github-manifest.local.json
 cargo run -- benchmark-report benchmarks/external-github-manifest.local.json
 cargo run -- benchmark-report benchmarks/external-github-manifest.local.json --limit 24
 cargo run -- trace-replay benchmarks/github-ripgrep benchmarks/external-ripgrep-suite.json benchmarks/external-ripgrep-trace.json --limit 20
+cargo run -- proof-rehearsal --preflight
+cargo run -- proof-rehearsal --fix --resume
+cargo run -- proof-rehearsal --collect-ollama
 ```
 
 Latest local external run:
@@ -236,11 +241,22 @@ Latest local external run:
 - controlled replay traces at 24-file packet: `12` sessions, `3581345` baseline tokens, `1642220` CallSieve tokens, `1939125` tokens saved, `54.1%` token reduction, `57` avoided grep commands, `1021` avoided file reads, `0` files still missed
 - pilot report over the same manifest: `pass`, `0` strict trace-policy violations, `6/6` fresh indexes
 
+`proof-rehearsal` runs the deterministic local shakedown in Rust: `eval-retrieval benchmarks/retrieval-fixtures.json`, `perf-report . --iterations 5`, external `benchmark-doctor`, external `benchmark-report --limit 24`, controlled replay regeneration for all six external fixture repos, and a second external `benchmark-report --limit 24`. It asserts `0` critical retrieval misses and `28/28` expected external files found, then surfaces the final report's platform-neutral `context_payload_reduction`. It does not run `proof-report`. Pass `--collect-ollama` only when you explicitly want supplemental local-model collection.
+
+Self-healing options:
+
+- `--preflight`: validate manifests, fixture repos, suites, trace paths, and trace directories without running rehearsal.
+- `--fix`: apply local safe fixes only: create ignored evidence directories, rebuild local indexes, and regenerate missing controlled traces.
+- `--resume`: reuse `benchmarks/evidence/rehearsal-run.local.json` and skip prior passed steps whose command signature still matches.
+- `--retry-count <n>`: retry transient failures. The default is `1`.
+
+`--fix` does not clone repos, install LSP servers, install Ollama models, delete evidence, reset git state, record observed sessions, or run claim proof. The command is implemented in the Rust binary and emits JSON by default.
+
 This is external repo benchmark evidence plus controlled local replay support, not observed human agent-session proof. Add `trace_paths` from `session-start` / `session-event` / `session-finish` when running a pilot intended to prove session behavior. Use generated `trace-replay` files when you need reproducible local replay traces before real session telemetry exists. The external GitHub manifest should be reported at `--limit 24`; `--limit 12` is useful as a stricter budget diagnostic when investigating ranking quality.
 
 ## Pilot Reports
 
-Use `pilot-report` when you need one local JSON artifact for a pilot: benchmark recall, estimated token savings, observed trace savings, controlled replay counts, strict before-grep policy checks, index freshness, daemon state, Codex bootstrap coverage, and LSP coverage.
+Use `pilot-report` when you need one local JSON artifact for a pilot: benchmark recall, platform-neutral context payload reduction, estimated token-savings compatibility fields, observed trace savings, controlled replay counts, strict before-grep policy checks, index freshness, daemon state, Codex bootstrap coverage, and LSP coverage.
 
 Use `proof-report` for the top-level claim artifact. It keeps observed sessions, controlled replay sessions, external repo coverage, and observed token reduction separate. Controlled replay traces are never counted as observed evidence, and traces tagged as observed but containing controlled replay markers fail the report.
 
@@ -265,7 +281,37 @@ Latest local proof sprint: `pass`, `1` observed Codex session, `0` controlled re
 
 ## Observed Pilot Harness
 
-Use the harness commands when collecting the 100 real paired developer sessions needed for the local strict proof target. The harness writes only local JSON under `benchmarks/evidence`, keeps paired baseline and CallSieve traces separate, preserves rejected-session audit reasons, and refuses finalization unless every counted session is observed, token-accounted, policy-clean, and free of critical-file misses. The broader enterprise claim is separate and requires `enterprise-proof-report` to pass.
+Use the harness commands when collecting real paired developer sessions. The harness writes only local JSON under `benchmarks/evidence`, keeps paired baseline and CallSieve traces separate, preserves rejected-session audit reasons, and refuses finalization unless every counted session is observed, token-accounted, policy-clean, and free of critical-file misses. The broader enterprise claim is separate and requires `enterprise-proof-report` to pass.
+
+Current 50-session Codex milestone:
+
+```bash
+cargo run -- setup-observed-codex-oss-50
+cargo run -- setup-observed-codex-oss-50 --bootstrap-repos
+cargo run -- pilot-qa benchmarks/evidence/observed-codex-oss-50.local.json
+cargo run -- pilot-finalize benchmarks/evidence/observed-codex-oss-50.local.json --out benchmarks/evidence/proof.local.json --limit 24
+cargo run -- proof-report benchmarks/evidence/proof.local.manifest.json --limit 24
+```
+
+The setup command preregisters exactly `50` pending Codex tasks in the ignored local manifest `benchmarks/evidence/observed-codex-oss-50.local.json`: four rounds of the 12 external suite tasks plus `ripgrep-ignore-walk-codex-r05` and `httpx-timeouts-client-codex-r05`. It copies each suite entry's expected files into both `expected_files` and `critical_files`, sets `client = codex`, `model = gpt-5-codex`, `external = true`, `pair_id = task id`, and `token_accounting_source = transcript_context_tokens`.
+
+Run with `--bootstrap-repos` before collection to execute, for each fixture repo:
+
+```bash
+cargo run -- bootstrap <repo> --client codex --strict --force --lsp
+cargo run -- doctor <repo> --client codex --strict
+```
+
+The 50-session proof is claim-counted only after `pilot-qa` and `proof-report` pass with `50` observed Codex sessions, at least `50%` observed token reduction, `0` critical misses, `0` strict trace-policy violations, `0` controlled replay counted as observed, and transcript context token accounting on every counted session.
+
+Use the recording helper for each real transcript phase so the local manifest receives the exact `pilot-run` shape and rejects missing token or file-read evidence:
+
+```bash
+cargo run -- record-codex-observed-session --task-id <task-id> --mode baseline --command "<baseline command>" --tokens <transcript-context-tokens> --files-read <file>
+cargo run -- record-codex-observed-session --task-id <task-id> --mode callsieve --command "callsieve agent-context <repo> \"<task>\"" --tokens <transcript-context-tokens> --files-read <file>
+```
+
+The helper does not estimate token counts. It rejects missing `task_id`, missing or zero `tokens`, and empty `files_read`, then prints the next `pilot-qa` command after each record.
 
 ```bash
 cargo run -- pilot-init benchmarks/evidence/pilot.local.json --sessions 100
@@ -285,7 +331,7 @@ cargo run -- pilot-task reject benchmarks/evidence/pilot.local.json --task-id au
 
 `pilot-finalize` writes a generated proof manifest next to the proof output. That manifest uses combined observed traces for token accounting, `policy_trace_paths` for strict CallSieve-phase before-grep checks, and an `audit` block with planned task count, rejected-session count, and token-accounting sources. This prevents controlled replay, rejected evidence, or baseline grep activity from being mixed into the observed CallSieve policy result.
 
-For the strict claim target, start from `benchmarks/evidence/100-session-manifest.example.json` and keep these gates:
+For the stricter 100-session follow-on target, start from `benchmarks/evidence/100-session-manifest.example.json` and keep these gates:
 
 - `minimum_observed_sessions`: `100` or higher
 - `minimum_external_repos`: `6` or higher
@@ -298,23 +344,23 @@ For the strict claim target, start from `benchmarks/evidence/100-session-manifes
 
 ## Ollama Supplemental Pilot
 
-Use local Ollama runs as supplemental evidence and rehearsal unless they meet the same strict observed-session rules as any other claim-counted run. The local manifest `benchmarks/evidence/observed-generic-ollama-100.local.json` is ignored by git and is intended for this workflow: 120 pre-registered tasks, target 100 countable paired sessions, 6 external fixture repos, and transcript token accounting.
+For the 50-session observed Codex milestone, use local or cloud-backed Ollama models only as rehearsal for task wording, expected files, prompt shape, and CallSieve retrieval. Do not mix Ollama traces into `benchmarks/evidence/observed-codex-oss-50.local.json` or the generated Codex proof manifest. The local manifest `benchmarks/evidence/observed-generic-ollama-100.local.json` is ignored by git and is intended for separate supplemental workflows: 120 pre-registered tasks, target 100 paired sessions, 6 external fixture repos, and transcript token accounting.
 
-Evidence tiers:
+For this tiering model:
 
-- Tier 1 claim evidence: paired observed developer sessions recorded with `session-*` or `pilot-run`, `metadata.collection = "observed_session"`, baseline and CallSieve phases, auditable transcript token counts, zero critical misses, and strict trace-policy pass.
-- Tier 2 Ollama supplemental evidence: model-only or local-agent runs comparing raw navigation with CallSieve navigation. Mark standalone artifacts with `"proof_countable": false` unless they satisfy the full Tier 1 trace and token policy.
-- Tier 3 controlled replay: generated replay traces, always reported separately and never counted as observed evidence.
+- Claim-counted means paired observed Codex developer sessions recorded with `session-*` or `pilot-run`, `metadata.collection = "observed_session"`, baseline and CallSieve phases, auditable transcript token counts, zero critical misses, and strict trace-policy pass.
+- Supplemental means model-only or local-agent runs comparing raw navigation with CallSieve navigation. Keep these in separate local manifests and mark standalone artifacts with `"proof_countable": false` for the Codex 50-session milestone.
+- Rehearsal means generated replay traces, deterministic benchmark runs, and platform-neutral context payload reduction, always reported separately and never counted as observed evidence.
 
-Normalize the local Ollama matrix before collection:
+Check the local Ollama model list before collection:
 
 ```bash
 ollama list
-powershell -ExecutionPolicy Bypass -File .callsieve/populate-ollama-pilot.ps1
-cargo run --quiet -- pilot-qa benchmarks/evidence/observed-generic-ollama-100.local.json
+cargo run -- pilot-collect-ollama benchmarks/evidence/observed-generic-ollama-100.local.json --model qwen2.5-coder:7b --limit 10 --context-limit 24
+cargo run -- pilot-qa benchmarks/evidence/observed-generic-ollama-100.local.json
 ```
 
-The matrix generator only uses models confirmed by `ollama list`. If only `qwen2.5-coder:7b` is installed, it fills the 120 planned slots with that installed model label instead of placeholder larger models. Add larger model slots only after `ollama list` confirms they exist.
+Use only models confirmed by `ollama list`; supplemental runs stay separate from the Codex observed manifest.
 
 For each task, record the baseline first, then the CallSieve-assisted phase:
 
@@ -330,7 +376,7 @@ For local qwen collection, the harness can run the paired Ollama workflow direct
 cargo run --quiet -- pilot-collect-ollama benchmarks/evidence/observed-generic-ollama-100.local.json --model qwen2.5-coder:7b --limit 10 --context-limit 24
 ```
 
-`pilot-collect-ollama` records baseline first and CallSieve second through `pilot-run`, audits the files supplied to each phase, writes raw `baseline-ollama-transcript.local.json` and `callsieve-ollama-transcript.local.json` artifacts under each task directory, and uses Ollama verbose `prompt eval count` as the transcript context token count. Those sessions are countable only when the generated paired traces pass the same observed-session, token-source, strict-policy, and critical-file gates as hand-recorded runs.
+`pilot-collect-ollama` records baseline first and CallSieve second through `pilot-run`, audits the files supplied to each phase, writes raw `baseline-ollama-transcript.local.json` and `callsieve-ollama-transcript.local.json` artifacts under each task directory, and uses Ollama verbose `prompt eval count` as the transcript context token count. Treat these sessions as rehearsal for the Codex 50-session milestone, even when the local QA gates pass.
 
 Run QA after every 10 paired tasks:
 
@@ -402,7 +448,7 @@ Use `evidence-pack` to package the pilot report into a shareable JSON envelope f
 cargo run -- evidence-pack benchmarks/pilot-manifest.example.json --anonymize
 ```
 
-The output includes generation time, the local collection protocol, and the complete pilot report. With `--anonymize`, repo labels, local paths, team identifiers, and case-study identifiers are redacted while aggregate counts, recall, token savings, trace violations, LSP coverage, and PMF metrics remain available.
+The output includes generation time, the local collection protocol, and the complete pilot report. With `--anonymize`, repo labels, local paths, team identifiers, and case-study identifiers are redacted while aggregate counts, recall, context payload reduction, token-savings compatibility fields, trace violations, LSP coverage, and PMF metrics remain available.
 
 Recommended external proof target:
 

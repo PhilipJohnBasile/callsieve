@@ -1,8 +1,8 @@
 {
   "metadata": {
-    "collection": "controlled_replay",
     "client": "callsieve",
-    "model": "controlled-replay"
+    "model": "controlled-replay",
+    "collection": "controlled_replay"
   },
   "tasks": [
     {
@@ -99,10 +99,10 @@
         },
         "callsieve": {
           "grep_commands": 0,
-          "file_reads": 20,
-          "tokens": 253563,
+          "file_reads": 24,
+          "tokens": 278150,
           "commands": [
-            "callsieve context benchmarks/github-ripgrep \"change gitignore matching and directory walk behavior\" --limit 20 --snippets-per-file 2"
+            "callsieve context benchmarks/github-ripgrep \"change gitignore matching and directory walk behavior\" --limit 24 --snippets-per-file 2"
           ],
           "files_read": [
             "crates/ignore/src/gitignore.rs",
@@ -111,20 +111,24 @@
             "crates/ignore/src/dir.rs",
             "crates/ignore/src/lib.rs",
             "crates/globset/src/lib.rs",
-            "crates/core/flags/defs.rs",
-            "crates/matcher/src/lib.rs",
             "crates/ignore/src/overrides.rs",
-            "crates/cli/src/process.rs",
-            "crates/regex/src/literal.rs",
-            "crates/cli/src/decompress.rs",
-            "crates/core/flags/parse.rs",
-            "crates/core/search.rs",
+            "crates/ignore/tests/gitignore_matched_path_or_any_parents_tests.rs",
+            "crates/core/flags/defs.rs",
+            "crates/core/flags/hiargs.rs",
+            "crates/core/flags/lowargs.rs",
             "crates/globset/src/glob.rs",
-            "crates/printer/src/hyperlink/mod.rs",
-            "crates/printer/src/json.rs",
-            "crates/regex/src/matcher.rs",
-            "crates/searcher/src/searcher/glue.rs",
-            "crates/searcher/src/testutil.rs"
+            "CHANGELOG.md",
+            "crates/ignore/tests/gitignore_skip_bom.rs",
+            "tests/util.rs",
+            "crates/ignore/src/types.rs",
+            "crates/core/flags/mod.rs",
+            "crates/core/main.rs",
+            "crates/regex/src/literal.rs",
+            "crates/printer/src/standard.rs",
+            "README.md",
+            "GUIDE.md",
+            "FAQ.md",
+            "crates/pcre2/src/matcher.rs"
           ],
           "notes": [
             "Controlled local replay, not human-session telemetry.",
@@ -143,8 +147,8 @@
       "session": {
         "baseline": {
           "grep_commands": 5,
-          "file_reads": 84,
-          "tokens": 511172,
+          "file_reads": 85,
+          "tokens": 511290,
           "commands": [
             "rg -n json benchmarks/github-ripgrep",
             "rg -n output benchmarks/github-ripgrep",
@@ -153,6 +157,7 @@
             "rg -n statistics benchmarks/github-ripgrep"
           ],
           "files_read": [
+            ".codex/CALLSIEVE.md",
             ".github/ISSUE_TEMPLATE/bug_report.yml",
             ".github/workflows/release.yml",
             "CHANGELOG.md",
@@ -245,32 +250,36 @@
         },
         "callsieve": {
           "grep_commands": 0,
-          "file_reads": 20,
-          "tokens": 276966,
+          "file_reads": 24,
+          "tokens": 241880,
           "commands": [
-            "callsieve context benchmarks/github-ripgrep \"change JSON printer output and search statistics\" --limit 20 --snippets-per-file 2"
+            "callsieve context benchmarks/github-ripgrep \"change JSON printer output and search statistics\" --limit 24 --snippets-per-file 2"
           ],
           "files_read": [
+            "crates/core/flags/hiargs.rs",
             "crates/printer/src/json.rs",
             "crates/printer/src/stats.rs",
             "crates/core/search.rs",
             "tests/json.rs",
-            "crates/core/flags/hiargs.rs",
             "crates/printer/src/standard.rs",
-            "crates/core/flags/defs.rs",
             "crates/printer/src/summary.rs",
+            "crates/core/flags/defs.rs",
             "crates/core/main.rs",
-            "crates/printer/src/hyperlink/mod.rs",
             "tests/util.rs",
-            "crates/regex/src/literal.rs",
-            "crates/globset/src/glob.rs",
-            "crates/searcher/src/searcher/glue.rs",
-            "crates/cli/src/decompress.rs",
-            "crates/cli/src/process.rs",
-            "crates/core/flags/parse.rs",
-            "crates/globset/src/lib.rs",
-            "crates/ignore/src/walk.rs",
-            "crates/regex/src/config.rs"
+            "crates/printer/src/lib.rs",
+            "crates/grep/examples/simplegrep.rs",
+            "crates/printer/src/color.rs",
+            "crates/printer/src/counter.rs",
+            "crates/printer/src/hyperlink/mod.rs",
+            "CHANGELOG.md",
+            "tests/tests.rs",
+            "crates/core/flags/lowargs.rs",
+            "FAQ.md",
+            "GUIDE.md",
+            "crates/printer/src/util.rs",
+            "README.md",
+            "crates/printer/src/path.rs",
+            "crates/searcher/src/searcher/mod.rs"
           ],
           "notes": [
             "Controlled local replay, not human-session telemetry.",

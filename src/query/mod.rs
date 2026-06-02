@@ -233,6 +233,7 @@ pub struct BenchmarkOutput {
     estimator: String,
     baseline: BaselineBenchmark,
     callsieve: CallsieveBenchmark,
+    context_payload_reduction: ContextPayloadReduction,
     savings: SavingsBenchmark,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     warnings: Vec<String>,
@@ -277,6 +278,20 @@ struct SavingsBenchmark {
     estimated_token_savings: isize,
     estimated_token_reduction_percent: f64,
     notes: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+struct ContextPayloadReduction {
+    label: &'static str,
+    evidence_tier: &'static str,
+    platform_scope: &'static str,
+    baseline_context_payload_tokens_estimate: usize,
+    callsieve_context_payload_tokens_estimate: usize,
+    context_payload_tokens_saved_estimate: isize,
+    context_payload_reduction_ratio: f64,
+    context_payload_reduction_percent: f64,
+    estimator: &'static str,
+    warning: &'static str,
 }
 
 #[derive(Debug, Deserialize)]
@@ -351,6 +366,9 @@ struct BenchmarkSuiteSummary {
     expected_files_found: usize,
     missed_expected_files: usize,
     expected_file_recall: f64,
+    baseline_context_payload_tokens_estimate: usize,
+    callsieve_context_payload_tokens_estimate: usize,
+    context_payload_reduction: ContextPayloadReduction,
     total_estimated_token_savings: isize,
     average_estimated_token_reduction_percent: f64,
     total_estimated_avoided_grep_commands: usize,
@@ -764,6 +782,9 @@ struct BenchmarkReportRepoOutput {
     expected_files: usize,
     expected_files_found: usize,
     missed_expected_files: usize,
+    baseline_context_payload_tokens_estimate: usize,
+    callsieve_context_payload_tokens_estimate: usize,
+    context_payload_reduction: ContextPayloadReduction,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     misses: Vec<BenchmarkSuiteMiss>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -782,6 +803,9 @@ struct BenchmarkReportSummary {
     expected_files_found: usize,
     missed_expected_files: usize,
     expected_file_recall: f64,
+    baseline_context_payload_tokens_estimate: usize,
+    callsieve_context_payload_tokens_estimate: usize,
+    context_payload_reduction: ContextPayloadReduction,
     total_estimated_token_savings: isize,
     average_estimated_token_reduction_percent: f64,
     total_avoided_grep_commands: usize,
@@ -1748,6 +1772,10 @@ pub fn benchmark_context(
             "Callsieve cost is the serialized context packet for the same task.".to_string(),
         ],
     };
+    let context_payload_reduction = context_payload_reduction(
+        baseline.estimated_total_tokens,
+        callsieve.estimated_packet_tokens,
+    );
 
     Ok(BenchmarkOutput {
         task: task.to_string(),
@@ -1755,6 +1783,7 @@ pub fn benchmark_context(
         estimator: "local deterministic token estimate".to_string(),
         baseline,
         callsieve,
+        context_payload_reduction,
         savings,
         warnings: context.warnings,
     })
@@ -1773,6 +1802,8 @@ pub fn benchmark_suite(
     let mut total_expected_files_found = 0;
     let mut tasks_with_all_expected_files = 0;
     let mut total_estimated_token_savings = 0;
+    let mut total_baseline_context_payload_tokens = 0;
+    let mut total_callsieve_context_payload_tokens = 0;
     let mut total_estimated_reduction_percent = 0.0;
     let mut total_estimated_avoided_grep_commands = 0;
     let mut total_estimated_avoided_file_reads = 0;
@@ -1825,6 +1856,8 @@ pub fn benchmark_suite(
             tasks_with_all_expected_files += 1;
         }
         total_estimated_token_savings += benchmark.savings.estimated_token_savings;
+        total_baseline_context_payload_tokens += benchmark.baseline.estimated_total_tokens;
+        total_callsieve_context_payload_tokens += benchmark.callsieve.estimated_packet_tokens;
         total_estimated_reduction_percent += benchmark.savings.estimated_token_reduction_percent;
         total_estimated_avoided_grep_commands += benchmark.savings.avoided_grep_commands;
         total_estimated_avoided_file_reads += benchmark.savings.avoided_file_reads;
@@ -1868,6 +1901,12 @@ pub fn benchmark_suite(
         expected_files_found: total_expected_files_found,
         missed_expected_files: total_expected_files.saturating_sub(total_expected_files_found),
         expected_file_recall: recall(total_expected_files_found, total_expected_files),
+        baseline_context_payload_tokens_estimate: total_baseline_context_payload_tokens,
+        callsieve_context_payload_tokens_estimate: total_callsieve_context_payload_tokens,
+        context_payload_reduction: context_payload_reduction(
+            total_baseline_context_payload_tokens,
+            total_callsieve_context_payload_tokens,
+        ),
         total_estimated_token_savings,
         average_estimated_token_reduction_percent: if task_count == 0 {
             0.0
@@ -2176,6 +2215,8 @@ pub fn benchmark_report(
     let mut total_expected_files = 0;
     let mut total_expected_files_found = 0;
     let mut total_estimated_token_savings = 0;
+    let mut total_baseline_context_payload_tokens = 0;
+    let mut total_callsieve_context_payload_tokens = 0;
     let mut total_estimated_reduction_percent = 0.0;
     let mut total_avoided_grep_commands = 0;
     let mut total_avoided_file_reads = 0;
@@ -2191,6 +2232,8 @@ pub fn benchmark_report(
         let mut repo_expected_files = 0;
         let mut repo_expected_files_found = 0;
         let mut repo_estimated_token_savings = 0;
+        let mut repo_baseline_context_payload_tokens = 0;
+        let mut repo_callsieve_context_payload_tokens = 0;
         let mut repo_reduction_percent_total = 0.0;
         let mut repo_avoided_grep_commands = 0;
         let mut repo_avoided_file_reads = 0;
@@ -2213,6 +2256,10 @@ pub fn benchmark_report(
             repo_expected_files += output.summary.expected_files;
             repo_expected_files_found += output.summary.expected_files_found;
             repo_estimated_token_savings += output.summary.total_estimated_token_savings;
+            repo_baseline_context_payload_tokens +=
+                output.summary.baseline_context_payload_tokens_estimate;
+            repo_callsieve_context_payload_tokens +=
+                output.summary.callsieve_context_payload_tokens_estimate;
             repo_reduction_percent_total +=
                 output.summary.average_estimated_token_reduction_percent
                     * output.summary.task_count as f64;
@@ -2236,6 +2283,8 @@ pub fn benchmark_report(
         total_expected_files += repo_expected_files;
         total_expected_files_found += repo_expected_files_found;
         total_estimated_token_savings += repo_estimated_token_savings;
+        total_baseline_context_payload_tokens += repo_baseline_context_payload_tokens;
+        total_callsieve_context_payload_tokens += repo_callsieve_context_payload_tokens;
         total_estimated_reduction_percent += if repo_task_count == 0 {
             0.0
         } else {
@@ -2289,6 +2338,12 @@ pub fn benchmark_report(
             expected_files: repo_expected_files,
             expected_files_found: repo_expected_files_found,
             missed_expected_files: repo_expected_files.saturating_sub(repo_expected_files_found),
+            baseline_context_payload_tokens_estimate: repo_baseline_context_payload_tokens,
+            callsieve_context_payload_tokens_estimate: repo_callsieve_context_payload_tokens,
+            context_payload_reduction: context_payload_reduction(
+                repo_baseline_context_payload_tokens,
+                repo_callsieve_context_payload_tokens,
+            ),
             misses: repo_misses,
             session_trace,
             observed_session,
@@ -2306,6 +2361,12 @@ pub fn benchmark_report(
         expected_files_found: total_expected_files_found,
         missed_expected_files: total_expected_files.saturating_sub(total_expected_files_found),
         expected_file_recall: recall(total_expected_files_found, total_expected_files),
+        baseline_context_payload_tokens_estimate: total_baseline_context_payload_tokens,
+        callsieve_context_payload_tokens_estimate: total_callsieve_context_payload_tokens,
+        context_payload_reduction: context_payload_reduction(
+            total_baseline_context_payload_tokens,
+            total_callsieve_context_payload_tokens,
+        ),
         total_estimated_token_savings,
         average_estimated_token_reduction_percent: if repo_count == 0 {
             0.0
@@ -4182,6 +4243,33 @@ fn estimate_tokens(text: &str) -> usize {
     }
 }
 
+fn context_payload_reduction(
+    baseline_context_payload_tokens_estimate: usize,
+    callsieve_context_payload_tokens_estimate: usize,
+) -> ContextPayloadReduction {
+    let context_payload_tokens_saved_estimate = baseline_context_payload_tokens_estimate as isize
+        - callsieve_context_payload_tokens_estimate as isize;
+    let context_payload_reduction_ratio = if baseline_context_payload_tokens_estimate == 0 {
+        0.0
+    } else {
+        context_payload_tokens_saved_estimate as f64
+            / baseline_context_payload_tokens_estimate as f64
+    };
+
+    ContextPayloadReduction {
+        label: "context_payload_reduction",
+        evidence_tier: "platform_neutral_proxy",
+        platform_scope: "agent_platform_neutral",
+        baseline_context_payload_tokens_estimate,
+        callsieve_context_payload_tokens_estimate,
+        context_payload_tokens_saved_estimate,
+        context_payload_reduction_ratio,
+        context_payload_reduction_percent: context_payload_reduction_ratio * 100.0,
+        estimator: "local deterministic token estimate, one token per four UTF-8 bytes",
+        warning: "This estimates context payload reduction only. It is not observed whole-session token savings.",
+    }
+}
+
 fn elapsed_ms(duration: Duration) -> u64 {
     duration.as_millis().try_into().unwrap_or(u64::MAX)
 }
@@ -5164,6 +5252,42 @@ mod tests {
         assert!(output.baseline.matched_files > output.callsieve.selected_files);
         assert!(output.baseline.estimated_total_tokens > output.callsieve.estimated_packet_tokens);
         assert!(output.savings.estimated_token_savings > 0);
+        assert_eq!(
+            output.context_payload_reduction.label,
+            "context_payload_reduction"
+        );
+        assert_eq!(
+            output.context_payload_reduction.evidence_tier,
+            "platform_neutral_proxy"
+        );
+        assert_eq!(
+            output.context_payload_reduction.platform_scope,
+            "agent_platform_neutral"
+        );
+        assert_eq!(
+            output
+                .context_payload_reduction
+                .baseline_context_payload_tokens_estimate,
+            output.baseline.estimated_total_tokens
+        );
+        assert_eq!(
+            output
+                .context_payload_reduction
+                .callsieve_context_payload_tokens_estimate,
+            output.callsieve.estimated_packet_tokens
+        );
+        assert!(
+            output
+                .context_payload_reduction
+                .context_payload_reduction_percent
+                > 0.0
+        );
+        assert!(
+            output
+                .context_payload_reduction
+                .warning
+                .contains("not observed whole-session token savings")
+        );
         assert!(
             output
                 .callsieve
@@ -5215,6 +5339,18 @@ mod tests {
         assert_eq!(output.summary.expected_file_recall, 1.0);
         assert_eq!(output.summary.tasks_with_all_expected_files, 1);
         assert_eq!(output.summary.tasks_with_misses, 0);
+        assert_eq!(
+            output.summary.context_payload_reduction.label,
+            "context_payload_reduction"
+        );
+        assert_eq!(
+            output.summary.baseline_context_payload_tokens_estimate as isize
+                - output.summary.callsieve_context_payload_tokens_estimate as isize,
+            output
+                .summary
+                .context_payload_reduction
+                .context_payload_tokens_saved_estimate
+        );
         assert!(output.summary.total_estimated_avoided_grep_commands > 0);
 
         let observed = output.summary.observed_session.unwrap();
@@ -5335,6 +5471,18 @@ mod tests {
         assert_eq!(output.summary.expected_files, 3);
         assert_eq!(output.summary.expected_files_found, 3);
         assert_eq!(output.summary.expected_file_recall, 1.0);
+        assert_eq!(
+            output.summary.context_payload_reduction.evidence_tier,
+            "platform_neutral_proxy"
+        );
+        assert_eq!(
+            output.summary.baseline_context_payload_tokens_estimate as isize
+                - output.summary.callsieve_context_payload_tokens_estimate as isize,
+            output
+                .summary
+                .context_payload_reduction
+                .context_payload_tokens_saved_estimate
+        );
         assert!(output.summary.total_avoided_grep_commands > 0);
     }
 

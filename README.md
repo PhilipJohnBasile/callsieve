@@ -4,14 +4,6 @@ CallSieve is the local codebase filter for AI coding agents.
 
 It indexes a repository and returns compact, structured context so agents can spend fewer tokens on blind grep, file discovery, repeated reads, and rediscovering project structure.
 
-## Keystone Thesis
-
-> "Almost all context windows for developer sessions, truly massive percentages, are filled up by grepping. If people came up with a solution for less grepping in projects, that would save a lot of tokens and would probably be worth money."
->
-> - Microsoft engineer
-
-CallSieve exists to turn that observation into infrastructure.
-
 ## Product Promise
 
 Stop paying AI agents to grep your repo.
@@ -98,6 +90,7 @@ cargo run -- benchmark-suite . benchmarks/tasks.json
 cargo run -- benchmark-suite . benchmarks/callsieve-real-repo.json
 cargo run -- eval-retrieval benchmarks/retrieval-fixtures.json
 cargo run -- perf-report . --iterations 5
+cargo run -- proof-rehearsal --fix --resume
 cargo run -- trace-summary benchmarks/session-trace.example.json
 cargo run -- session-start . "change login token expiry behavior" --client codex --model gpt-5-codex --trace .callsieve/observed-session.json
 cargo run -- session-event .callsieve/observed-session.json --command "callsieve agent-context . \"change login token expiry behavior\"" --files-read src/auth/session.ts --tokens 3000 --phase callsieve
@@ -110,6 +103,7 @@ cargo run -- pilot-init benchmarks/evidence/pilot.local.json --sessions 1
 cargo run -- pilot-task add benchmarks/evidence/pilot.local.json . "change login token expiry behavior" --id auth-expiry --expected-file src/auth/session.ts --critical-file src/auth/session.ts
 cargo run -- pilot-run benchmarks/evidence/pilot.local.json --task-id auth-expiry --mode baseline --command "rg login token expiry" --files-read src/auth/session.ts --tokens 12000
 cargo run -- pilot-run benchmarks/evidence/pilot.local.json --task-id auth-expiry --mode callsieve --command "callsieve agent-context . \"change login token expiry behavior\"" --files-read src/auth/session.ts --tokens 3000
+cargo run -- record-codex-observed-session --manifest benchmarks/evidence/pilot.local.json --task-id auth-expiry --mode callsieve --command "callsieve agent-context . \"change login token expiry behavior\"" --tokens 3000 --files-read src/auth/session.ts
 cargo run -- pilot-collect-ollama benchmarks/evidence/observed-generic-ollama-100.local.json --model qwen2.5-coder:7b --limit 10 --context-limit 24
 cargo run -- pilot-qa benchmarks/evidence/pilot.local.json
 cargo run -- pilot-finalize benchmarks/evidence/pilot.local.json --out benchmarks/evidence/proof.local.json
@@ -146,6 +140,21 @@ Reject invalid observed runs without deleting their audit trail:
 cargo run -- pilot-task reject benchmarks/evidence/pilot.local.json --task-id auth-expiry --reason "operator learned answer during paired run"
 ```
 
+For the current 50-session observed Codex milestone, preregister the six-repo OSS task matrix with:
+
+```bash
+cargo run -- setup-observed-codex-oss-50
+```
+
+Run the deterministic rehearsal separately:
+
+```bash
+cargo run -- proof-rehearsal --preflight
+cargo run -- proof-rehearsal --fix --resume
+```
+
+The Rust rehearsal command is self-healing for local-safe issues. `--preflight` validates prerequisites, `--fix` rebuilds local indexes, creates ignored evidence directories, and regenerates missing controlled traces, `--resume` skips already-passed matching steps from `benchmarks/evidence/rehearsal-run.local.json`, and `--retry-count` retries transient failures. Output is JSON by default. It never clones repos, installs tools, deletes evidence, records observed sessions, or runs `proof-report`.
+
 `pilot-init` defaults to the strict 100-session claim protocol. Use `--sessions 1` only for local workflow shakedowns.
 
 ## Current Capabilities
@@ -164,7 +173,7 @@ cargo run -- pilot-task reject benchmarks/evidence/pilot.local.json --task-id au
 - boosts context with import, caller, and callee proximity
 - provides an `agent-context` wrapper agents can call before grep
 - exposes a minimal MCP stdio server so agents can call CallSieve before grep
-- estimates context-packet token savings versus a naive grep/read loop
+- reports platform-neutral `context_payload_reduction` versus a naive grep/read loop
 - evaluates retrieval recall against expected and critical file fixtures with `eval-retrieval`
 - reports local p50/p95 context latency with `perf-report`
 - records real observed agent session events and summarizes baseline versus CallSieve-assisted phases
@@ -332,7 +341,7 @@ cargo run -- pilot-task reject benchmarks/evidence/pilot.local.json --task-id au
 }
 ```
 
-`benchmark-suite` reports expected-file recall, aggregate estimated token savings, and optional observed session savings when real agent trace numbers are supplied.
+`benchmark-suite` reports expected-file recall, aggregate `context_payload_reduction`, legacy estimated token-savings fields, and optional observed session savings when real agent trace numbers are supplied. `context_payload_reduction` is the platform-neutral proxy for Codex, Claude, Gemini, Kimi, Cursor, Cline, Roo, and local agents. It estimates only the prompt context payload CallSieve controls, not whole-session transcript tokens.
 
 `eval-retrieval` runs the same task fixture shape against the actual `agent-context` selection path and reports recall@k, critical recall, selected tokens, and failure reasons. It exits nonzero when a critical file is missed. `perf-report` runs fixed local tasks and reports p50/p95 latency for index load plus context generation.
 
@@ -418,6 +427,16 @@ Use `benchmark-doctor` before a report to catch missing repos, missing indexes, 
 `proof-report` is the top-level claim artifact. It exposes planned tasks, rejected-session audit count, observed sessions, transcript-token provenance, controlled replay sessions, external repo coverage, observed token reduction, controlled replay ratio, freshness, daemon, bootstrap, and LSP status in one JSON object. Controlled replay is never counted as observed evidence.
 
 `enterprise-proof-report` is the broad-claim artifact. It is opt-in and fails unless the manifest meets the enterprise gates: 1,000 paired observed sessions, 50 repos, 10 Microsoft-scale OSS proxies, Codex/Claude/Cursor coverage, 5 languages, 10 task categories, 90% positive per-session savings, 75% of sessions above 30% savings, zero critical misses, zero strict trace violations, zero controlled replay, full transcript token accounting, and paid-pilot PMF evidence. See [docs/ENTERPRISE_PROOF.md](docs/ENTERPRISE_PROOF.md) and [benchmarks/evidence/enterprise-proof-manifest.example.json](benchmarks/evidence/enterprise-proof-manifest.example.json).
+
+Evidence is separated into three tiers:
+
+- Rehearsal: deterministic retrieval fixtures, benchmark reports, perf reports, platform-neutral `context_payload_reduction`, and controlled replay traces.
+- Supplemental: Ollama or local-model collection, useful for rehearsal but not Codex claim proof.
+- Claim-counted: real paired Codex sessions with transcript token accounting, transcript-backed files read, strict policy checks, and `pilot-qa` passing before `proof-report`.
+
+Use `context_payload_reduction` when comparing CallSieve across agent platforms. Use observed token reduction only when a real paired transcript provides audited token counts.
+
+`proof-report` should only be used as claim proof after `pilot-qa` passes for the claim-counted manifest.
 
 Use `evidence-pack` when you need a shareable aggregate for external pilots:
 
@@ -552,7 +571,7 @@ If a server is missing or fails, CallSieve keeps the tree-sitter and heuristic g
 - `callsieve_stats`: inspect index coverage
 - `callsieve_status`: inspect freshness, watch, schema, and LSP enrichment state
 - `callsieve_trace_check`: audit whether a session grepped before CallSieve
-- `callsieve_benchmark`: estimate grep/read-loop token savings
+- `callsieve_benchmark`: estimate platform-neutral context payload reduction against a grep/read loop
 
 `callsieve_context` self-heals a missing or stale `.callsieve/index.json` by rebuilding the local index before returning context. MCP responses include freshness and timing metadata. The MCP server does not install shims, mutate client config, start the daemon, or send code to a remote service.
 
