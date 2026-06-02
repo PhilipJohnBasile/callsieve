@@ -1,3 +1,6 @@
 target/
 .callsieve/
 benchmarks/github-*/
+benchmarks/evidence/*.local*.json
+benchmarks/evidence/suites/
+benchmarks/evidence/tasks/
