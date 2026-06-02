@@ -1,0 +1,21 @@
+{
+  "tasks": [
+    {
+      "id": "httpx-timeouts-client",
+      "task": "change timeout configuration and client request behavior",
+      "expected_files": [
+        "httpx/_config.py",
+        "httpx/_client.py",
+        "tests/test_timeouts.py"
+      ]
+    },
+    {
+      "id": "httpx-redirects-client",
+      "task": "change redirect handling and client redirect tests",
+      "expected_files": [
+        "httpx/_client.py",
+        "tests/client/test_redirects.py"
+      ]
+    }
+  ]
+}

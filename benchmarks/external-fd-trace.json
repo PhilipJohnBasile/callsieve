@@ -1,0 +1,172 @@
+{
+  "metadata": {
+    "collection": "controlled_replay",
+    "client": "callsieve",
+    "model": "controlled-replay"
+  },
+  "tasks": [
+    {
+      "id": "fd-walk-filters",
+      "task": "change directory walking filters and hidden ignore behavior",
+      "expected_files": [
+        "src/walk.rs",
+        "src/filter/mod.rs"
+      ],
+      "session": {
+        "baseline": {
+          "grep_commands": 5,
+          "file_reads": 19,
+          "tokens": 84087,
+          "commands": [
+            "rg -n directory benchmarks/github-fd",
+            "rg -n filters benchmarks/github-fd",
+            "rg -n hidden benchmarks/github-fd",
+            "rg -n ignore benchmarks/github-fd",
+            "rg -n walking benchmarks/github-fd"
+          ],
+          "files_read": [
+            ".github/dependabot.yml",
+            "CHANGELOG.md",
+            "Cargo.toml",
+            "README.md",
+            "src/cli.rs",
+            "src/config.rs",
+            "src/dir_entry.rs",
+            "src/exec/mod.rs",
+            "src/filesystem.rs",
+            "src/filetypes.rs",
+            "src/filter/owner.rs",
+            "src/fmt/input.rs",
+            "src/fmt/mod.rs",
+            "src/main.rs",
+            "src/output.rs",
+            "src/regex_helper.rs",
+            "src/walk.rs",
+            "tests/testenv/mod.rs",
+            "tests/tests.rs"
+          ],
+          "notes": [
+            "Controlled local replay, not human-session telemetry.",
+            "Baseline simulates grepping task terms, then reading every matched indexed file."
+          ]
+        },
+        "callsieve": {
+          "grep_commands": 0,
+          "file_reads": 20,
+          "tokens": 96087,
+          "commands": [
+            "callsieve context benchmarks/github-fd \"change directory walking filters and hidden ignore behavior\" --limit 20 --snippets-per-file 2"
+          ],
+          "files_read": [
+            "src/walk.rs",
+            "src/filter/owner.rs",
+            "src/main.rs",
+            "src/filter/size.rs",
+            "src/filter/time.rs",
+            "tests/tests.rs",
+            "CHANGELOG.md",
+            "tests/testenv/mod.rs",
+            "README.md",
+            "src/filter/mod.rs",
+            "src/cli.rs",
+            "src/dir_entry.rs",
+            "src/filesystem.rs",
+            "src/exec/mod.rs",
+            "src/exit_codes.rs",
+            "src/exec/job.rs",
+            "doc/release-checklist.md",
+            "CONTRIBUTING.md",
+            "src/config.rs",
+            "src/filetypes.rs"
+          ],
+          "notes": [
+            "Controlled local replay, not human-session telemetry.",
+            "CallSieve cost is the serialized context packet plus full reads of selected read-first files."
+          ]
+        }
+      }
+    },
+    {
+      "id": "fd-cli-config",
+      "task": "change command line argument parsing and config loading",
+      "expected_files": [
+        "src/cli.rs",
+        "src/config.rs"
+      ],
+      "session": {
+        "baseline": {
+          "grep_commands": 6,
+          "file_reads": 19,
+          "tokens": 83004,
+          "commands": [
+            "rg -n argument benchmarks/github-fd",
+            "rg -n command benchmarks/github-fd",
+            "rg -n config benchmarks/github-fd",
+            "rg -n line benchmarks/github-fd",
+            "rg -n loading benchmarks/github-fd",
+            "rg -n parsing benchmarks/github-fd"
+          ],
+          "files_read": [
+            "CHANGELOG.md",
+            "Cargo.toml",
+            "README.md",
+            "SECURITY.md",
+            "doc/release-checklist.md",
+            "src/cli.rs",
+            "src/config.rs",
+            "src/dir_entry.rs",
+            "src/exec/command.rs",
+            "src/exec/job.rs",
+            "src/exec/mod.rs",
+            "src/filter/owner.rs",
+            "src/filter/size.rs",
+            "src/fmt/mod.rs",
+            "src/main.rs",
+            "src/output.rs",
+            "src/walk.rs",
+            "tests/testenv/mod.rs",
+            "tests/tests.rs"
+          ],
+          "notes": [
+            "Controlled local replay, not human-session telemetry.",
+            "Baseline simulates grepping task terms, then reading every matched indexed file."
+          ]
+        },
+        "callsieve": {
+          "grep_commands": 0,
+          "file_reads": 20,
+          "tokens": 94678,
+          "commands": [
+            "callsieve context benchmarks/github-fd \"change command line argument parsing and config loading\" --limit 20 --snippets-per-file 2"
+          ],
+          "files_read": [
+            "src/exec/command.rs",
+            "src/exec/mod.rs",
+            "src/config.rs",
+            "src/main.rs",
+            "tests/testenv/mod.rs",
+            "tests/tests.rs",
+            "src/cli.rs",
+            "src/dir_entry.rs",
+            "src/walk.rs",
+            ".cargo/config.toml",
+            ".github/ISSUE_TEMPLATE/config.yml",
+            "src/output.rs",
+            "src/filesystem.rs",
+            "src/exec/job.rs",
+            "README.md",
+            "CHANGELOG.md",
+            "doc/release-checklist.md",
+            "src/exit_codes.rs",
+            "src/filter/owner.rs",
+            "src/filter/time.rs"
+          ],
+          "notes": [
+            "Controlled local replay, not human-session telemetry.",
+            "CallSieve cost is the serialized context packet plus full reads of selected read-first files."
+          ]
+        }
+      }
+    }
+  ]
+}

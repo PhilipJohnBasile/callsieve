@@ -74,6 +74,10 @@ fn should_skip(path: &Path) -> bool {
 }
 
 fn is_skipped_file(path: &Path) -> bool {
+    if is_generated_trace_file(path) {
+        return true;
+    }
+
     let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
         return false;
     };
@@ -81,6 +85,22 @@ fn is_skipped_file(path: &Path) -> bool {
     SKIPPED_FILES
         .iter()
         .any(|skipped| file_name.eq_ignore_ascii_case(skipped))
+}
+
+fn is_generated_trace_file(path: &Path) -> bool {
+    let normalized = path
+        .to_string_lossy()
+        .replace('\\', "/")
+        .to_ascii_lowercase();
+    if !normalized.starts_with("benchmarks/") {
+        return false;
+    }
+
+    let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    let file_name = file_name.to_ascii_lowercase();
+    file_name.ends_with("-trace.json") || file_name.starts_with("session-trace")
 }
 
 #[cfg(test)]
@@ -113,6 +133,22 @@ mod tests {
             "function internal() {}\n",
         )
         .unwrap();
+        fs::create_dir_all(temp.path().join("benchmarks")).unwrap();
+        fs::write(
+            temp.path().join("benchmarks/external-ripgrep-trace.json"),
+            "{}\n",
+        )
+        .unwrap();
+        fs::write(
+            temp.path().join("benchmarks/session-trace.example.json"),
+            "{}\n",
+        )
+        .unwrap();
+        fs::write(
+            temp.path().join("benchmarks/callsieve-real-repo.json"),
+            "{}\n",
+        )
+        .unwrap();
 
         let files = source_files(temp.path()).unwrap();
 
@@ -122,6 +158,7 @@ mod tests {
                 PathBuf::from(".github/workflows/ci.yml"),
                 PathBuf::from("Cargo.toml"),
                 PathBuf::from("README.md"),
+                PathBuf::from("benchmarks/callsieve-real-repo.json"),
                 PathBuf::from("kept.ts"),
             ]
         );

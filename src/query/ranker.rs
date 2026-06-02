@@ -16,7 +16,7 @@ pub struct RankedMatch {
 
 pub fn rank(index: &CodeIndex, question: &str, limit: usize) -> Vec<RankedMatch> {
     let query = question.to_ascii_lowercase();
-    let query_tokens = formatter::tokenize(question);
+    let query_tokens = expand_query_tokens(formatter::tokenize(question));
     let files_by_id: BTreeMap<&str, &FileRecord> = index
         .files
         .iter()
@@ -62,18 +62,22 @@ fn score_symbol(
     let symbol_lower = symbol.name.to_ascii_lowercase();
     let path_lower = file.path.to_ascii_lowercase();
 
-    if query == symbol_lower || query_tokens.iter().any(|token| token == &symbol_lower) {
-        score += 100;
+    if query == symbol_lower
+        || query.contains(&symbol_lower)
+        || query_tokens.iter().any(|token| token == &symbol_lower)
+    {
+        let symbol_token_count = formatter::tokenize(&symbol.name).len();
+        score += if symbol_token_count > 1 { 320 } else { 180 };
         why.push(format!("exact symbol match: {}", symbol.name));
     }
 
     let file_stem = file_stem(&file.path).to_ascii_lowercase();
     if query == path_lower || query_tokens.iter().any(|token| token == &file_stem) {
-        score += 80;
+        score += if file.language.is_code() { 80 } else { 230 };
         why.push(format!("path or filename match: {}", file.path));
     }
 
-    if query.contains(&symbol_lower) || symbol_lower.contains(query) {
+    if symbol_lower.contains(query) {
         if symbol.visibility == "exported" || symbol.visibility == "public" {
             score += 60;
             why.push(format!("exported symbol substring match: {}", symbol.name));
@@ -90,7 +94,7 @@ fn score_symbol(
         .cloned()
         .collect();
     if !overlap.is_empty() {
-        score += 10 * overlap.len() as i32;
+        score += 14 * overlap.len() as i32;
         why.push(format!("keyword overlap: {}", overlap.join(", ")));
     }
 
@@ -133,7 +137,11 @@ fn score_file(file: &FileRecord, query: &str, query_tokens: &[String]) -> Option
     let file_stem = file_stem(&file.path).to_ascii_lowercase();
 
     if query == path_lower || query_tokens.iter().any(|token| token == &file_stem) {
-        score += 80;
+        score += if file.language.is_code() {
+            if file.is_test { 140 } else { 300 }
+        } else {
+            230
+        };
         why.push(format!("path or filename match: {}", file.path));
     }
 
@@ -144,8 +152,18 @@ fn score_file(file: &FileRecord, query: &str, query_tokens: &[String]) -> Option
         .cloned()
         .collect();
     if !overlap.is_empty() {
-        score += 10 * overlap.len() as i32;
+        score += 16 * overlap.len() as i32;
         why.push(format!("path keyword overlap: {}", overlap.join(", ")));
+    }
+
+    if is_module_anchor_match(file, query_tokens) {
+        score += 180;
+        why.push("module anchor path match".to_string());
+    }
+
+    if let Some(score_boost) = basename_cluster_score(file, query_tokens) {
+        score += score_boost;
+        why.push("filename keyword cluster".to_string());
     }
 
     let content_terms: BTreeSet<&str> = file.content_terms.iter().map(String::as_str).collect();
@@ -179,19 +197,45 @@ fn score_file(file: &FileRecord, query: &str, query_tokens: &[String]) -> Option
         why.push("test file match".to_string());
     }
 
+    if file.is_test && (!overlap.is_empty() || !content_overlap.is_empty()) {
+        let signal_count = overlap.len().saturating_add(content_overlap.len()).min(4) as i32;
+        score += 40 + (signal_count * 15);
+        why.push("test proximity match".to_string());
+    }
+
+    if is_fixture_data(file) && !has_test_intent(query_tokens) {
+        score -= 140;
+        why.push("fixture data penalty".to_string());
+    }
+
     if file.is_config && query_tokens.iter().any(|token| token == "config") {
         score += 5;
         why.push("config file heuristic".to_string());
     }
 
     if file.is_config && has_config_intent(query_tokens) {
-        score += 45;
+        score += 70;
         why.push("config/dependency intent".to_string());
     }
 
     if is_dependency_manifest(file) && has_dependency_manifest_intent(query_tokens) {
-        score += 80;
+        score += 170;
         why.push("dependency manifest intent".to_string());
+    }
+
+    if is_benchmark_file(file) && has_benchmark_evidence_intent(query_tokens) {
+        score += 260;
+        why.push("benchmark evidence file intent".to_string());
+    }
+
+    if is_readme(file) && has_benchmark_evidence_intent(query_tokens) {
+        score += 240;
+        why.push("readme evidence file intent".to_string());
+    }
+
+    if is_docs_file(file) && has_docs_intent(query_tokens) {
+        score += 260;
+        why.push("docs intent".to_string());
     }
 
     if file.size_bytes > 250_000 {
@@ -234,6 +278,27 @@ const DEPENDENCY_MANIFESTS: &[&str] = &[
     "rust-toolchain.toml",
 ];
 
+const BENCHMARK_EVIDENCE_INTENT: &[&str] = &[
+    "benchmark",
+    "benchmarks",
+    "evidence",
+    "expected",
+    "missed",
+    "recall",
+    "report",
+    "suite",
+    "trace",
+];
+
+const DOCS_INTENT: &[&str] = &[
+    "doc",
+    "docs",
+    "documentation",
+    "guide",
+    "readme",
+    "workflow",
+];
+
 fn has_config_intent(query_tokens: &[String]) -> bool {
     query_tokens
         .iter()
@@ -250,6 +315,180 @@ fn is_dependency_manifest(file: &FileRecord) -> bool {
     let lower = file.path.to_ascii_lowercase();
     let name = lower.rsplit('/').next().unwrap_or(lower.as_str());
     DEPENDENCY_MANIFESTS.contains(&name)
+}
+
+fn has_benchmark_evidence_intent(query_tokens: &[String]) -> bool {
+    query_tokens
+        .iter()
+        .any(|token| BENCHMARK_EVIDENCE_INTENT.contains(&token.as_str()))
+}
+
+fn has_docs_intent(query_tokens: &[String]) -> bool {
+    query_tokens
+        .iter()
+        .any(|token| DOCS_INTENT.contains(&token.as_str()))
+}
+
+fn expand_query_tokens(tokens: Vec<String>) -> Vec<String> {
+    let mut expanded = BTreeSet::new();
+    for token in tokens {
+        push_token_variant(&mut expanded, &token);
+    }
+    expanded.into_iter().collect()
+}
+
+fn push_token_variant(expanded: &mut BTreeSet<String>, token: &str) {
+    if token.is_empty() {
+        return;
+    }
+
+    expanded.insert(token.to_string());
+
+    match token {
+        "configuration" | "configure" | "configured" | "configuring" => {
+            expanded.insert("config".to_string());
+        }
+        "config" => {
+            expanded.insert("configuration".to_string());
+        }
+        "file" => {
+            expanded.insert("files".to_string());
+        }
+        "files" => {
+            expanded.insert("file".to_string());
+        }
+        "import" => {
+            expanded.insert("imports".to_string());
+        }
+        "imports" => {
+            expanded.insert("import".to_string());
+        }
+        "reference" => {
+            expanded.insert("references".to_string());
+        }
+        "references" => {
+            expanded.insert("reference".to_string());
+        }
+        "filter" => {
+            expanded.insert("filters".to_string());
+        }
+        "filters" => {
+            expanded.insert("filter".to_string());
+        }
+        "symbol" => {
+            expanded.insert("symbols".to_string());
+        }
+        "symbols" => {
+            expanded.insert("symbol".to_string());
+        }
+        "request" => {
+            expanded.insert("requests".to_string());
+        }
+        "requests" => {
+            expanded.insert("request".to_string());
+        }
+        "test" => {
+            expanded.insert("tests".to_string());
+        }
+        "tests" => {
+            expanded.insert("test".to_string());
+        }
+        "timeout" => {
+            expanded.insert("timeouts".to_string());
+        }
+        "timeouts" => {
+            expanded.insert("timeout".to_string());
+        }
+        "string" => {
+            expanded.insert("strings".to_string());
+        }
+        "strings" => {
+            expanded.insert("string".to_string());
+        }
+        "routing" | "routes" | "route" => {
+            expanded.insert("router".to_string());
+            expanded.insert("route".to_string());
+            expanded.insert("routing".to_string());
+        }
+        "walking" => {
+            expanded.insert("walk".to_string());
+        }
+        "extractor" | "extractors" | "extraction" => {
+            expanded.insert("extract".to_string());
+        }
+        "rejections" | "reject" | "rejected" => {
+            expanded.insert("rejection".to_string());
+        }
+        "statistics" | "statistic" => {
+            expanded.insert("stats".to_string());
+            expanded.insert("stat".to_string());
+        }
+        "stats" => {
+            expanded.insert("statistics".to_string());
+            expanded.insert("statistic".to_string());
+        }
+        _ => {}
+    }
+}
+
+fn basename_cluster_score(file: &FileRecord, query_tokens: &[String]) -> Option<i32> {
+    let basename = file.path.rsplit('/').next().unwrap_or(file.path.as_str());
+    let basename_terms: BTreeSet<String> = path_tokens(basename).into_iter().collect();
+    let overlap = query_tokens
+        .iter()
+        .filter(|token| basename_terms.contains(*token))
+        .count();
+
+    match overlap {
+        count if count >= 3 => Some(180),
+        2 => Some(140),
+        1 if file.is_test => Some(80),
+        _ => None,
+    }
+}
+
+fn is_module_anchor_match(file: &FileRecord, query_tokens: &[String]) -> bool {
+    if !file.path.ends_with("/mod.rs") && !file.path.ends_with("/__init__.py") {
+        return false;
+    }
+
+    file.path
+        .rsplit_once('/')
+        .and_then(|(parent_path, _)| parent_path.rsplit('/').next())
+        .map(|segment| {
+            let parent_tokens = formatter::tokenize(segment);
+            parent_tokens
+                .iter()
+                .any(|parent| query_tokens.iter().any(|token| token == parent))
+        })
+        .unwrap_or(false)
+}
+
+fn is_benchmark_file(file: &FileRecord) -> bool {
+    file.path.to_ascii_lowercase().starts_with("benchmarks/")
+}
+
+fn is_docs_file(file: &FileRecord) -> bool {
+    let path = file.path.to_ascii_lowercase();
+    path.starts_with("docs/") || path == "readme.md"
+}
+
+fn is_fixture_data(file: &FileRecord) -> bool {
+    let path = file.path.to_ascii_lowercase();
+    path.contains("/fixtures/")
+        || path.contains("/testdata/")
+        || path.contains("/tests/data/")
+        || path.contains("/tests/fixtures/")
+}
+
+fn has_test_intent(query_tokens: &[String]) -> bool {
+    query_tokens
+        .iter()
+        .any(|token| matches!(token.as_str(), "test" | "tests" | "fixture" | "fixtures"))
+}
+
+fn is_readme(file: &FileRecord) -> bool {
+    file.path.eq_ignore_ascii_case("README.md")
 }
 
 fn content_overlap_limit(file: &FileRecord) -> usize {

@@ -1,0 +1,108 @@
+{
+  "metadata": {
+    "client": "codex-chatgpt",
+    "model": "gpt-5-codex",
+    "collection": "controlled_replay"
+  },
+  "tasks": [
+    {
+      "id": "codex-chatgpt-session",
+      "task": "add Codex ChatGPT model tagged session trace evidence docs and CLI tests",
+      "expected_files": [
+        "src/cli.rs",
+        "src/query/mod.rs",
+        "tests/cli.rs",
+        "README.md",
+        "docs/BENCHMARKS.md",
+        "docs/MCP.md"
+      ],
+      "session": {
+        "baseline": {
+          "grep_commands": 12,
+          "file_reads": 30,
+          "tokens": 122943,
+          "commands": [
+            "rg -n add .",
+            "rg -n chat .",
+            "rg -n cli .",
+            "rg -n codex .",
+            "rg -n docs .",
+            "rg -n evidence .",
+            "rg -n gpt .",
+            "rg -n model .",
+            "rg -n session .",
+            "rg -n tagged .",
+            "rg -n tests .",
+            "rg -n trace ."
+          ],
+          "files_read": [
+            ".github/workflows/ci.yml",
+            "AGENTS.md",
+            "PRODUCT_BRIEF.md",
+            "README.md",
+            "benchmarks/callsieve-real-repo.json",
+            "benchmarks/codex-chatgpt-manifest.local.json",
+            "benchmarks/external-fd-suite.json",
+            "benchmarks/external-flask-suite.json",
+            "benchmarks/external-github-manifest.local.json",
+            "benchmarks/external-httpx-suite.json",
+            "benchmarks/pilot-manifest.example.json",
+            "benchmarks/report-manifest.example.json",
+            "docs/BENCHMARKS.md",
+            "docs/MCP.md",
+            "rust-toolchain.toml",
+            "src/cli.rs",
+            "src/indexer/imports.rs",
+            "src/indexer/language.rs",
+            "src/indexer/lsp.rs",
+            "src/indexer/mod.rs",
+            "src/indexer/references.rs",
+            "src/indexer/symbols.rs",
+            "src/indexer/tree_sitter_symbols.rs",
+            "src/indexer/walker.rs",
+            "src/main.rs",
+            "src/mcp.rs",
+            "src/query/formatter.rs",
+            "src/query/mod.rs",
+            "src/query/ranker.rs",
+            "tests/cli.rs"
+          ],
+          "notes": [
+            "Controlled local replay, not human-session telemetry.",
+            "Baseline simulates grepping task terms, then reading every matched indexed file."
+          ]
+        },
+        "callsieve": {
+          "grep_commands": 0,
+          "file_reads": 14,
+          "tokens": 118350,
+          "commands": [
+            "callsieve codex-session . \"add Codex ChatGPT model tagged session trace evidence docs and CLI tests\" --model \"gpt-5-codex\" --limit 14 --snippets-per-file 2"
+          ],
+          "files_read": [
+            "README.md",
+            "tests/cli.rs",
+            "src/cli.rs",
+            "src/query/mod.rs",
+            "src/indexer/imports.rs",
+            "src/indexer/language.rs",
+            "src/indexer/lsp.rs",
+            "src/indexer/mod.rs",
+            "src/indexer/references.rs",
+            "src/indexer/symbols.rs",
+            "src/indexer/tree_sitter_symbols.rs",
+            "src/mcp.rs",
+            "docs/MCP.md",
+            "docs/BENCHMARKS.md"
+          ],
+          "notes": [
+            "Codex/ChatGPT session trace scaffold.",
+            "Baseline is deterministic local grep/read replay for the same task.",
+            "Assisted session model: gpt-5-codex.",
+            "CallSieve cost is the serialized context packet plus full reads of selected read-first files."
+          ]
+        }
+      }
+    }
+  ]
+}

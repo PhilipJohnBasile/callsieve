@@ -1,0 +1,18 @@
+{
+  "thresholds": {
+    "minimum_recall": 1.0,
+    "minimum_token_reduction_percent": 0.0,
+    "maximum_trace_violations": 0,
+    "require_fresh_index": true,
+    "require_lsp_where_available": false
+  },
+  "repos": [
+    {
+      "label": "callsieve-codex-gpt-5-codex",
+      "path": ".",
+      "languages": ["typescript", "javascript", "python", "rust"],
+      "suite_path": "benchmarks/callsieve-real-repo.json",
+      "trace_path": "benchmarks/codex-gpt-5-codex-trace.json"
+    }
+  ]
+}

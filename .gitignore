@@ -1,2 +1,3 @@
 target/
 .callsieve/
+benchmarks/github-*/

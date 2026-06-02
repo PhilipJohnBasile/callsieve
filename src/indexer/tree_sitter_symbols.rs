@@ -57,16 +57,16 @@ fn symbol_for_node(node: Node<'_>, content: &str, language: Language) -> Option<
 }
 
 fn js_symbol_for_node(node: Node<'_>, content: &str) -> Option<RawSymbol> {
+    let name = node_name(node, content).or_else(|| variable_name(node, content))?;
     let kind = match node.kind() {
         "function_declaration" | "generator_function_declaration" => "function",
         "class_declaration" => "class",
         "method_definition" => "method",
         "interface_declaration" => "interface",
         "type_alias_declaration" => "type",
-        "variable_declarator" => variable_kind(node, content)?,
+        "variable_declarator" => variable_kind(node, content, &name)?,
         _ => return None,
     };
-    let name = node_name(node, content).or_else(|| variable_name(node, content))?;
     Some(raw_symbol(
         node,
         content,
@@ -103,9 +103,13 @@ fn rust_symbol_for_node(node: Node<'_>, content: &str) -> Option<RawSymbol> {
         "trait_item" => "trait",
         "impl_item" => "impl",
         "const_item" => "constant",
+        "mod_item" => "module",
+        "macro_invocation" => "macro",
         _ => return None,
     };
-    let name = node_name(node, content).or_else(|| rust_impl_name(node, content))?;
+    let name = node_name(node, content)
+        .or_else(|| rust_impl_name(node, content))
+        .or_else(|| rust_macro_name(node, content))?;
     Some(raw_symbol(
         node,
         content,
@@ -153,8 +157,11 @@ fn variable_name(node: Node<'_>, content: &str) -> Option<String> {
         .filter(|name| !name.is_empty())
 }
 
-fn variable_kind(node: Node<'_>, content: &str) -> Option<&'static str> {
+fn variable_kind(node: Node<'_>, content: &str, name: &str) -> Option<&'static str> {
     let value = node.child_by_field_name("value")?;
+    if is_react_component(name, value, content) {
+        return Some("component");
+    }
     Some(match value.kind() {
         "arrow_function" | "function" | "function_expression" => "function",
         _ => {
@@ -166,6 +173,14 @@ fn variable_kind(node: Node<'_>, content: &str) -> Option<&'static str> {
             }
         }
     })
+}
+
+fn is_react_component(name: &str, value: Node<'_>, content: &str) -> bool {
+    name.chars()
+        .next()
+        .is_some_and(|character| character.is_ascii_uppercase())
+        && node_text(value, content)
+            .is_some_and(|text| text.contains('<') || text.contains("React.createElement"))
 }
 
 fn is_exported(node: Node<'_>, content: &str) -> bool {
@@ -206,6 +221,13 @@ fn rust_impl_name(node: Node<'_>, content: &str) -> Option<String> {
         .unwrap_or(rest);
     let identifier = clean_name(after_trait);
     (!identifier.is_empty()).then_some(identifier)
+}
+
+fn rust_macro_name(node: Node<'_>, content: &str) -> Option<String> {
+    node.child_by_field_name("macro")
+        .and_then(|macro_node| node_text(macro_node, content))
+        .map(clean_name)
+        .filter(|name| !name.is_empty())
 }
 
 fn assign_parents(symbols: &mut [RawSymbol]) {
@@ -308,5 +330,30 @@ mod tests {
         assert!(symbols.iter().any(|symbol| symbol.name == "name"
             && symbol.parent.as_deref() == Some("User")
             && symbol.visibility == "public"));
+    }
+
+    #[test]
+    fn parses_react_components_and_rust_modules() {
+        let js_symbols = extract_symbols(
+            "export const UserCard = () => React.createElement('section');\n",
+            Language::TypeScript,
+        )
+        .unwrap();
+        assert!(
+            js_symbols
+                .iter()
+                .any(|symbol| symbol.name == "UserCard" && symbol.kind == "component")
+        );
+
+        let rust_symbols = extract_symbols(
+            "#[cfg(test)]\nmod tests {\n  test_case!();\n}\n",
+            Language::Rust,
+        )
+        .unwrap();
+        assert!(
+            rust_symbols
+                .iter()
+                .any(|symbol| symbol.name == "tests" && symbol.kind == "module")
+        );
     }
 }

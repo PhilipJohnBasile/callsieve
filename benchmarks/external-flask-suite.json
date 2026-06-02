@@ -1,0 +1,21 @@
+{
+  "tasks": [
+    {
+      "id": "flask-session-cookies",
+      "task": "change session cookie interface signing behavior",
+      "expected_files": [
+        "src/flask/sessions.py",
+        "tests/test_session_interface.py"
+      ]
+    },
+    {
+      "id": "flask-blueprint-routes",
+      "task": "change blueprint route registration behavior",
+      "expected_files": [
+        "src/flask/blueprints.py",
+        "src/flask/sansio/blueprints.py",
+        "tests/test_blueprints.py"
+      ]
+    }
+  ]
+}

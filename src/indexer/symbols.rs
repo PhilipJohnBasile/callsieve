@@ -73,6 +73,7 @@ fn parse_rust_line(line: &str) -> Option<(String, String, String)> {
         ("enum ", "enum"),
         ("trait ", "trait"),
         ("impl ", "impl"),
+        ("mod ", "module"),
     ] {
         if let Some(after_prefix) = rest.strip_prefix(prefix) {
             return Some((
@@ -131,16 +132,15 @@ fn parse_js_line(line: &str) -> Option<(String, String, String)> {
 
     for prefix in ["const ", "let ", "var "] {
         if let Some(after_prefix) = rest.strip_prefix(prefix) {
-            let kind = if after_prefix.contains("=>") || after_prefix.contains("function") {
+            let name = take_identifier(after_prefix)?;
+            let kind = if is_react_component_candidate(&name, after_prefix) {
+                "component"
+            } else if after_prefix.contains("=>") || after_prefix.contains("function") {
                 "function"
             } else {
                 "constant"
             };
-            return Some((
-                take_identifier(after_prefix)?,
-                kind.to_string(),
-                visibility.to_string(),
-            ));
+            return Some((name, kind.to_string(), visibility.to_string()));
         }
     }
 
@@ -149,6 +149,13 @@ fn parse_js_line(line: &str) -> Option<(String, String, String)> {
     }
 
     None
+}
+
+fn is_react_component_candidate(name: &str, rest: &str) -> bool {
+    name.chars()
+        .next()
+        .is_some_and(|character| character.is_ascii_uppercase())
+        && (rest.contains("=> <") || rest.contains("React.createElement"))
 }
 
 fn parse_python_line(line: &str) -> Option<(String, String, String)> {

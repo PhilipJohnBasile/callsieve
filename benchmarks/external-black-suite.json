@@ -1,0 +1,20 @@
+{
+  "tasks": [
+    {
+      "id": "black-string-linegen",
+      "task": "change string normalization and line generation formatting",
+      "expected_files": [
+        "src/black/strings.py",
+        "src/black/linegen.py"
+      ]
+    },
+    {
+      "id": "black-file-config",
+      "task": "change pyproject configuration parsing and include exclude file collection",
+      "expected_files": [
+        "src/black/files.py",
+        "src/black/__init__.py"
+      ]
+    }
+  ]
+}

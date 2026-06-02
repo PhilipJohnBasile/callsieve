@@ -1,5 +1,6 @@
 pub mod imports;
 pub mod language;
+pub mod lsp;
 pub mod references;
 pub mod symbols;
 pub mod tree_sitter_symbols;
@@ -9,18 +10,46 @@ use std::{
     collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
-    time::UNIX_EPOCH,
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Context, Result};
 
-use crate::store::{CodeIndex, FileRecord, ImportRecord, ReferenceRecord, SymbolRecord};
+use crate::store::{
+    CodeIndex, FileRecord, ImportAliasRecord, ImportRecord, IndexMetadata, ReferenceRecord,
+    SymbolRecord,
+};
 
 use self::language::Language;
 
-pub const SCHEMA_VERSION: u32 = 3;
+pub const SCHEMA_VERSION: u32 = 6;
+
+#[derive(Debug, Clone)]
+pub struct IndexOptions {
+    pub lsp: bool,
+    pub watch_status: String,
+    pub watcher_mode: String,
+    pub index_generation: u64,
+    pub last_error: Option<String>,
+}
+
+impl Default for IndexOptions {
+    fn default() -> Self {
+        Self {
+            lsp: false,
+            watch_status: "unwatched".to_string(),
+            watcher_mode: "none".to_string(),
+            index_generation: 0,
+            last_error: None,
+        }
+    }
+}
 
 pub fn build_index(root: &Path) -> Result<CodeIndex> {
+    build_index_with_options(root, IndexOptions::default())
+}
+
+pub fn build_index_with_options(root: &Path, options: IndexOptions) -> Result<CodeIndex> {
     let root = root
         .canonicalize()
         .with_context(|| format!("failed to resolve repo root {}", root.display()))?;
@@ -93,12 +122,20 @@ pub fn build_index(root: &Path) -> Result<CodeIndex> {
                         &import.imported,
                     ),
                     imported: import.imported,
+                    aliases: import
+                        .aliases
+                        .into_iter()
+                        .map(|alias| ImportAliasRecord {
+                            local: alias.local,
+                            imported: alias.imported,
+                        })
+                        .collect(),
                 });
             }
         }
 
         files.push(file);
-        file_contents.push((file_id, path_string, content));
+        file_contents.push((file_id, path_string, language, content));
     }
 
     files.sort_by(|left, right| left.path.cmp(&right.path));
@@ -114,6 +151,12 @@ pub fn build_index(root: &Path) -> Result<CodeIndex> {
             .then(left.imported.cmp(&right.imported))
     });
     let mut references = build_references(&file_contents, &files, &symbols, &imports);
+    let mut lsp_enriched = false;
+    if options.lsp {
+        let lsp_references = lsp::enrich_references(&root, &file_contents, &files, &symbols);
+        lsp_enriched = !lsp_references.is_empty();
+        references = merge_references(references, lsp_references);
+    }
     references.sort_by(|left, right| {
         left.source_path
             .cmp(&right.source_path)
@@ -122,6 +165,9 @@ pub fn build_index(root: &Path) -> Result<CodeIndex> {
             .then(left.kind.cmp(&right.kind))
     });
 
+    let lsp_servers = lsp::server_statuses(&files);
+    let indexed_at = now_unix_seconds();
+
     Ok(CodeIndex {
         schema_version: SCHEMA_VERSION,
         root: ".".to_string(),
@@ -129,6 +175,16 @@ pub fn build_index(root: &Path) -> Result<CodeIndex> {
         symbols,
         imports,
         references,
+        metadata: IndexMetadata {
+            indexed_at,
+            watch_status: options.watch_status,
+            watcher_mode: options.watcher_mode,
+            index_generation: options.index_generation,
+            lsp_enriched,
+            lsp_enriched_at: if lsp_enriched { indexed_at } else { 0 },
+            last_error: options.last_error,
+            lsp_servers,
+        },
         warnings,
     })
 }
@@ -150,6 +206,13 @@ fn metadata_mtime(metadata: &fs::Metadata) -> u64 {
         .modified()
         .ok()
         .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_secs())
+        .unwrap_or_default()
+}
+
+fn now_unix_seconds() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs())
         .unwrap_or_default()
 }
@@ -249,23 +312,26 @@ fn resolve_import(
     language: Language,
     imported: &str,
 ) -> Option<String> {
-    if !imported.starts_with('.') {
-        return None;
-    }
-
-    let base = source.parent().unwrap_or_else(|| Path::new(""));
-    let candidate = normalize_relative(base.join(imported));
-    let extensions: &[&str] = match language {
-        Language::TypeScript => &["ts", "tsx", "js", "jsx"],
-        Language::JavaScript => &["js", "jsx", "ts", "tsx"],
-        Language::Python => &["py"],
-        Language::Rust => &["rs"],
-        Language::Markdown | Language::Json | Language::Toml | Language::Yaml | Language::Text => {
-            &[]
+    match language {
+        Language::TypeScript | Language::JavaScript => {
+            if !imported.starts_with('.') {
+                return None;
+            }
+            let base = source.parent().unwrap_or_else(|| Path::new(""));
+            let candidate = normalize_relative(base.join(imported));
+            let extensions: &[&str] = if language == Language::TypeScript {
+                &["ts", "tsx", "js", "jsx"]
+            } else {
+                &["js", "jsx", "ts", "tsx"]
+            };
+            resolve_candidate(root, &candidate, extensions).map(|path| path_to_string(&path))
         }
-    };
-
-    resolve_candidate(root, &candidate, extensions).map(|path| path_to_string(&path))
+        Language::Python => resolve_python_import(root, source, imported),
+        Language::Rust => resolve_rust_import(root, source, imported),
+        Language::Markdown | Language::Json | Language::Toml | Language::Yaml | Language::Text => {
+            None
+        }
+    }
 }
 
 fn resolve_candidate(root: &Path, candidate: &Path, extensions: &[&str]) -> Option<PathBuf> {
@@ -287,6 +353,13 @@ fn resolve_candidate(root: &Path, candidate: &Path, extensions: &[&str]) -> Opti
         }
     }
 
+    if extensions.contains(&"py") {
+        let init_file = candidate.join("__init__.py");
+        if root.join(&init_file).is_file() {
+            return Some(init_file);
+        }
+    }
+
     None
 }
 
@@ -304,18 +377,118 @@ fn normalize_relative(path: PathBuf) -> PathBuf {
     normalized
 }
 
+fn resolve_python_import(root: &Path, source: &Path, imported: &str) -> Option<String> {
+    let raw_imported = imported.trim();
+    let imported = raw_imported.trim_start_matches('.');
+    if imported.is_empty() {
+        return None;
+    }
+
+    let module_path = PathBuf::from(imported.replace('.', "/"));
+    let mut candidates = vec![module_path.clone(), PathBuf::from("src").join(&module_path)];
+
+    if let Some(top_level) = source.components().next() {
+        candidates.push(PathBuf::from(top_level.as_os_str()).join(&module_path));
+    }
+
+    if raw_imported.starts_with('.') {
+        let base = source.parent().unwrap_or_else(|| Path::new(""));
+        candidates.push(normalize_relative(base.join(&module_path)));
+    }
+
+    candidates.into_iter().find_map(|candidate| {
+        resolve_candidate(root, &candidate, &["py"]).map(|path| path_to_string(&path))
+    })
+}
+
+fn resolve_rust_import(root: &Path, source: &Path, imported: &str) -> Option<String> {
+    let imported = imported
+        .trim()
+        .trim_end_matches(';')
+        .split_once(" as ")
+        .map(|(path, _)| path)
+        .unwrap_or(imported)
+        .trim();
+    let imported = imported
+        .split_once('{')
+        .map(|(prefix, _)| prefix.trim_end_matches("::"))
+        .unwrap_or(imported);
+    let parts: Vec<&str> = imported
+        .split("::")
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .collect();
+    if parts.is_empty() {
+        return None;
+    }
+
+    let base = rust_import_base(source, parts[0]);
+    let mut module_parts = match parts[0] {
+        "crate" | "self" | "super" => parts[1..].to_vec(),
+        _ => parts.clone(),
+    };
+    if module_parts.is_empty() {
+        return None;
+    }
+
+    let mut candidates = Vec::new();
+    candidates.push(base.join(module_parts.join("/")));
+    module_parts.pop();
+    if !module_parts.is_empty() {
+        candidates.push(base.join(module_parts.join("/")));
+    }
+
+    candidates.into_iter().find_map(|candidate| {
+        resolve_candidate(root, &candidate, &["rs"]).map(|path| path_to_string(&path))
+    })
+}
+
+fn rust_import_base(source: &Path, prefix: &str) -> PathBuf {
+    match prefix {
+        "self" => source
+            .parent()
+            .unwrap_or_else(|| Path::new(""))
+            .to_path_buf(),
+        "super" => source
+            .parent()
+            .and_then(Path::parent)
+            .unwrap_or_else(|| Path::new(""))
+            .to_path_buf(),
+        _ => {
+            let mut base = PathBuf::new();
+            for component in source.components() {
+                base.push(component.as_os_str());
+                if component.as_os_str().to_string_lossy() == "src" {
+                    return base;
+                }
+            }
+            source
+                .parent()
+                .unwrap_or_else(|| Path::new(""))
+                .to_path_buf()
+        }
+    }
+}
+
 fn build_references(
-    file_contents: &[(String, String, String)],
+    file_contents: &[(String, String, Language, String)],
     files: &[FileRecord],
     symbols: &[SymbolRecord],
     imports: &[ImportRecord],
 ) -> Vec<ReferenceRecord> {
-    let candidate_names: std::collections::BTreeSet<String> =
-        symbols.iter().map(|symbol| symbol.name.clone()).collect();
+    let candidate_names: std::collections::BTreeSet<String> = symbols
+        .iter()
+        .map(|symbol| symbol.name.clone())
+        .chain(
+            imports
+                .iter()
+                .flat_map(|import| import.aliases.iter().map(|alias| alias.local.clone())),
+        )
+        .collect();
     let mut references = Vec::new();
 
-    for (file_id, path, content) in file_contents {
-        for raw in references::extract_references(content, &candidate_names) {
+    for (file_id, path, language, content) in file_contents {
+        for raw in references::extract_references(content, *language, &candidate_names) {
             let target =
                 resolve_reference_target(file_id, path, &raw.target_name, files, symbols, imports);
             references.push(ReferenceRecord {
@@ -333,6 +506,11 @@ fn build_references(
                 }),
                 kind: raw.kind,
                 line: raw.line,
+                edge_source: raw.edge_source,
+                confidence: raw.confidence,
+                lsp_method: None,
+                source_range: Some([raw.line, raw.line]),
+                target_range: target.map(|symbol| [symbol.start_line, symbol.end_line]),
             });
         }
     }
@@ -369,6 +547,33 @@ fn resolve_reference_target<'a>(
         return same_file.first().copied();
     }
 
+    let source_imports: Vec<&ImportRecord> = imports
+        .iter()
+        .filter(|import| import.source_path == source_path)
+        .collect();
+    for import in &source_imports {
+        for alias in &import.aliases {
+            if alias.local == target_name
+                && let Some(imported_path) = import.resolved_path.as_deref()
+            {
+                let imported_name = import_alias_target_name(&alias.imported, target_name);
+                let imported_symbols: Vec<&SymbolRecord> = symbols
+                    .iter()
+                    .filter(|symbol| {
+                        symbol.name == imported_name
+                            && files
+                                .iter()
+                                .find(|file| file.id == symbol.file_id)
+                                .is_some_and(|file| file.path == imported_path)
+                    })
+                    .collect();
+                if imported_symbols.len() == 1 {
+                    return imported_symbols.first().copied();
+                }
+            }
+        }
+    }
+
     let imported_paths: std::collections::BTreeSet<&str> = imports
         .iter()
         .filter(|import| import.source_path == source_path)
@@ -393,6 +598,64 @@ fn resolve_reference_target<'a>(
         .filter(|symbol| symbol.name == target_name)
         .collect();
     (global_symbols.len() == 1).then(|| global_symbols[0])
+}
+
+fn import_alias_target_name<'a>(imported: &'a str, fallback: &'a str) -> &'a str {
+    if imported == "*" {
+        return fallback;
+    }
+    imported
+        .rsplit("::")
+        .next()
+        .unwrap_or(imported)
+        .rsplit('.')
+        .next()
+        .unwrap_or(imported)
+}
+
+fn merge_references(
+    existing: Vec<ReferenceRecord>,
+    lsp_references: Vec<ReferenceRecord>,
+) -> Vec<ReferenceRecord> {
+    let mut merged: BTreeMap<ReferenceKey, ReferenceRecord> = BTreeMap::new();
+    for reference in existing.into_iter().chain(lsp_references) {
+        let key = ReferenceKey::from(&reference);
+        match merged.get(&key) {
+            Some(current)
+                if current.confidence > reference.confidence
+                    || (current.confidence == reference.confidence
+                        && is_lsp_edge_source(&current.edge_source)) => {}
+            _ => {
+                merged.insert(key, reference);
+            }
+        }
+    }
+    merged.into_values().collect()
+}
+
+fn is_lsp_edge_source(edge_source: &str) -> bool {
+    edge_source == "lsp" || edge_source.starts_with("lsp_")
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]
+struct ReferenceKey {
+    source_path: String,
+    target_name: String,
+    target_path: Option<String>,
+    kind: String,
+    line: usize,
+}
+
+impl From<&ReferenceRecord> for ReferenceKey {
+    fn from(reference: &ReferenceRecord) -> Self {
+        Self {
+            source_path: reference.source_path.clone(),
+            target_name: reference.target_name.clone(),
+            target_path: reference.target_path.clone(),
+            kind: reference.kind.clone(),
+            line: reference.line,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -446,5 +709,118 @@ mod tests {
             .unwrap();
         assert_eq!(readme.language, Language::Markdown);
         assert!(readme.content_terms.contains(&"session".to_string()));
+    }
+
+    #[test]
+    fn resolves_alias_import_references() {
+        let temp = tempfile::tempdir().unwrap();
+
+        fs::create_dir_all(temp.path().join("ts")).unwrap();
+        fs::write(
+            temp.path().join("ts/token.ts"),
+            "export function tokenFor() { return 'token'; }\n",
+        )
+        .unwrap();
+        fs::write(
+            temp.path().join("ts/session.ts"),
+            "import { tokenFor as makeToken } from './token';\nexport function createSession() {\n  return makeToken();\n}\n",
+        )
+        .unwrap();
+
+        fs::create_dir_all(temp.path().join("pkg")).unwrap();
+        fs::write(
+            temp.path().join("pkg/token.py"),
+            "def token_for():\n    return 'token'\n",
+        )
+        .unwrap();
+        fs::write(
+            temp.path().join("pkg/session.py"),
+            "from pkg.token import token_for as make_token\n\ndef create_session():\n    return make_token()\n",
+        )
+        .unwrap();
+
+        fs::create_dir_all(temp.path().join("rust/src")).unwrap();
+        fs::write(
+            temp.path().join("rust/src/auth.rs"),
+            "pub fn token_for() -> &'static str { \"token\" }\n",
+        )
+        .unwrap();
+        fs::write(
+            temp.path().join("rust/src/lib.rs"),
+            "mod auth;\nuse crate::auth::token_for as make_token;\npub fn create_session() -> &'static str {\n    make_token()\n}\n",
+        )
+        .unwrap();
+
+        let index = build_index(temp.path()).unwrap();
+
+        assert!(index.references.iter().any(|reference| {
+            reference.target_name == "makeToken"
+                && reference.target_path.as_deref() == Some("ts/token.ts")
+                && reference.target_symbol_id.is_some()
+        }));
+        assert!(index.references.iter().any(|reference| {
+            reference.target_name == "make_token"
+                && reference.target_path.as_deref() == Some("pkg/token.py")
+                && reference.target_symbol_id.is_some()
+        }));
+        assert!(index.references.iter().any(|reference| {
+            reference.source_path == "rust/src/lib.rs"
+                && reference.target_name == "make_token"
+                && reference.target_path.as_deref() == Some("rust/src/auth.rs")
+                && reference.target_symbol_id.is_some()
+        }));
+    }
+
+    #[test]
+    fn merge_references_prefers_lsp_edges() {
+        let heuristic = ReferenceRecord {
+            file_id: "file:src/session.ts".to_string(),
+            source_path: "src/session.ts".to_string(),
+            source_symbol_id: None,
+            target_name: "tokenFor".to_string(),
+            target_symbol_id: Some("symbol:src/token.ts:1:tokenFor".to_string()),
+            target_path: Some("src/token.ts".to_string()),
+            kind: "call".to_string(),
+            line: 4,
+            edge_source: "heuristic".to_string(),
+            confidence: 0.45,
+            lsp_method: None,
+            source_range: None,
+            target_range: None,
+        };
+        let lsp = ReferenceRecord {
+            edge_source: "lsp".to_string(),
+            confidence: 1.0,
+            ..heuristic.clone()
+        };
+
+        let references = merge_references(vec![heuristic], vec![lsp]);
+
+        assert_eq!(references.len(), 1);
+        assert_eq!(references[0].edge_source, "lsp");
+        assert_eq!(references[0].confidence, 1.0);
+    }
+
+    #[test]
+    fn lsp_flag_only_marks_enriched_when_lsp_edges_exist() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::write(temp.path().join("README.md"), "# docs only\n").unwrap();
+
+        let index = build_index_with_options(
+            temp.path(),
+            IndexOptions {
+                lsp: true,
+                ..IndexOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert!(!index.metadata.lsp_enriched);
+        assert!(
+            index
+                .references
+                .iter()
+                .all(|edge| edge.edge_source != "lsp")
+        );
     }
 }

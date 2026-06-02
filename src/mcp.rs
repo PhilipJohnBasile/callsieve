@@ -1,6 +1,7 @@
 use std::{
     io::{self, BufRead, Write},
     path::PathBuf,
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Result, anyhow};
@@ -86,7 +87,11 @@ fn tools_list_result() -> Value {
         "tools": [
             {
                 "name": "callsieve_context",
-                "description": "Build a compact CallSieve read-first packet before grep.",
+                "description": "Preferred first tool for codebase discovery. Build a compact CallSieve read-first packet before grep or broad file reads.",
+                "annotations": {
+                    "title": "CallSieve Context",
+                    "readOnlyHint": true
+                },
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -154,6 +159,39 @@ fn tools_list_result() -> Value {
                 }
             },
             {
+                "name": "callsieve_status",
+                "description": "Show index freshness, watch, schema, and LSP-enrichment status for a repository.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Repository root containing .callsieve/index.json."
+                        }
+                    },
+                    "required": ["path"]
+                }
+            },
+            {
+                "name": "callsieve_trace_check",
+                "description": "Check whether an observed agent trace used grep before callsieve_context.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "trace_json": {
+                            "type": "string",
+                            "description": "Trace JSON using the benchmark session shape."
+                        },
+                        "strict": {
+                            "type": "boolean",
+                            "default": false,
+                            "description": "Also fail file reads before callsieve_context."
+                        }
+                    },
+                    "required": ["trace_json"]
+                }
+            },
+            {
                 "name": "callsieve_benchmark",
                 "description": "Estimate grep/read-loop token savings for a coding task.",
                 "inputSchema": {
@@ -201,6 +239,8 @@ fn call_tool(params: Option<Value>) -> Result<Value> {
         "callsieve_context" => Ok(tool_execution_result(execute_context(&arguments))),
         "callsieve_symbol" => Ok(tool_execution_result(execute_symbol(&arguments))),
         "callsieve_stats" => Ok(tool_execution_result(execute_stats(&arguments))),
+        "callsieve_status" => Ok(tool_execution_result(execute_status(&arguments))),
+        "callsieve_trace_check" => Ok(tool_execution_result(execute_trace_check(&arguments))),
         "callsieve_benchmark" => Ok(tool_execution_result(execute_benchmark(&arguments))),
         name => Err(anyhow!("unknown tool: {name}")),
     }
@@ -222,7 +262,19 @@ fn execute_context(arguments: &Value) -> Result<Value> {
         include_snippets,
     )?;
 
-    Ok(serde_json::to_value(output)?)
+    let mut value = serde_json::to_value(output)?;
+    if let Some(object) = value.as_object_mut() {
+        object.insert(
+            "trace_event".to_string(),
+            json!({
+                "tool": "callsieve_context",
+                "policy": "first_codebase_discovery_tool",
+                "called_at": now_unix_seconds()
+            }),
+        );
+    }
+
+    Ok(value)
 }
 
 fn execute_symbol(arguments: &Value) -> Result<Value> {
@@ -239,6 +291,26 @@ fn execute_stats(arguments: &Value) -> Result<Value> {
     let path = repo_path(arguments)?;
     let index = store::json_store::load_index(&path)?;
     let output = query::stats(&path, &index)?;
+
+    Ok(serde_json::to_value(output)?)
+}
+
+fn execute_status(arguments: &Value) -> Result<Value> {
+    let path = repo_path(arguments)?;
+    let index = store::json_store::load_index(&path).ok();
+    let output = query::index_status(&path, index.as_ref());
+
+    Ok(serde_json::to_value(output)?)
+}
+
+fn execute_trace_check(arguments: &Value) -> Result<Value> {
+    let trace_json = required_str(arguments, "trace_json")?;
+    let strict = optional_bool(arguments, "strict", false)?;
+    let output = if strict {
+        query::trace_check_from_str_with_options(trace_json, true)?
+    } else {
+        query::trace_check_from_str(trace_json)?
+    };
 
     Ok(serde_json::to_value(output)?)
 }
@@ -332,6 +404,13 @@ fn jsonrpc_error(id: Value, code: i32, message: String) -> Value {
             "message": message
         }
     })
+}
+
+fn now_unix_seconds() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or_default()
 }
 
 #[cfg(test)]

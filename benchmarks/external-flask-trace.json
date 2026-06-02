@@ -1,0 +1,202 @@
+{
+  "metadata": {
+    "collection": "controlled_replay",
+    "client": "callsieve",
+    "model": "controlled-replay"
+  },
+  "tasks": [
+    {
+      "id": "flask-session-cookies",
+      "task": "change session cookie interface signing behavior",
+      "expected_files": [
+        "src/flask/sessions.py",
+        "tests/test_session_interface.py"
+      ],
+      "session": {
+        "baseline": {
+          "grep_commands": 4,
+          "file_reads": 27,
+          "tokens": 108996,
+          "commands": [
+            "rg -n cookie benchmarks/github-flask",
+            "rg -n interface benchmarks/github-flask",
+            "rg -n session benchmarks/github-flask",
+            "rg -n signing benchmarks/github-flask"
+          ],
+          "files_read": [
+            "examples/tutorial/flaskr/auth.py",
+            "examples/tutorial/tests/test_auth.py",
+            "src/flask/__init__.py",
+            "src/flask/app.py",
+            "src/flask/cli.py",
+            "src/flask/ctx.py",
+            "src/flask/globals.py",
+            "src/flask/helpers.py",
+            "src/flask/json/tag.py",
+            "src/flask/sansio/app.py",
+            "src/flask/sansio/scaffold.py",
+            "src/flask/sessions.py",
+            "src/flask/templating.py",
+            "src/flask/testing.py",
+            "src/flask/views.py",
+            "src/flask/wrappers.py",
+            "tests/conftest.py",
+            "tests/test_basic.py",
+            "tests/test_config.py",
+            "tests/test_converters.py",
+            "tests/test_helpers.py",
+            "tests/test_json_tag.py",
+            "tests/test_reqctx.py",
+            "tests/test_session_interface.py",
+            "tests/test_signals.py",
+            "tests/test_templating.py",
+            "tests/test_testing.py"
+          ],
+          "notes": [
+            "Controlled local replay, not human-session telemetry.",
+            "Baseline simulates grepping task terms, then reading every matched indexed file."
+          ]
+        },
+        "callsieve": {
+          "grep_commands": 0,
+          "file_reads": 20,
+          "tokens": 128638,
+          "commands": [
+            "callsieve context benchmarks/github-flask \"change session cookie interface signing behavior\" --limit 20 --snippets-per-file 2"
+          ],
+          "files_read": [
+            "src/flask/ctx.py",
+            "tests/test_blueprints.py",
+            "tests/test_session_interface.py",
+            "src/flask/sessions.py",
+            "tests/test_reqctx.py",
+            "tests/test_basic.py",
+            "tests/test_testing.py",
+            "src/flask/globals.py",
+            "src/flask/testing.py",
+            "tests/test_helpers.py",
+            "src/flask/app.py",
+            "src/flask/helpers.py",
+            "src/flask/wrappers.py",
+            "src/flask/cli.py",
+            "tests/test_json_tag.py",
+            "src/flask/sansio/blueprints.py",
+            "src/flask/sansio/app.py",
+            "src/flask/templating.py",
+            "src/flask/json/tag.py",
+            "src/flask/__init__.py"
+          ],
+          "notes": [
+            "Controlled local replay, not human-session telemetry.",
+            "CallSieve cost is the serialized context packet plus full reads of selected read-first files."
+          ]
+        }
+      }
+    },
+    {
+      "id": "flask-blueprint-routes",
+      "task": "change blueprint route registration behavior",
+      "expected_files": [
+        "src/flask/blueprints.py",
+        "src/flask/sansio/blueprints.py",
+        "tests/test_blueprints.py"
+      ],
+      "session": {
+        "baseline": {
+          "grep_commands": 3,
+          "file_reads": 44,
+          "tokens": 137929,
+          "commands": [
+            "rg -n blueprint benchmarks/github-flask",
+            "rg -n registration benchmarks/github-flask",
+            "rg -n route benchmarks/github-flask"
+          ],
+          "files_read": [
+            "README.md",
+            "examples/celery/src/task_app/__init__.py",
+            "examples/celery/src/task_app/views.py",
+            "examples/javascript/js_example/views.py",
+            "examples/tutorial/flaskr/__init__.py",
+            "examples/tutorial/flaskr/auth.py",
+            "examples/tutorial/flaskr/blog.py",
+            "examples/tutorial/tests/test_auth.py",
+            "src/flask/__init__.py",
+            "src/flask/app.py",
+            "src/flask/blueprints.py",
+            "src/flask/cli.py",
+            "src/flask/ctx.py",
+            "src/flask/debughelpers.py",
+            "src/flask/helpers.py",
+            "src/flask/sansio/app.py",
+            "src/flask/sansio/blueprints.py",
+            "src/flask/sansio/scaffold.py",
+            "src/flask/templating.py",
+            "src/flask/typing.py",
+            "src/flask/views.py",
+            "src/flask/wrappers.py",
+            "tests/test_appctx.py",
+            "tests/test_apps/blueprintapp/__init__.py",
+            "tests/test_apps/blueprintapp/apps/admin/__init__.py",
+            "tests/test_apps/blueprintapp/apps/frontend/__init__.py",
+            "tests/test_apps/helloworld/hello.py",
+            "tests/test_async.py",
+            "tests/test_basic.py",
+            "tests/test_blueprints.py",
+            "tests/test_cli.py",
+            "tests/test_converters.py",
+            "tests/test_helpers.py",
+            "tests/test_json.py",
+            "tests/test_logging.py",
+            "tests/test_regression.py",
+            "tests/test_reqctx.py",
+            "tests/test_signals.py",
+            "tests/test_subclassing.py",
+            "tests/test_templating.py",
+            "tests/test_testing.py",
+            "tests/test_user_error_handler.py",
+            "tests/test_views.py",
+            "tests/type_check/typing_route.py"
+          ],
+          "notes": [
+            "Controlled local replay, not human-session telemetry.",
+            "Baseline simulates grepping task terms, then reading every matched indexed file."
+          ]
+        },
+        "callsieve": {
+          "grep_commands": 0,
+          "file_reads": 20,
+          "tokens": 132204,
+          "commands": [
+            "callsieve context benchmarks/github-flask \"change blueprint route registration behavior\" --limit 20 --snippets-per-file 2"
+          ],
+          "files_read": [
+            "src/flask/sansio/blueprints.py",
+            "src/flask/sansio/scaffold.py",
+            "tests/test_blueprints.py",
+            "src/flask/wrappers.py",
+            "src/flask/blueprints.py",
+            "tests/test_basic.py",
+            "src/flask/sansio/app.py",
+            "tests/test_async.py",
+            "src/flask/app.py",
+            "src/flask/debughelpers.py",
+            "src/flask/helpers.py",
+            "tests/type_check/typing_route.py",
+            "src/flask/cli.py",
+            "src/flask/ctx.py",
+            "src/flask/templating.py",
+            "tests/test_user_error_handler.py",
+            "tests/test_testing.py",
+            "src/flask/testing.py",
+            "src/flask/globals.py",
+            "src/flask/__init__.py"
+          ],
+          "notes": [
+            "Controlled local replay, not human-session telemetry.",
+            "CallSieve cost is the serialized context packet plus full reads of selected read-first files."
+          ]
+        }
+      }
+    }
+  ]
+}

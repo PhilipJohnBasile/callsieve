@@ -1,0 +1,10 @@
+{
+  "repos": [
+    {
+      "label": "callsieve",
+      "path": ".",
+      "suite_path": "benchmarks/callsieve-real-repo.json",
+      "trace_path": "benchmarks/session-trace.example.json"
+    }
+  ]
+}

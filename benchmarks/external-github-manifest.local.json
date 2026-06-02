@@ -1,0 +1,46 @@
+{
+  "repos": [
+    {
+      "label": "github-ripgrep",
+      "path": "benchmarks/github-ripgrep",
+      "languages": ["rust"],
+      "suite_path": "benchmarks/external-ripgrep-suite.json",
+      "trace_path": "benchmarks/external-ripgrep-trace.json"
+    },
+    {
+      "label": "github-fd",
+      "path": "benchmarks/github-fd",
+      "languages": ["rust"],
+      "suite_path": "benchmarks/external-fd-suite.json",
+      "trace_path": "benchmarks/external-fd-trace.json"
+    },
+    {
+      "label": "github-axum",
+      "path": "benchmarks/github-axum",
+      "languages": ["rust"],
+      "suite_path": "benchmarks/external-axum-suite.json",
+      "trace_path": "benchmarks/external-axum-trace.json"
+    },
+    {
+      "label": "github-flask",
+      "path": "benchmarks/github-flask",
+      "languages": ["python"],
+      "suite_path": "benchmarks/external-flask-suite.json",
+      "trace_path": "benchmarks/external-flask-trace.json"
+    },
+    {
+      "label": "github-black",
+      "path": "benchmarks/github-black",
+      "languages": ["python"],
+      "suite_path": "benchmarks/external-black-suite.json",
+      "trace_path": "benchmarks/external-black-trace.json"
+    },
+    {
+      "label": "github-httpx",
+      "path": "benchmarks/github-httpx",
+      "languages": ["python"],
+      "suite_path": "benchmarks/external-httpx-suite.json",
+      "trace_path": "benchmarks/external-httpx-trace.json"
+    }
+  ]
+}

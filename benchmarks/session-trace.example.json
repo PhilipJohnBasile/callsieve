@@ -1,4 +1,9 @@
 {
+  "metadata": {
+    "collection": "observed_session",
+    "client": "codex",
+    "model": "example"
+  },
   "tasks": [
     {
       "id": "example-real-session",
