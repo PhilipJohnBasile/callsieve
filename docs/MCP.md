@@ -231,3 +231,5 @@ callsieve daemon-stop /path/to/repo
 ```
 
 The daemon writes `.callsieve/daemon.json`, which `status`, `enforce`, and pilot workflows can use as operational evidence.
+
+On Windows, a running daemon, MCP server, or shim-launched `callsieve.exe` can hold `target\debug\callsieve.exe` and make `cargo test` fail with `Access is denied`. Run `callsieve daemon-stop /path/to/repo` first. If a stale process still holds the binary, terminate `callsieve.exe` and rerun the test command.

@@ -596,3 +596,22 @@ cargo fmt --check
 cargo test
 cargo clippy --all-targets -- -D warnings
 ```
+
+On Windows, `cargo test` may fail with `Access is denied` when replacing `target\debug\callsieve.exe` if a previous CallSieve daemon, MCP server, or shim-launched process still holds the binary. Stop the repo daemon first:
+
+```bash
+cargo run -- daemon-stop .
+```
+
+If the binary is still locked, terminate the stale process and rerun tests:
+
+```cmd
+taskkill /IM callsieve.exe /F
+cargo test
+```
+
+For verification while investigating a lock, use a separate target directory:
+
+```bash
+cargo test --target-dir C:\tmp\callsieve-target-test
+```
