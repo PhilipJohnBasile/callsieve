@@ -9,6 +9,8 @@
 - `callsieve_trace_check`
 - `callsieve_benchmark`
 
+For human installation and client setup, start with [INSTALL.md](INSTALL.md). For AI CLI behavior and automation rules, see [AGENT_CLI.md](AGENT_CLI.md).
+
 The MCP server is the integration surface for agents. It does not replace the CLI: indexing, watching, daemon refresh, evidence collection, proof reports, and enterprise-proof reports still run through `callsieve` commands.
 
 Build or install CallSieve first. You can index each repository up front, or let the first `callsieve_context` call rebuild a missing or stale local index:

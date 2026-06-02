@@ -14,6 +14,8 @@ CallSieve is not another coding agent. It is the context and retrieval layer und
 
 CallSieve is now a local Rust CLI with a JSON index, deterministic retrieval, optional LSP reference enrichment, MCP tools, context-first guardrails, daemon/watch freshness support, agent adoption automation, benchmark reports, observed-session traces, and gated proof reports. The product is still local-first and CLI-first, but it has moved beyond the original bootstrap into an agent-context and evidence collection layer.
 
+For human installation and client setup, see [docs/INSTALL.md](docs/INSTALL.md). For AI CLI and wrapper behavior, see [docs/AGENT_CLI.md](docs/AGENT_CLI.md).
+
 The core workflow is:
 
 ```text
@@ -575,7 +577,7 @@ If a server is missing or fails, CallSieve keeps the tree-sitter and heuristic g
 
 `callsieve_context` self-heals a missing or stale `.callsieve/index.json` by rebuilding the local index before returning context. MCP responses include freshness and timing metadata. The MCP server does not install shims, mutate client config, start the daemon, or send code to a remote service.
 
-See [docs/MCP.md](docs/MCP.md) for Codex, Claude Code, Claude Desktop, Cursor, Cline, and Roo setup examples.
+See [docs/INSTALL.md](docs/INSTALL.md) for human install and client setup, [docs/AGENT_CLI.md](docs/AGENT_CLI.md) for AI CLI behavior, and [docs/MCP.md](docs/MCP.md) for Codex, Claude Code, Claude Desktop, Cursor, Cline, and Roo MCP examples.
 
 ## Local-First Guarantees
 
