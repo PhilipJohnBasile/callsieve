@@ -20,6 +20,17 @@ pub fn extract_imports(content: &str, language: Language) -> Vec<RawImport> {
             Language::Rust => extract_rust_import(line, &mut imports),
             Language::Python => extract_python_import(line, &mut imports),
             Language::TypeScript | Language::JavaScript => extract_js_import(line, &mut imports),
+            Language::Php => extract_php_import(line, &mut imports),
+            Language::Go => extract_go_import(line, &mut imports),
+            Language::Java | Language::Kotlin | Language::Swift | Language::Scala => {
+                extract_dotted_import(line, &mut imports)
+            }
+            Language::CSharp => extract_csharp_import(line, &mut imports),
+            Language::C | Language::Cpp => extract_c_include(line, &mut imports),
+            Language::Ruby => extract_ruby_import(line, &mut imports),
+            Language::Dart => extract_dart_import(line, &mut imports),
+            Language::Lua => extract_lua_import(line, &mut imports),
+            Language::Shell => extract_shell_import(line, &mut imports),
             Language::Markdown
             | Language::Json
             | Language::Toml
@@ -100,6 +111,167 @@ fn extract_js_import(line: &str, imports: &mut Vec<RawImport>) {
         imports.push(RawImport {
             imported,
             aliases: js_require_aliases(trimmed),
+        });
+    }
+}
+
+fn extract_php_import(line: &str, imports: &mut Vec<RawImport>) {
+    let trimmed = line.trim_start();
+    if let Some(rest) = trimmed.strip_prefix("use ") {
+        let imported = rest.trim_end_matches(';').trim();
+        if !imported.is_empty()
+            && !imported.starts_with("function ")
+            && !imported.starts_with("const ")
+        {
+            let (imported, local) = alias_pair(imported);
+            imports.push(RawImport {
+                imported: imported.clone(),
+                aliases: vec![RawImportAlias { local, imported }],
+            });
+        }
+        return;
+    }
+
+    for keyword in ["require_once", "require", "include_once", "include"] {
+        if trimmed.starts_with(keyword)
+            && let Some(imported) = first_quoted(trimmed)
+        {
+            imports.push(RawImport {
+                imported,
+                aliases: Vec::new(),
+            });
+            return;
+        }
+    }
+}
+
+fn extract_go_import(line: &str, imports: &mut Vec<RawImport>) {
+    let trimmed = line.trim_start();
+    let import_part = trimmed.strip_prefix("import ").unwrap_or(trimmed).trim();
+    if let Some(imported) = first_quoted(import_part) {
+        let alias = import_part
+            .split(['"', '`'])
+            .next()
+            .map(str::trim)
+            .filter(|alias| is_identifier(alias) && *alias != "_")
+            .map(|local| RawImportAlias {
+                local: local.to_string(),
+                imported: imported.clone(),
+            });
+        imports.push(RawImport {
+            imported,
+            aliases: alias.into_iter().collect(),
+        });
+    }
+}
+
+fn extract_dotted_import(line: &str, imports: &mut Vec<RawImport>) {
+    let trimmed = line.trim_start();
+    if let Some(rest) = trimmed.strip_prefix("import ") {
+        let imported = rest
+            .trim_start_matches("static ")
+            .trim_end_matches(';')
+            .trim();
+        if imported.is_empty() || imported.starts_with('"') || imported.starts_with('(') {
+            return;
+        }
+        let (imported, local) = alias_pair(imported);
+        imports.push(RawImport {
+            imported: imported.clone(),
+            aliases: vec![RawImportAlias { local, imported }],
+        });
+    }
+}
+
+fn extract_csharp_import(line: &str, imports: &mut Vec<RawImport>) {
+    let trimmed = line.trim_start();
+    if let Some(rest) = trimmed.strip_prefix("using ") {
+        let imported = rest.trim_end_matches(';').trim();
+        if imported.is_empty()
+            || imported.starts_with('(')
+            || imported.starts_with("var ")
+            || imported.contains('=')
+        {
+            return;
+        }
+        let (imported, local) = alias_pair(imported);
+        imports.push(RawImport {
+            imported: imported.clone(),
+            aliases: vec![RawImportAlias { local, imported }],
+        });
+    }
+}
+
+fn extract_c_include(line: &str, imports: &mut Vec<RawImport>) {
+    let trimmed = line.trim_start();
+    if !trimmed.starts_with("#include") {
+        return;
+    }
+    let imported = first_quoted(trimmed).or_else(|| {
+        let start = trimmed.find('<')?;
+        let end = trimmed[start + 1..].find('>')?;
+        Some(trimmed[start + 1..start + 1 + end].to_string())
+    });
+    if let Some(imported) = imported {
+        imports.push(RawImport {
+            imported,
+            aliases: Vec::new(),
+        });
+    }
+}
+
+fn extract_ruby_import(line: &str, imports: &mut Vec<RawImport>) {
+    let trimmed = line.trim_start();
+    if (trimmed.starts_with("require ") || trimmed.starts_with("require_relative "))
+        && let Some(imported) = first_quoted(trimmed)
+    {
+        imports.push(RawImport {
+            imported,
+            aliases: Vec::new(),
+        });
+    }
+}
+
+fn extract_dart_import(line: &str, imports: &mut Vec<RawImport>) {
+    let trimmed = line.trim_start();
+    if (trimmed.starts_with("import ")
+        || trimmed.starts_with("export ")
+        || trimmed.starts_with("part "))
+        && let Some(imported) = first_quoted(trimmed)
+    {
+        imports.push(RawImport {
+            imported,
+            aliases: Vec::new(),
+        });
+    }
+}
+
+fn extract_lua_import(line: &str, imports: &mut Vec<RawImport>) {
+    let trimmed = line.trim_start();
+    if trimmed.contains("require")
+        && let Some(imported) = first_quoted(trimmed)
+    {
+        imports.push(RawImport {
+            imported,
+            aliases: Vec::new(),
+        });
+    }
+}
+
+fn extract_shell_import(line: &str, imports: &mut Vec<RawImport>) {
+    let trimmed = line.trim_start();
+    let imported = trimmed
+        .strip_prefix("source ")
+        .or_else(|| trimmed.strip_prefix(". "))
+        .map(str::trim)
+        .and_then(|rest| rest.split_whitespace().next())
+        .map(|path| path.trim_matches(['"', '\'']).to_string());
+    if let Some(imported) = imported
+        && !imported.is_empty()
+    {
+        imports.push(RawImport {
+            imported,
+            aliases: Vec::new(),
         });
     }
 }

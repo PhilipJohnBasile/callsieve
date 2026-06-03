@@ -333,10 +333,46 @@ fn resolve_import(
         }
         Language::Python => resolve_python_import(root, source, imported),
         Language::Rust => resolve_rust_import(root, source, imported),
+        Language::Php => resolve_relative_import(root, source, imported, &["php", "phtml"]),
+        Language::Ruby => resolve_relative_import(root, source, imported, &["rb"]),
+        Language::Dart => resolve_relative_import(root, source, imported, &["dart"]),
+        Language::Shell => resolve_relative_import(root, source, imported, &["sh", "bash", "zsh"]),
+        Language::C => resolve_relative_import(root, source, imported, &["h", "c"]),
+        Language::Cpp => resolve_relative_import(
+            root,
+            source,
+            imported,
+            &["hpp", "hh", "hxx", "h", "cpp", "cc", "cxx"],
+        ),
+        Language::Go
+        | Language::Java
+        | Language::CSharp
+        | Language::Kotlin
+        | Language::Swift
+        | Language::Scala
+        | Language::Lua => None,
         Language::Markdown | Language::Json | Language::Toml | Language::Yaml | Language::Text => {
             None
         }
     }
+}
+
+fn resolve_relative_import(
+    root: &Path,
+    source: &Path,
+    imported: &str,
+    extensions: &[&str],
+) -> Option<String> {
+    let imported = imported
+        .trim()
+        .trim_end_matches(';')
+        .trim_matches(['"', '\'', '<', '>']);
+    if imported.is_empty() || !(imported.starts_with('.') || imported.contains('/')) {
+        return None;
+    }
+    let base = source.parent().unwrap_or_else(|| Path::new(""));
+    let candidate = normalize_relative(base.join(imported));
+    resolve_candidate(root, &candidate, extensions).map(|path| path_to_string(&path))
 }
 
 fn resolve_candidate(root: &Path, candidate: &Path, extensions: &[&str]) -> Option<PathBuf> {

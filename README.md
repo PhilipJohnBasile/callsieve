@@ -37,8 +37,8 @@ callsieve index <path> [--lsp]
 callsieve symbols <path>
 callsieve symbol <path> <symbol_name>
 callsieve query <path> "<question>" [--why-debug]
-callsieve context <path> "<task>" [--limit <n>] [--snippets-per-file <n>] [--no-snippets] [--why-debug]
-callsieve agent-context <path> "<task>" [--limit <n>] [--snippets-per-file <n>] [--why-debug]
+callsieve context <path> "<task>" [--limit <n>] [--snippets-per-file <n>] [--no-snippets] [--why-debug] [--format json|markdown]
+callsieve agent-context <path> "<task>" [--limit <n>] [--snippets-per-file <n>] [--why-debug] [--format json|markdown]
 callsieve demo <path> [--task "<task>"] [--lsp]
 callsieve memory-clear <path>
 callsieve benchmark <path> "<task>" [--limit <n>] [--snippets-per-file <n>] [--no-snippets]
@@ -79,6 +79,9 @@ callsieve bootstrap <path> --client <codex|claude|cursor|cline|roo|generic> [--s
 callsieve doctor <path> --client <codex|claude|cursor|cline|roo|generic> [--fix] [--strict]
 callsieve codex-bootstrap <path> --model <name> [--force]
 callsieve editor-hook <path> --editor <vscode|cursor|generic> [--force]
+callsieve hook install <path> --client <codex|claude|cursor|cline|roo|generic> [--strict] [--force] [--lsp]
+callsieve hook doctor <path>
+callsieve hook uninstall <path>
 callsieve guard <path> "<task>" [--trace-out <trace.json>]
 callsieve begin <path> "<task>" --client <codex|claude|cursor|cline|roo|generic> [--trace-out <trace.json>]
 callsieve codex-session <path> "<task>" --trace-out <trace.json> [--model <name>] [--expected-file <path>]
@@ -99,6 +102,7 @@ cargo run -- demo . --task "change login token expiry behavior"
 cargo run -- query . "where is auth handled?"
 cargo run -- context . "change login token expiry behavior"
 cargo run -- agent-context . "change login token expiry behavior"
+cargo run -- agent-context . "change login token expiry behavior" --format markdown
 cargo run -- memory-clear .
 cargo run -- benchmark . "change login token expiry behavior"
 cargo run -- benchmark-suite . benchmarks/tasks.json
@@ -141,6 +145,9 @@ cargo run -- doctor . --client generic --strict
 cargo run -- doctor . --client generic --fix --strict
 cargo run -- codex-bootstrap . --model gpt-5-codex --force
 cargo run -- editor-hook . --editor cursor --force
+cargo run -- hook install . --client generic --strict --force --lsp
+cargo run -- hook doctor .
+cargo run -- hook uninstall .
 cargo run -- guard . "change login token expiry behavior" --trace-out .callsieve/session-trace.json
 cargo run -- begin . "change login token expiry behavior" --client generic --trace-out .callsieve/session-trace.json
 cargo run -- codex-session . "change login token expiry behavior" --trace-out .callsieve/codex-session.json --model gpt-5-codex
@@ -176,13 +183,13 @@ The Rust rehearsal command is self-healing for local-safe issues. `--preflight` 
 ## Current Capabilities
 
 - walks a repository while respecting common ignore rules
-- detects TypeScript, JavaScript, Python, and Rust source files plus agent-relevant docs and config files
+- detects TypeScript, JavaScript, Python, Rust, PHP, Go, Java, C#, C, C++, Ruby, Kotlin, Swift, Scala, Dart, Lua, and shell source files plus agent-relevant docs and config files
 - extracts practical symbols with tree-sitter-backed parsing and deterministic fallbacks
 - extracts imports, references, and calls
 - can enrich references with local Language Server Protocol servers when `--lsp` is enabled
 - indexes bounded content terms for Markdown, JSON, TOML, YAML, and text without returning full files
 - stores a local JSON index at `.callsieve/index.json`
-- returns compact JSON for agent consumption
+- returns compact JSON for agent consumption, with Markdown output available for direct reading
 - ranks matches with deterministic, explainable scoring
 - builds compact read-first context packets for coding tasks
 - boosts package manifests for dependency and setup tasks
@@ -214,9 +221,10 @@ The Rust rehearsal command is self-healing for local-safe issues. `--preflight` 
 - starts controlled Codex/ChatGPT context-first replay traces with model tags
 - bootstraps project-local Codex launchers, resolved MCP config, rules, and grep shims without global PATH/profile mutation
 - generates project-local editor hooks for VS Code, Cursor, and generic editors
+- installs repo-local agent launchers with `hook install` so shims and daemon startup stay process-local
 - audits agent setup, traces, index freshness, and optional shim state with `enforce`
 - installs an opt-in local `callsieve` launcher plus `rg`/`grep` shims for PATH-level interception
-- wraps grep workflows so CallSieve context is returned before optional `rg`
+- wraps grep workflows so CallSieve context is returned before the original `rg` or `grep` command is replayed
 
 ## Example Query Output
 
@@ -493,6 +501,19 @@ cargo run -- agent-setup . --client codex --force
 
 For coding tasks, the policy is: call `callsieve_context` before broad grep, `rg`, repository-wide search, or repeated file reads. Read `read_first` files first; grep only if the context packet is insufficient.
 
+Use `hook install` when you want the easiest repo-local agent entrypoint. It builds the index, writes client setup, installs strict shims, and creates `.callsieve/agent-launch.ps1` plus `.callsieve/agent-launch.sh`. Those launchers start the daemon, prepend `.callsieve/bin` only for that launched process, and then run the agent command you pass them.
+
+```bash
+cargo run -- hook install . --client generic --strict --force --lsp
+cargo run -- hook doctor .
+```
+
+Hook setup does not mutate global shell profiles or user PATH. Remove the repo-local launchers and shims with:
+
+```bash
+cargo run -- hook uninstall .
+```
+
 Use `guard` to start a context-first task and write a trace stub, then use strict `trace-check` to audit actual sessions:
 
 ```bash
@@ -539,7 +560,7 @@ cargo run -- shim install . --force --strict
 cargo run -- shim doctor .
 ```
 
-The install writes a project-local `callsieve` launcher plus wrappers that call `callsieve grep` before passing through to the real `rg` or `grep` command captured at install time. With `--strict`, shim-mediated grep writes `.callsieve/shim-trace.json` events that strict trace checks can flag when grep happens before CallSieve context. The wrappers are inert until `.callsieve/bin` is prepended to the agent shell PATH for that process.
+The install writes a project-local `callsieve` launcher plus wrappers that call the hidden `callsieve shim-run` helper before passing through to the real `rg` or `grep` command captured at install time. `shim-run` parses common search arguments, returns CallSieve context first, then replays the original command arguments against the real search binary. With `--strict`, shim-mediated grep writes `.callsieve/shim-trace.json` events that strict trace checks can flag when grep happens before CallSieve context. The wrappers are inert until `.callsieve/bin` is prepended to the agent shell PATH for that process.
 
 ## Fresh Indexes
 
@@ -579,6 +600,17 @@ CallSieve does not install servers, clone repositories, or use the network. It d
 - TypeScript/JavaScript: `typescript-language-server --stdio`
 - Python: `pyright-langserver --stdio`
 - Rust: `rust-analyzer`
+- PHP: `intelephense --stdio`
+- Go: `gopls`
+- C/C++: `clangd`
+- Ruby: `ruby-lsp`
+- Lua: `lua-language-server`
+- C#: `csharp-ls`
+- Java: `jdtls`
+- Kotlin: `kotlin-language-server`
+- Swift: `sourcekit-lsp`
+- Scala: `metals`
+- Dart: `dart language-server --protocol=lsp`
 
 If a server is missing or fails, CallSieve keeps the tree-sitter and heuristic graph and reports per-language availability plus failure reasons in `status`. LSP-derived edges use sources such as `"lsp_reference"`, `"lsp_definition"`, `"lsp_implementation"`, and `"lsp_type_definition"` with `"confidence": 1.0`; tree-sitter edges use `0.8`, and heuristic edges use `0.5`.
 
@@ -598,6 +630,16 @@ If a server is missing or fails, CallSieve keeps the tree-sitter and heuristic g
 Use `callsieve mcp-config <repo> --format json` or `--format toml` for Gemini CLI, Kimi CLI, or any AI CLI that supports stdio MCP but does not have a dedicated CallSieve setup command.
 
 See [docs/INSTALL.md](docs/INSTALL.md) for human install and client setup, [docs/AGENT_CLI.md](docs/AGENT_CLI.md) for AI CLI behavior, and [docs/MCP.md](docs/MCP.md) for Codex, Claude Code, Claude Desktop, Cursor, Cline, and Roo MCP examples.
+
+## Feedback FAQ
+
+**Does it need to be MCP?** No. MCP is one integration path. The same retrieval path is available through `callsieve agent-context`, JSON output, Markdown output, and repo-local hooks.
+
+**Why not just Markdown or CSV?** Markdown is now available for direct reading, and JSON remains the default because agents and tooling need nested fields for files, symbols, snippets, tests, scores, and trace policy. CSV loses too much structure for this workflow.
+
+**Is this already solved by IDE indexes?** IDE indexes are useful, but they are usually tied to one editor and optimized for interactive humans. CallSieve is agent-facing, cross-tool, local-first, auditable, and tuned to produce a compact read-first packet before an agent spends tokens on broad search.
+
+**Does it work for PHP?** Yes. PHP files are indexed with lightweight detection for functions, classes, interfaces, traits, enums, imports, includes, references, and related snippets. If `intelephense` is installed, `--lsp` can report PHP language-server availability too.
 
 ## Local-First Guarantees
 

@@ -109,6 +109,19 @@ fn parser_language(language: Language) -> Option<tree_sitter::Language> {
         Language::TypeScript => Some(tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()),
         Language::Python => Some(tree_sitter_python::LANGUAGE.into()),
         Language::Rust => Some(tree_sitter_rust::LANGUAGE.into()),
+        Language::Php
+        | Language::Go
+        | Language::Java
+        | Language::CSharp
+        | Language::C
+        | Language::Cpp
+        | Language::Ruby
+        | Language::Kotlin
+        | Language::Swift
+        | Language::Scala
+        | Language::Dart
+        | Language::Lua
+        | Language::Shell => None,
         Language::Markdown | Language::Json | Language::Toml | Language::Yaml | Language::Text => {
             None
         }
@@ -381,10 +394,21 @@ enum StripState {
 
 fn line_comment_len(chars: &[char], index: usize, language: Language) -> Option<usize> {
     match language {
-        Language::Python if chars[index] == '#' => Some(1),
-        Language::Rust | Language::TypeScript | Language::JavaScript => {
-            (chars[index] == '/' && chars.get(index + 1) == Some(&'/')).then_some(2)
-        }
+        Language::Python | Language::Ruby | Language::Shell if chars[index] == '#' => Some(1),
+        Language::Rust
+        | Language::TypeScript
+        | Language::JavaScript
+        | Language::Php
+        | Language::Go
+        | Language::Java
+        | Language::CSharp
+        | Language::C
+        | Language::Cpp
+        | Language::Kotlin
+        | Language::Swift
+        | Language::Scala
+        | Language::Dart
+        | Language::Lua => (chars[index] == '/' && chars.get(index + 1) == Some(&'/')).then_some(2),
         Language::Markdown | Language::Json | Language::Toml | Language::Yaml | Language::Text => {
             None
         }
@@ -395,7 +419,20 @@ fn line_comment_len(chars: &[char], index: usize, language: Language) -> Option<
 fn block_comment_len(chars: &[char], index: usize, language: Language) -> Option<usize> {
     (matches!(
         language,
-        Language::Rust | Language::TypeScript | Language::JavaScript
+        Language::Rust
+            | Language::TypeScript
+            | Language::JavaScript
+            | Language::Php
+            | Language::Go
+            | Language::Java
+            | Language::CSharp
+            | Language::C
+            | Language::Cpp
+            | Language::Kotlin
+            | Language::Swift
+            | Language::Scala
+            | Language::Dart
+            | Language::Lua
     ) && chars[index] == '/'
         && chars.get(index + 1) == Some(&'*'))
     .then_some(2)
@@ -403,8 +440,22 @@ fn block_comment_len(chars: &[char], index: usize, language: Language) -> Option
 
 fn is_string_quote(character: char, language: Language) -> bool {
     match language {
-        Language::TypeScript | Language::JavaScript => matches!(character, '\'' | '"' | '`'),
-        Language::Python | Language::Rust => matches!(character, '\'' | '"'),
+        Language::TypeScript | Language::JavaScript | Language::Go | Language::Shell => {
+            matches!(character, '\'' | '"' | '`')
+        }
+        Language::Python
+        | Language::Rust
+        | Language::Php
+        | Language::Java
+        | Language::CSharp
+        | Language::C
+        | Language::Cpp
+        | Language::Ruby
+        | Language::Kotlin
+        | Language::Swift
+        | Language::Scala
+        | Language::Dart
+        | Language::Lua => matches!(character, '\'' | '"'),
         Language::Markdown | Language::Json | Language::Toml | Language::Yaml | Language::Text => {
             false
         }

@@ -68,20 +68,20 @@ Later versions can add semantic reranking, embeddings, richer call graphs, and d
 
 ## Current Product
 
-CallSieve is a local Rust CLI and MCP-compatible context server. It indexes a repository into `.callsieve/index.json`, ranks relevant files and symbols for a task, returns compact read-first context packets, and audits whether agents used CallSieve before broad grep or repeated reads.
+CallSieve is a local Rust CLI, MCP-compatible context server, and repo-local hook layer. It indexes a repository into `.callsieve/index.json`, ranks relevant files and symbols for a task, returns compact read-first context packets, and audits whether agents used CallSieve before broad grep or repeated reads.
 
 The current app includes:
 
 - repository walking with ignore-rule support
-- language detection for TypeScript, JavaScript, Python, Rust, docs, and common config files
+- language detection for TypeScript, JavaScript, Python, Rust, PHP, Go, Java, C#, C, C++, Ruby, Kotlin, Swift, Scala, Dart, Lua, shell, docs, and common config files
 - symbol, import, reference, call, and related-test extraction
 - optional local LSP enrichment when language servers are already installed
-- deterministic query and `agent-context` ranking with optional scoring debug output
+- deterministic query and `agent-context` ranking with optional scoring debug output and Markdown output for direct agent reading
 - local task-memory hints for repeated task families
 - MCP tools for context, symbols, stats, status, trace checks, and benchmark estimates
 - portable MCP config output for generic AI CLIs
 - watcher and daemon paths for index freshness
-- first-class adoption automation with `bootstrap`, `doctor`, `begin`, agent setup, Codex bootstrap, editor hooks, and opt-in grep shims
+- first-class adoption automation with `bootstrap`, `doctor`, `begin`, agent setup, Codex bootstrap, repo-local hook launchers, editor hooks, and opt-in grep shims
 - benchmark, retrieval-eval, perf-report, observed trace, pilot, evidence-pack, proof-report, and enterprise-proof-report workflows
 
 ## Distribution Model
@@ -102,7 +102,7 @@ Do not sell source-code access as the main value. Sell the measured reduction in
 
 ```bash
 callsieve index <path> [--lsp]
-callsieve agent-context <path> "<task>"
+callsieve agent-context <path> "<task>" [--format json|markdown]
 callsieve demo <path> [--task "<task>"]
 callsieve memory-clear <path>
 callsieve symbol <path> <symbol_name>
@@ -111,6 +111,9 @@ callsieve mcp
 callsieve mcp-config <path> [--format json|toml]
 callsieve bootstrap <path> --client <client> [--strict] [--force] [--lsp]
 callsieve doctor <path> --client <client> [--fix] [--strict]
+callsieve hook install <path> --client <client> [--strict] [--force] [--lsp]
+callsieve hook doctor <path>
+callsieve hook uninstall <path>
 callsieve begin <path> "<task>" --client <client> [--trace-out <trace.json>]
 callsieve eval-retrieval <manifest.json>
 callsieve perf-report <path>
@@ -138,7 +141,7 @@ The product claim stays gated. Broad developer-session language should wait unti
 The next product work should harden the same local-first path:
 
 - richer call graph and ownership hints
-- broader language coverage
+- deeper language-specific parser and LSP coverage
 - better task-category and repo-scale reporting
 - tighter retrieval fixtures and p95 latency gates before broad claims
 - editor and agent integrations that make `agent-context` the default first step

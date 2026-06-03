@@ -23,6 +23,19 @@ fn parser_language(language: Language) -> Option<tree_sitter::Language> {
         Language::TypeScript => Some(tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()),
         Language::Python => Some(tree_sitter_python::LANGUAGE.into()),
         Language::Rust => Some(tree_sitter_rust::LANGUAGE.into()),
+        Language::Php
+        | Language::Go
+        | Language::Java
+        | Language::CSharp
+        | Language::C
+        | Language::Cpp
+        | Language::Ruby
+        | Language::Kotlin
+        | Language::Swift
+        | Language::Scala
+        | Language::Dart
+        | Language::Lua
+        | Language::Shell => None,
         Language::Markdown | Language::Json | Language::Toml | Language::Yaml | Language::Text => {
             None
         }
@@ -50,6 +63,19 @@ fn symbol_for_node(node: Node<'_>, content: &str, language: Language) -> Option<
         Language::TypeScript | Language::JavaScript => js_symbol_for_node(node, content),
         Language::Python => python_symbol_for_node(node, content),
         Language::Rust => rust_symbol_for_node(node, content),
+        Language::Php
+        | Language::Go
+        | Language::Java
+        | Language::CSharp
+        | Language::C
+        | Language::Cpp
+        | Language::Ruby
+        | Language::Kotlin
+        | Language::Swift
+        | Language::Scala
+        | Language::Dart
+        | Language::Lua
+        | Language::Shell => None,
         Language::Markdown | Language::Json | Language::Toml | Language::Yaml | Language::Text => {
             None
         }

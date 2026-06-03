@@ -2,7 +2,7 @@
 
 This guide is for humans installing CallSieve and adding it to AI coding tools.
 
-CallSieve is local-first. It indexes code on your machine, runs as a CLI or stdio MCP server, and does not require API keys or cloud services.
+CallSieve is local-first. It indexes code on your machine, runs as a CLI, stdio MCP server, or repo-local hook layer, and does not require API keys or cloud services.
 
 ## Prerequisites
 
@@ -16,6 +16,12 @@ Recommended:
 - `rust-analyzer` for Rust repos
 - `typescript-language-server` for TypeScript and JavaScript repos
 - `pyright-langserver` for Python repos
+- `intelephense` for PHP repos
+- `gopls` for Go repos
+- `clangd` for C and C++ repos
+- `ruby-lsp` for Ruby repos
+- `lua-language-server` for Lua repos
+- `csharp-ls`, `jdtls`, `kotlin-language-server`, `sourcekit-lsp`, `metals`, or `dart` for C#, Java, Kotlin, Swift, Scala, or Dart repos
 
 Language servers are optional. CallSieve falls back to tree-sitter and deterministic heuristics when they are missing.
 
@@ -102,14 +108,24 @@ callsieve doctor /path/to/repo --client generic --strict
 
 `bootstrap` writes local files under the repo only. It does not mutate global shell profiles, global PATH, cloud config, or user-wide app settings.
 
+For the hook-first setup testers usually want, install repo-local launchers:
+
+```bash
+callsieve hook install /path/to/repo --client generic --strict --force --lsp
+callsieve hook doctor /path/to/repo
+```
+
+This writes `.callsieve/agent-launch.ps1`, `.callsieve/agent-launch.sh`, local shims, policy files, and MCP config. The launchers start the daemon, prepend `.callsieve/bin` only for the launched process, and then run the agent command passed to them.
+
 ## Add To AI Tools
 
-CallSieve supports two integration styles:
+CallSieve supports three integration styles:
 
 - MCP: the AI tool calls `callsieve_context`, `callsieve_symbol`, and related tools.
 - CLI policy: the AI tool is instructed to run `callsieve agent-context <repo> "<task>"` before broad search.
+- Hook launcher: the AI tool is started through `.callsieve/agent-launch.ps1` or `.callsieve/agent-launch.sh`, so repo-local shims can intercept broad `rg` and `grep`.
 
-Prefer MCP when the tool supports local stdio MCP. Use CLI policy everywhere else.
+Prefer hook launchers when you control how the agent process starts. Prefer MCP when the tool supports local stdio MCP. Use CLI policy everywhere else.
 
 ## Codex
 
@@ -272,7 +288,26 @@ When reporting savings, call context_payload_reduction an estimated context payl
 
 ## Strict Grep Shims
 
-For stronger local enforcement, install repo-local grep wrappers:
+For stronger local enforcement, use the hook installer:
+
+```bash
+callsieve hook install /path/to/repo --client generic --strict --force --lsp
+callsieve hook doctor /path/to/repo
+```
+
+Run an agent through the generated launcher:
+
+```bash
+/path/to/repo/.callsieve/agent-launch.sh <agent-command> <args>
+```
+
+On Windows PowerShell:
+
+```powershell
+& C:\path\to\repo\.callsieve\agent-launch.ps1 <agent-command> <args>
+```
+
+If you only need the low-level wrappers, install repo-local grep shims directly:
 
 ```bash
 callsieve shim install /path/to/repo --force --strict
@@ -286,6 +321,8 @@ Then prepend this directory to the PATH used by the AI tool process only:
 ```
 
 Do not add this globally unless you intentionally want CallSieve shims for every shell. The safer pattern is process-local PATH through a launcher.
+
+The wrappers call the hidden `callsieve shim-run` helper. It extracts the search pattern from common `rg` and `grep` forms, returns CallSieve context first, and then passes the original arguments through to the real search binary captured at install time.
 
 Remove shims with:
 

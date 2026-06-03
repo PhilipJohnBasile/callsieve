@@ -143,6 +143,9 @@ pub enum Command {
         /// Include structured scoring components for ranking diagnostics.
         #[arg(long)]
         why_debug: bool,
+
+        #[arg(long, value_enum, default_value_t = AgentOutputFormat::Json)]
+        format: AgentOutputFormat,
     },
 
     /// Build an agent-ready context packet agents should request before grep.
@@ -159,6 +162,9 @@ pub enum Command {
         /// Include structured scoring components for ranking diagnostics.
         #[arg(long)]
         why_debug: bool,
+
+        #[arg(long, value_enum, default_value_t = AgentOutputFormat::Json)]
+        format: AgentOutputFormat,
     },
 
     /// Build an index, return a sample context packet, and report context reduction.
@@ -782,6 +788,12 @@ pub enum Command {
         command: ShimCommand,
     },
 
+    /// Install, inspect, or remove repo-local hands-off agent hooks.
+    Hook {
+        #[command(subcommand)]
+        command: HookCommand,
+    },
+
     /// Return CallSieve context before optionally running rg.
     Grep {
         path: PathBuf,
@@ -801,6 +813,21 @@ pub enum Command {
 
         #[arg(long, hide = true)]
         shim_command: Option<String>,
+    },
+
+    /// Internal entrypoint used by generated grep shims.
+    #[command(name = "shim-run", hide = true)]
+    ShimRun {
+        path: PathBuf,
+
+        #[arg(long, value_enum)]
+        tool: ShimTool,
+
+        #[arg(long)]
+        strict: bool,
+
+        #[arg(last = true)]
+        args: Vec<String>,
     },
 
     /// Show index statistics.
@@ -825,6 +852,38 @@ pub enum ShimCommand {
 
     /// Remove installed local rg/grep wrappers.
     Uninstall { path: PathBuf },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum HookCommand {
+    /// Install repo-local launchers, policy files, daemon setup, and grep shims.
+    Install {
+        path: PathBuf,
+
+        #[arg(long, value_enum, default_value_t = AgentClient::Generic)]
+        client: AgentClient,
+
+        #[arg(long)]
+        strict: bool,
+
+        #[arg(long)]
+        force: bool,
+
+        #[arg(long)]
+        lsp: bool,
+    },
+
+    /// Verify repo-local hook files and PATH guidance.
+    Doctor { path: PathBuf },
+
+    /// Remove repo-local hook launchers and grep shims.
+    Uninstall { path: PathBuf },
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum ShimTool {
+    Rg,
+    Grep,
 }
 
 #[derive(Debug, Subcommand)]
@@ -899,6 +958,12 @@ pub enum AgentClient {
 pub enum McpConfigFormat {
     Json,
     Toml,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum AgentOutputFormat {
+    Json,
+    Markdown,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -1551,7 +1616,7 @@ struct EnforceOutput {
     checks: Vec<EnforceCheck>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 struct EnforceCheck {
     check: String,
     status: String,
@@ -1609,6 +1674,47 @@ struct ShimDoctorOutput {
     root: String,
     checks: Vec<EnforceCheck>,
     path_instruction: String,
+}
+
+#[derive(Debug, Serialize)]
+struct HookInstallOutput {
+    command: &'static str,
+    status: String,
+    root: String,
+    client: String,
+    strict: bool,
+    index: IndexOutput,
+    setup: SetupAgentOutput,
+    shim: ShimOutput,
+    launchers: Vec<String>,
+    first_required_command: String,
+    path_instruction: String,
+    policy: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+struct HookDoctorOutput {
+    command: &'static str,
+    status: String,
+    root: String,
+    checks: Vec<EnforceCheck>,
+    shim: ShimDoctorOutput,
+    path_instruction: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ShimRunOutput {
+    command: &'static str,
+    root: String,
+    tool: &'static str,
+    args: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pattern: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    context: Option<query::ContextOutput>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    shim_event: Option<serde_json::Value>,
+    passthrough: RgOutput,
 }
 
 #[derive(Debug, Serialize)]
@@ -1699,6 +1805,7 @@ pub fn run() -> Result<()> {
             snippets_per_file,
             no_snippets,
             why_debug,
+            format,
         } => {
             let (index, index_load_ms) = load_index_timed(&path)?;
             let mut output = query::build_context_with_options(
@@ -1711,7 +1818,7 @@ pub fn run() -> Result<()> {
                 why_debug,
             )?;
             output.add_index_load_time(index_load_ms);
-            output::json::print(&output)?;
+            print_context_output(&output, format)?;
         }
         Command::AgentContext {
             path,
@@ -1719,6 +1826,7 @@ pub fn run() -> Result<()> {
             limit,
             snippets_per_file,
             why_debug,
+            format,
         } => {
             let (index, index_load_ms) = load_index_timed(&path)?;
             let mut context = query::build_context_with_options(
@@ -1741,7 +1849,7 @@ pub fn run() -> Result<()> {
                 memory,
                 context,
             };
-            output::json::print(&output)?;
+            print_agent_context_output(&output, format)?;
         }
         Command::Demo { path, task, lsp } => {
             let output = demo(&path, &task, lsp)?;
@@ -2472,6 +2580,26 @@ pub fn run() -> Result<()> {
                 output::json::print(&output)?;
             }
         },
+        Command::Hook { command } => match command {
+            HookCommand::Install {
+                path,
+                client,
+                strict,
+                force,
+                lsp,
+            } => {
+                let output = install_hook(&path, client, strict, force, lsp)?;
+                output::json::print(&output)?;
+            }
+            HookCommand::Doctor { path } => {
+                let output = hook_doctor(&path);
+                output::json::print(&output)?;
+            }
+            HookCommand::Uninstall { path } => {
+                let output = uninstall_hook(&path)?;
+                output::json::print(&output)?;
+            }
+        },
         Command::Grep {
             path,
             pattern,
@@ -2521,6 +2649,15 @@ pub fn run() -> Result<()> {
             {
                 object.insert("shim_event".to_string(), shim_event);
             }
+            output::json::print(&output)?;
+        }
+        Command::ShimRun {
+            path,
+            tool,
+            strict,
+            args,
+        } => {
+            let output = run_shim_command(&path, tool, strict, &args)?;
             output::json::print(&output)?;
         }
         Command::Stats { path } => {
@@ -2573,6 +2710,167 @@ fn demo(path: &Path, task: &str, lsp: bool) -> Result<DemoOutput> {
         ],
         warnings: index.warnings.clone(),
     })
+}
+
+fn print_context_output(output: &query::ContextOutput, format: AgentOutputFormat) -> Result<()> {
+    match format {
+        AgentOutputFormat::Json => output::json::print(output),
+        AgentOutputFormat::Markdown => {
+            let value = serde_json::to_value(output)?;
+            println!(
+                "{}",
+                context_markdown(&value, "grep_only_if_context_is_insufficient")
+            );
+            Ok(())
+        }
+    }
+}
+
+fn print_agent_context_output(
+    output: &AgentContextOutput,
+    format: AgentOutputFormat,
+) -> Result<()> {
+    match format {
+        AgentOutputFormat::Json => output::json::print(output),
+        AgentOutputFormat::Markdown => {
+            let value = serde_json::to_value(output)?;
+            let context = value.get("context").unwrap_or(&value);
+            let grep_policy = value
+                .get("instruction")
+                .and_then(|instruction| instruction.get("grep_policy"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("grep_only_if_context_is_insufficient");
+            println!("{}", context_markdown(context, grep_policy));
+            Ok(())
+        }
+    }
+}
+
+fn context_markdown(context: &serde_json::Value, grep_policy: &str) -> String {
+    let task = json_string(context, &["task"]).unwrap_or_default();
+    let root = json_string(context, &["root"]).unwrap_or_default();
+    let mut output = String::new();
+    output.push_str("# CallSieve Context\n\n");
+    if !task.is_empty() {
+        output.push_str(&format!("Task: {task}\n"));
+    }
+    if !root.is_empty() {
+        output.push_str(&format!("Root: {root}\n"));
+    }
+    output.push_str(&format!("Grep policy: {grep_policy}\n\n"));
+    output.push_str("## Read First\n");
+
+    let files = context
+        .get("read_first")
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    if files.is_empty() {
+        output.push_str("\nNo read-first files selected.\n");
+        return output;
+    }
+
+    for file in files {
+        let rank = json_usize(&file, &["rank"]).unwrap_or_default();
+        let path = json_string(&file, &["file"]).unwrap_or_else(|| "<unknown>".to_string());
+        let language = json_string(&file, &["language"]).unwrap_or_default();
+        let score = json_usize(&file, &["score"]).unwrap_or_default();
+        output.push_str(&format!("\n{rank}. `{path}`"));
+        if !language.is_empty() {
+            output.push_str(&format!(" ({language}, score {score})"));
+        }
+        output.push('\n');
+
+        if let Some(why) = file.get("why").and_then(serde_json::Value::as_array)
+            && !why.is_empty()
+        {
+            output.push_str("   Why: ");
+            output.push_str(
+                &why.iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join("; "),
+            );
+            output.push('\n');
+        }
+
+        if let Some(symbols) = file.get("symbols").and_then(serde_json::Value::as_array)
+            && !symbols.is_empty()
+        {
+            let names = symbols
+                .iter()
+                .filter_map(|symbol| {
+                    let name = symbol.get("name")?.as_str()?;
+                    let kind = symbol.get("kind").and_then(serde_json::Value::as_str)?;
+                    Some(format!("{kind} `{name}`"))
+                })
+                .collect::<Vec<_>>();
+            if !names.is_empty() {
+                output.push_str(&format!("   Symbols: {}\n", names.join(", ")));
+            }
+        }
+
+        if let Some(tests) = file
+            .get("related_tests")
+            .and_then(serde_json::Value::as_array)
+            && !tests.is_empty()
+        {
+            let test_files = tests
+                .iter()
+                .filter_map(|test| test.get("file").and_then(serde_json::Value::as_str))
+                .collect::<Vec<_>>();
+            if !test_files.is_empty() {
+                output.push_str(&format!("   Related tests: {}\n", test_files.join(", ")));
+            }
+        }
+
+        if let Some(snippets) = file.get("snippets").and_then(serde_json::Value::as_array) {
+            for snippet in snippets {
+                let start = snippet
+                    .get("lines")
+                    .and_then(serde_json::Value::as_array)
+                    .and_then(|lines| lines.first())
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or_default();
+                let end = snippet
+                    .get("lines")
+                    .and_then(serde_json::Value::as_array)
+                    .and_then(|lines| lines.get(1))
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(start);
+                let text = snippet
+                    .get("text")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default();
+                if !text.is_empty() {
+                    output.push_str(&format!("   Snippet lines {start}-{end}:\n"));
+                    for line in text.lines() {
+                        output.push_str("      ");
+                        output.push_str(line);
+                        output.push('\n');
+                    }
+                }
+            }
+        }
+    }
+
+    output
+}
+
+fn json_string(value: &serde_json::Value, path: &[&str]) -> Option<String> {
+    let mut current = value;
+    for key in path {
+        current = current.get(*key)?;
+    }
+    current.as_str().map(str::to_string)
+}
+
+fn json_usize(value: &serde_json::Value, path: &[&str]) -> Option<usize> {
+    let mut current = value;
+    for key in path {
+        current = current.get(*key)?;
+    }
+    current.as_u64().map(|number| number as usize)
 }
 
 fn mcp_config_output(root: &Path, format: McpConfigFormat) -> McpConfigOutput {
@@ -6343,6 +6641,159 @@ fn codex_bootstrap(root: &Path, model: &str, force: bool) -> Result<CodexBootstr
     })
 }
 
+fn install_hook(
+    root: &Path,
+    client: AgentClient,
+    strict: bool,
+    force: bool,
+    lsp: bool,
+) -> Result<HookInstallOutput> {
+    let index = build_index_output(root, lsp)?;
+    let setup = setup_agent(client, root, force)?;
+    let first_required_command = setup.first_required_command.clone();
+    let shim = install_shim(root, force, strict)?;
+    let launchers = write_hook_launchers(root, &first_required_command, force)?;
+
+    Ok(HookInstallOutput {
+        command: "hook install",
+        status: "pass".to_string(),
+        root: root_label(root),
+        client: agent_client_name(client).to_string(),
+        strict,
+        index,
+        setup,
+        path_instruction: shim.path_instruction.clone(),
+        shim,
+        launchers,
+        first_required_command,
+        policy: "repo-local hook only; launchers prepend .callsieve/bin for that process and do not mutate global PATH",
+    })
+}
+
+fn hook_doctor(root: &Path) -> HookDoctorOutput {
+    let launchers = hook_launcher_paths(root);
+    let launchers_installed = launchers.iter().all(|path| path.is_file());
+    let mut checks = vec![enforce_check(
+        "hook_launchers",
+        launchers_installed,
+        if launchers_installed {
+            "repo-local hook launchers exist"
+        } else {
+            "run callsieve hook install to create repo-local launchers"
+        },
+    )];
+    let mut shim = shim_doctor(root);
+    if launchers_installed {
+        for check in &mut shim.checks {
+            if check.check == "path_contains_shim_dir" {
+                check.status = "pass".to_string();
+                check.message =
+                    "hook launchers prepend shim bin directory for launched agents".to_string();
+            }
+        }
+        shim.status = if shim.checks.iter().all(|check| check.status == "pass") {
+            "pass"
+        } else {
+            "fail"
+        }
+        .to_string();
+    }
+    checks.extend(shim.checks.iter().cloned());
+    let status = if checks.iter().all(|check| check.status == "pass") {
+        "pass"
+    } else {
+        "fail"
+    }
+    .to_string();
+
+    HookDoctorOutput {
+        command: "hook doctor",
+        status,
+        root: root_label(root),
+        checks,
+        path_instruction: shim.path_instruction.clone(),
+        shim,
+    }
+}
+
+fn uninstall_hook(root: &Path) -> Result<ShimOutput> {
+    let mut output = uninstall_shim(root)?;
+    for path in hook_launcher_paths(root) {
+        if path.is_file() {
+            fs::remove_file(&path)
+                .with_context(|| format!("failed to remove {}", path.display()))?;
+            output.files.push(path.display().to_string());
+        }
+    }
+    output.command = "hook uninstall";
+    Ok(output)
+}
+
+fn write_hook_launchers(
+    root: &Path,
+    first_required_command: &str,
+    force: bool,
+) -> Result<Vec<String>> {
+    let mut files = Vec::new();
+    for path in hook_launcher_paths(root) {
+        if path.exists() && !force {
+            continue;
+        }
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("failed to create {}", parent.display()))?;
+        }
+        let content = if path.extension().and_then(|extension| extension.to_str()) == Some("ps1") {
+            hook_launcher_ps1(root, first_required_command)
+        } else {
+            hook_launcher_sh(root, first_required_command)
+        };
+        write_executable_file(&path, &content)?;
+        files.push(repo_relative_display(root, &path));
+    }
+    Ok(files)
+}
+
+fn hook_launcher_paths(root: &Path) -> [PathBuf; 2] {
+    [
+        root.join(".callsieve/agent-launch.ps1"),
+        root.join(".callsieve/agent-launch.sh"),
+    ]
+}
+
+fn hook_launcher_ps1(root: &Path, first_required_command: &str) -> String {
+    let root = root.display().to_string().replace('\'', "''");
+    let first_required_command = first_required_command.replace('\'', "''");
+    format!(
+        "$ErrorActionPreference = 'Stop'\n\
+$repo = '{root}'\n\
+$env:PATH = \"$repo\\.callsieve\\bin;$env:PATH\"\n\
+callsieve daemon $repo --background --lsp | Out-Null\n\
+Write-Host 'CallSieve hook active for this process only.'\n\
+Write-Host 'First task command: {first_required_command}'\n\
+if ($args.Count -gt 0) {{\n\
+  $cmd = $args[0]\n\
+  $rest = @()\n\
+  if ($args.Count -gt 1) {{ $rest = $args[1..($args.Count - 1)] }}\n\
+  & $cmd @rest\n\
+}}\n"
+    )
+}
+
+fn hook_launcher_sh(root: &Path, first_required_command: &str) -> String {
+    let root = sh_single_quote(&root.display().to_string());
+    let first_required_command = sh_single_quote(first_required_command);
+    format!(
+        "#!/usr/bin/env sh\n\
+REPO='{root}'\n\
+export PATH=\"$REPO/.callsieve/bin:$PATH\"\n\
+callsieve daemon \"$REPO\" --background --lsp >/dev/null 2>&1 || true\n\
+printf '%s\\n' 'CallSieve hook active for this process only.'\n\
+printf '%s\\n' 'First task command: {first_required_command}'\n\
+if [ \"$#\" -gt 0 ]; then exec \"$@\"; fi\n"
+    )
+}
+
 fn write_codex_launchers(
     root: &Path,
     first_required_command: &str,
@@ -7079,6 +7530,180 @@ fn write_guard_trace(path: &Path, task: &str, context: &query::ContextOutput) ->
     Ok(path.display().to_string())
 }
 
+fn run_shim_command(
+    root: &Path,
+    tool: ShimTool,
+    strict: bool,
+    args: &[String],
+) -> Result<ShimRunOutput> {
+    let pattern = extract_search_pattern(tool, args);
+    let context = if let Some(pattern) = pattern.as_deref() {
+        let index = store::json_store::load_index(root)?;
+        Some(query::build_context_with_options(
+            root, &index, pattern, 8, 2, true, false,
+        )?)
+    } else {
+        None
+    };
+    let shim_command = format!("{} {}", shim_tool_name(tool), args.join(" "));
+    let shim_event = if strict {
+        Some(record_shim_grep_event(
+            root,
+            Some(&shim_command),
+            pattern.as_deref().unwrap_or("<unparsed>"),
+        )?)
+    } else {
+        None
+    };
+    let passthrough = run_passthrough_command(root, tool, args)?;
+
+    Ok(ShimRunOutput {
+        command: "shim-run",
+        root: root_label(root),
+        tool: shim_tool_name(tool),
+        args: args.to_vec(),
+        pattern,
+        context,
+        shim_event,
+        passthrough,
+    })
+}
+
+fn extract_search_pattern(tool: ShimTool, args: &[String]) -> Option<String> {
+    match tool {
+        ShimTool::Rg => extract_rg_pattern(args),
+        ShimTool::Grep => extract_grep_pattern(args),
+    }
+}
+
+fn extract_rg_pattern(args: &[String]) -> Option<String> {
+    let mut index = 0;
+    let mut after_double_dash = false;
+    while index < args.len() {
+        let arg = &args[index];
+        if after_double_dash {
+            return Some(arg.clone());
+        }
+        if arg == "--" {
+            after_double_dash = true;
+            index += 1;
+            continue;
+        }
+        if arg == "-e" || arg == "--regexp" {
+            return args.get(index + 1).cloned();
+        }
+        if let Some(pattern) = arg.strip_prefix("-e")
+            && !pattern.is_empty()
+        {
+            return Some(pattern.to_string());
+        }
+        if rg_option_consumes_next(arg) {
+            index += 2;
+            continue;
+        }
+        if arg.starts_with('-') {
+            index += 1;
+            continue;
+        }
+        return Some(arg.clone());
+    }
+    None
+}
+
+fn extract_grep_pattern(args: &[String]) -> Option<String> {
+    let mut index = 0;
+    let mut after_double_dash = false;
+    while index < args.len() {
+        let arg = &args[index];
+        if after_double_dash {
+            return Some(arg.clone());
+        }
+        if arg == "--" {
+            after_double_dash = true;
+            index += 1;
+            continue;
+        }
+        if arg == "-e" || arg == "--regexp" {
+            return args.get(index + 1).cloned();
+        }
+        if let Some(pattern) = arg.strip_prefix("-e")
+            && !pattern.is_empty()
+        {
+            return Some(pattern.to_string());
+        }
+        if grep_option_consumes_next(arg) {
+            index += 2;
+            continue;
+        }
+        if arg.starts_with('-') {
+            index += 1;
+            continue;
+        }
+        return Some(arg.clone());
+    }
+    None
+}
+
+fn rg_option_consumes_next(arg: &str) -> bool {
+    matches!(
+        arg,
+        "-g" | "--glob"
+            | "-t"
+            | "--type"
+            | "-T"
+            | "--type-not"
+            | "--type-add"
+            | "--type-clear"
+            | "-f"
+            | "--file"
+            | "--ignore-file"
+            | "--path-separator"
+            | "--colors"
+            | "--sort"
+            | "--sortr"
+            | "--engine"
+    )
+}
+
+fn grep_option_consumes_next(arg: &str) -> bool {
+    matches!(
+        arg,
+        "-f" | "--file" | "-m" | "--max-count" | "-A" | "-B" | "-C"
+    )
+}
+
+fn run_passthrough_command(root: &Path, tool: ShimTool, args: &[String]) -> Result<RgOutput> {
+    let bin_dir = shim_bin_dir(root);
+    let tool_name = shim_tool_name(tool);
+    let Some(real_command) = resolve_command_excluding_shim(tool_name, &bin_dir) else {
+        return Ok(RgOutput {
+            status_code: None,
+            stdout: String::new(),
+            stderr: format!(
+                "real {tool_name} was not found outside {}",
+                bin_dir.display()
+            ),
+        });
+    };
+    let output = ProcessCommand::new(&real_command)
+        .args(args)
+        .current_dir(root)
+        .output()
+        .with_context(|| format!("failed to run real {tool_name}: {real_command}"))?;
+    Ok(RgOutput {
+        status_code: output.status.code(),
+        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+    })
+}
+
+fn shim_tool_name(tool: ShimTool) -> &'static str {
+    match tool {
+        ShimTool::Rg => "rg",
+        ShimTool::Grep => "grep",
+    }
+}
+
 fn record_shim_grep_event(
     root: &Path,
     shim_command: Option<&str>,
@@ -7346,35 +7971,24 @@ fn shim_script_paths(bin_dir: &Path, name: &str) -> Vec<PathBuf> {
 fn shim_script(
     root: &Path,
     name: &str,
-    real_command: Option<&str>,
+    _real_command: Option<&str>,
     path: &Path,
     strict: bool,
 ) -> String {
     let root = root.display().to_string();
     if path.extension().and_then(|extension| extension.to_str()) == Some("cmd") {
-        let real = real_command.unwrap_or("");
-        let strict_args = if strict {
-            format!(" --shim-strict --shim-command \"{name} %*\"")
-        } else {
-            String::new()
-        };
+        let strict_args = if strict { " --strict" } else { "" };
         return format!(
-            "@echo off\r\nsetlocal\r\nset CALLSIEVE_SHIM_ACTIVE=1\r\ncallsieve grep \"{root}\" \"%~1\"{strict_args}\r\nif not \"{real}\"==\"\" \"{real}\" %*\r\n"
+            "@echo off\r\nsetlocal\r\nset CALLSIEVE_SHIM_ACTIVE=1\r\ncallsieve shim-run \"{root}\" --tool {name}{strict_args} -- %*\r\n"
         );
     }
 
-    let real = real_command.unwrap_or("");
-    let strict_args = if strict {
-        format!(" --shim-strict --shim-command \"{name} $*\"")
-    } else {
-        String::new()
-    };
+    let strict_args = if strict { " --strict" } else { "" };
     format!(
-        "#!/usr/bin/env sh\nexport CALLSIEVE_SHIM_ACTIVE=1\ncallsieve grep '{}' \"$1\"{}\nif [ -n '{}' ]; then exec '{}' \"$@\"; fi\n",
+        "#!/usr/bin/env sh\nexport CALLSIEVE_SHIM_ACTIVE=1\nexec callsieve shim-run '{}' --tool {}{} -- \"$@\"\n",
         sh_single_quote(&root),
-        strict_args,
-        sh_single_quote(real),
-        sh_single_quote(real)
+        name,
+        strict_args
     )
 }
 
@@ -7583,6 +8197,15 @@ mod tests {
             "--why-debug",
         ])
         .unwrap();
+        Cli::try_parse_from([
+            "callsieve",
+            "context",
+            ".",
+            "change token expiry",
+            "--format",
+            "markdown",
+        ])
+        .unwrap();
         Cli::try_parse_from(["callsieve", "agent-context", ".", "change token expiry"]).unwrap();
         Cli::try_parse_from([
             "callsieve",
@@ -7590,6 +8213,15 @@ mod tests {
             ".",
             "change token expiry",
             "--why-debug",
+        ])
+        .unwrap();
+        Cli::try_parse_from([
+            "callsieve",
+            "agent-context",
+            ".",
+            "change token expiry",
+            "--format",
+            "markdown",
         ])
         .unwrap();
         Cli::try_parse_from(["callsieve", "demo", ".", "--task", "change token expiry"]).unwrap();
@@ -7896,7 +8528,34 @@ mod tests {
         Cli::try_parse_from(["callsieve", "shim", "install", ".", "--strict"]).unwrap();
         Cli::try_parse_from(["callsieve", "shim", "doctor", "."]).unwrap();
         Cli::try_parse_from(["callsieve", "shim", "uninstall", "."]).unwrap();
+        Cli::try_parse_from([
+            "callsieve",
+            "hook",
+            "install",
+            ".",
+            "--client",
+            "generic",
+            "--strict",
+            "--force",
+            "--lsp",
+        ])
+        .unwrap();
+        Cli::try_parse_from(["callsieve", "hook", "doctor", "."]).unwrap();
+        Cli::try_parse_from(["callsieve", "hook", "uninstall", "."]).unwrap();
         Cli::try_parse_from(["callsieve", "grep", ".", "createSession"]).unwrap();
+        Cli::try_parse_from([
+            "callsieve",
+            "shim-run",
+            ".",
+            "--tool",
+            "rg",
+            "--strict",
+            "--",
+            "-n",
+            "createSession",
+            "src",
+        ])
+        .unwrap();
         Cli::try_parse_from(["callsieve", "stats", "."]).unwrap();
     }
 

@@ -16,6 +16,8 @@ Required first command for a coding task:
 callsieve agent-context <repo> "<task>" --limit 8 --snippets-per-file 2
 ```
 
+Use `--format markdown` when the agent should read a compact text packet instead of parsing JSON. JSON remains the default for tooling.
+
 If CallSieve is being run from this Rust source checkout instead of an installed binary, use:
 
 ```bash
@@ -42,6 +44,7 @@ Do not start with `rg`, `grep`, `find`, `Get-Content`, `cat`, `sed`, `nl`, `read
 
 Use the simplest available interface:
 
+- Hook launcher available: start the agent through `.callsieve/agent-launch.ps1` or `.callsieve/agent-launch.sh` so repo-local shims and daemon startup apply only to that process.
 - MCP client available: call `callsieve_context` first.
 - Plain AI CLI available: run `callsieve agent-context`.
 - Working inside the CallSieve repo before install: run `cargo run -- agent-context`.
@@ -84,6 +87,7 @@ Useful follow-up commands:
 callsieve symbol <repo> <symbol_name> --limit 20
 callsieve query <repo> "<question>" --limit 10
 callsieve context <repo> "<task>" --limit 8 --snippets-per-file 2 --why-debug
+callsieve agent-context <repo> "<task>" --limit 8 --snippets-per-file 2 --format markdown
 ```
 
 Use `--why-debug` only when diagnosing ranking behavior. It adds scoring detail and costs more context.
@@ -169,6 +173,8 @@ Safe local repair commands:
 
 ```bash
 callsieve index <repo> --lsp
+callsieve hook install <repo> --client generic --strict --force --lsp
+callsieve hook doctor <repo>
 callsieve doctor <repo> --client generic --fix --strict
 callsieve mcp-config <repo> --format json
 callsieve mcp-config <repo> --format toml

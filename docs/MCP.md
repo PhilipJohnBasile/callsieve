@@ -11,7 +11,7 @@
 
 For human installation and client setup, start with [INSTALL.md](INSTALL.md). For AI CLI behavior and automation rules, see [AGENT_CLI.md](AGENT_CLI.md).
 
-The MCP server is the integration surface for agents. It does not replace the CLI: indexing, watching, daemon refresh, evidence collection, proof reports, and enterprise-proof reports still run through `callsieve` commands.
+The MCP server is one integration surface for agents. It does not replace the CLI: indexing, hook launchers, Markdown or JSON context output, watching, daemon refresh, evidence collection, proof reports, and enterprise-proof reports still run through `callsieve` commands.
 
 Build or install CallSieve first. You can index each repository up front, or let the first `callsieve_context` call rebuild a missing or stale local index:
 
@@ -214,6 +214,17 @@ Use `callsieve_trace_check` on captured trace JSON to detect sessions that ran g
 
 For proof work, pair MCP usage with CLI trace collection. The agent should call `callsieve_context` first, then the operator should record the exact commands, files read, client, model, and token counts in observed-session traces.
 
+## Hook Launchers
+
+If you control how the agent process starts, install repo-local hooks:
+
+```bash
+callsieve hook install /path/to/repo --client generic --strict --force --lsp
+callsieve hook doctor /path/to/repo
+```
+
+The install writes `.callsieve/agent-launch.ps1` and `.callsieve/agent-launch.sh`. Those launchers start the daemon, prepend `.callsieve/bin` only for that launched process, and then run the agent command passed to them. This gives MCP-capable and non-MCP agents the same process-local before-grep guardrails without mutating global PATH or shell profiles.
+
 ## Grep Shims
 
 For opt-in PATH-level interception, install local wrappers:
@@ -223,7 +234,7 @@ callsieve shim install /path/to/repo --force --strict
 callsieve shim doctor /path/to/repo
 ```
 
-Then prepend `/path/to/repo/.callsieve/bin` to the PATH used by the agent shell for that process. The install writes a local `callsieve` launcher plus `rg` and `grep` wrappers. The search wrappers call `callsieve grep` before passing through to the real `rg` or `grep` command captured during install. With `--strict`, shim-mediated grep writes `.callsieve/shim-trace.json` for strict trace audits. Remove wrappers with:
+Then prepend `/path/to/repo/.callsieve/bin` to the PATH used by the agent shell for that process. The install writes a local `callsieve` launcher plus `rg` and `grep` wrappers. The search wrappers call the hidden `callsieve shim-run` helper, return CallSieve context for the extracted search pattern, and then pass the original arguments through to the real `rg` or `grep` command captured during install. With `--strict`, shim-mediated grep writes `.callsieve/shim-trace.json` for strict trace audits. Remove wrappers with:
 
 ```bash
 callsieve shim uninstall /path/to/repo

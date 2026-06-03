@@ -205,6 +205,117 @@ fn index_includes_docs_configs_and_benchmark_files() {
 }
 
 #[test]
+fn index_supports_major_language_wave() {
+    let repo = tempfile::tempdir().unwrap();
+    let root = repo.path();
+    write(
+        root.join("app.php"),
+        "<?php\nuse App\\Auth\\Token as Token;\nclass PhpController {}\nfunction php_login() {}\n",
+    );
+    write(
+        root.join("main.go"),
+        "package main\nimport \"fmt\"\ntype GoServer struct {}\nfunc HandleGo() {}\n",
+    );
+    write(
+        root.join("User.java"),
+        "import com.example.Token;\npublic class JavaService { public void renewSession() {} }\n",
+    );
+    write(
+        root.join("Service.cs"),
+        "using System.Text;\npublic class CSharpService { public void Refresh() {} }\n",
+    );
+    write(root.join("native.h"), "void c_header(void);\n");
+    write(
+        root.join("native.c"),
+        "#include \"native.h\"\nint c_handler() { return 0; }\n",
+    );
+    write(
+        root.join("app.cpp"),
+        "#include \"native.h\"\nclass CppService {};\nint cpp_handler() { return 0; }\n",
+    );
+    write(
+        root.join("app.rb"),
+        "require \"json\"\nclass RubyService\n  def call\n  end\nend\n",
+    );
+    write(
+        root.join("Main.kt"),
+        "import kotlin.collections.List\nclass KotlinService\nfun kotlinLogin() {}\n",
+    );
+    write(
+        root.join("App.swift"),
+        "import Foundation\nstruct SwiftService {}\nfunc swiftLogin() {}\n",
+    );
+    write(
+        root.join("App.scala"),
+        "import scala.collection.mutable\nclass ScalaService\ndef scalaLogin(): Unit = {}\n",
+    );
+    write(
+        root.join("main.dart"),
+        "import 'dart:io';\nclass DartService {}\nvoid dartLogin() {}\n",
+    );
+    write(
+        root.join("mod.lua"),
+        "local json = require(\"json\")\nfunction lua_login() end\n",
+    );
+    write(
+        root.join("deploy.sh"),
+        "source ./env.sh\nfunction shell_login { echo ok; }\n",
+    );
+    let root = root.to_str().unwrap();
+
+    let index = json(&run(&["index", root]));
+    assert_eq!(index["files"], 14);
+    assert!(index["symbols"].as_u64().unwrap() >= 20);
+    assert!(index["imports"].as_u64().unwrap() >= 10);
+
+    let stats = json(&run(&["stats", root]));
+    for language in [
+        "php", "go", "java", "csharp", "c", "cpp", "ruby", "kotlin", "swift", "scala", "dart",
+        "lua", "shell",
+    ] {
+        assert!(
+            stats["languages"][language].as_u64().unwrap_or_default() > 0,
+            "missing language count for {language}: {}",
+            serde_json::to_string_pretty(&stats["languages"]).unwrap()
+        );
+    }
+
+    let symbols = json(&run(&["symbols", root, "--limit", "100"]));
+    let names: Vec<&str> = symbols["symbols"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|symbol| symbol["name"].as_str())
+        .collect();
+    for name in [
+        "PhpController",
+        "HandleGo",
+        "JavaService",
+        "CSharpService",
+        "c_handler",
+        "CppService",
+        "RubyService",
+        "KotlinService",
+        "SwiftService",
+        "ScalaService",
+        "DartService",
+        "lua_login",
+        "shell_login",
+    ] {
+        assert!(names.contains(&name), "missing symbol {name}");
+    }
+
+    let context = json(&run(&[
+        "agent-context",
+        root,
+        "change php_login behavior",
+        "--limit",
+        "5",
+    ]));
+    assert_eq!(context["context"]["read_first"][0]["file"], "app.php");
+}
+
+#[test]
 fn symbols_and_symbol_commands_return_indexed_symbols() {
     let repo = fixture_repo();
     let root = repo.path().to_str().unwrap();
@@ -436,6 +547,38 @@ fn agent_context_wraps_context_with_before_grep_guidance() {
         output["context"]["read_first"][0]["file"],
         "src/auth/session.ts"
     );
+}
+
+#[test]
+fn context_and_agent_context_support_markdown_output() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+    json(&run(&["index", root]));
+
+    let context = run(&[
+        "context",
+        root,
+        "change createSession token behavior",
+        "--format",
+        "markdown",
+    ]);
+    assert!(context.status.success());
+    let context_stdout = String::from_utf8_lossy(&context.stdout);
+    assert!(context_stdout.contains("# CallSieve Context"));
+    assert!(context_stdout.contains("Grep policy: grep_only_if_context_is_insufficient"));
+    assert!(context_stdout.contains("src/auth/session.ts"));
+
+    let agent = run(&[
+        "agent-context",
+        root,
+        "change createSession token behavior",
+        "--format",
+        "markdown",
+    ]);
+    assert!(agent.status.success());
+    let agent_stdout = String::from_utf8_lossy(&agent.stdout);
+    assert!(agent_stdout.contains("# CallSieve Context"));
+    assert!(agent_stdout.contains("function `createSession`"));
 }
 
 #[test]
@@ -3246,6 +3389,53 @@ fn shim_install_doctor_and_uninstall_manage_local_wrappers() {
 }
 
 #[test]
+fn hook_install_doctor_and_uninstall_manage_repo_local_launchers() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+
+    let install = json(&run(&[
+        "hook", "install", root, "--client", "generic", "--strict", "--force",
+    ]));
+    assert_eq!(install["command"], "hook install");
+    assert_eq!(install["status"], "pass");
+    assert!(repo.path().join(".callsieve/agent-launch.ps1").is_file());
+    assert!(repo.path().join(".callsieve/agent-launch.sh").is_file());
+    assert!(repo.path().join(".callsieve/bin").is_dir());
+    assert!(repo.path().join(".callsieve/mcp.json").is_file());
+    assert!(
+        install["path_instruction"]
+            .as_str()
+            .unwrap()
+            .contains(".callsieve")
+    );
+
+    let doctor = json(&run(&["hook", "doctor", root]));
+    assert_eq!(doctor["command"], "hook doctor");
+    assert_eq!(doctor["status"], "pass");
+    assert_eq!(doctor["shim"]["status"], "pass");
+    assert!(
+        doctor["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|check| check["check"] == "hook_launchers" && check["status"] == "pass")
+    );
+    assert!(doctor["checks"].as_array().unwrap().iter().any(|check| {
+        check["check"] == "path_contains_shim_dir"
+            && check["status"] == "pass"
+            && check["message"]
+                .as_str()
+                .unwrap()
+                .contains("hook launchers prepend")
+    }));
+
+    let uninstall = json(&run(&["hook", "uninstall", root]));
+    assert_eq!(uninstall["command"], "hook uninstall");
+    assert!(!repo.path().join(".callsieve/agent-launch.ps1").is_file());
+    assert!(!repo.path().join(".callsieve/agent-launch.sh").is_file());
+}
+
+#[test]
 fn strict_shim_trace_records_grep_before_context_violation() {
     let repo = fixture_repo();
     let root = repo.path().to_str().unwrap();
@@ -3258,11 +3448,7 @@ fn strict_shim_trace_records_grep_before_context_violation() {
     } else {
         repo.path().join(".callsieve/bin/rg")
     };
-    assert!(
-        fs::read_to_string(shim_file)
-            .unwrap()
-            .contains("--shim-strict")
-    );
+    assert!(fs::read_to_string(shim_file).unwrap().contains("shim-run"));
 
     let output = json(&run(&[
         "grep",
@@ -3286,6 +3472,36 @@ fn strict_shim_trace_records_grep_before_context_violation() {
         check["violation_details"][0]["event_kind"],
         "grep_before_context"
     );
+}
+
+#[test]
+fn shim_run_extracts_pattern_and_returns_context_before_passthrough() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+    json(&run(&["index", root]));
+    json(&run(&["shim", "install", root, "--strict"]));
+
+    let output = json(&run(&[
+        "shim-run",
+        root,
+        "--tool",
+        "rg",
+        "--strict",
+        "--",
+        "-n",
+        "createSession",
+        "src",
+    ]));
+
+    assert_eq!(output["command"], "shim-run");
+    assert_eq!(output["tool"], "rg");
+    assert_eq!(output["pattern"], "createSession");
+    assert_eq!(
+        output["context"]["read_first"][0]["file"],
+        "src/auth/session.ts"
+    );
+    assert_eq!(output["shim_event"]["policy_violation"], true);
+    assert!(repo.path().join(".callsieve/shim-trace.json").is_file());
 }
 
 #[test]
