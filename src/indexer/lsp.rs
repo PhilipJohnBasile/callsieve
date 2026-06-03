@@ -17,7 +17,8 @@ use crate::store::{FileRecord, LspServerStatus, ReferenceRecord, SymbolRecord};
 use super::{language::Language, path_to_string};
 
 const REQUEST_TIMEOUT: Duration = Duration::from_millis(10_000);
-const MAX_LSP_SYMBOLS_PER_LANGUAGE: usize = 512;
+const MAX_LSP_SYMBOLS_PER_LANGUAGE: usize = 96;
+const LSP_LANGUAGE_ENRICHMENT_TIMEOUT: Duration = Duration::from_millis(30_000);
 const RUST_READY_RETRY_INTERVAL: Duration = Duration::from_millis(750);
 const RUST_READY_TIMEOUT: Duration = Duration::from_millis(20_000);
 const RUST_SEMANTIC_READY_TIMEOUT: Duration = Duration::from_millis(25_000);
@@ -98,6 +99,7 @@ fn enrich_language_references(
         return Ok(Vec::new());
     }
 
+    let deadline = Instant::now() + LSP_LANGUAGE_ENRICHMENT_TIMEOUT;
     let mut client = LspClient::spawn(spec)?;
     let root_uri = path_to_file_uri(root);
     client.request(
@@ -165,7 +167,16 @@ fn enrich_language_references(
             }),
         )?;
     }
-    thread::sleep(Duration::from_millis(spec.startup_settle_ms));
+    let settle_duration = Duration::from_millis(spec.startup_settle_ms);
+    thread::sleep(settle_duration.min(deadline.saturating_duration_since(Instant::now())));
+    if Instant::now() >= deadline {
+        tracing::debug!(
+            "skipped LSP enrichment for {} after startup exceeded budget",
+            spec.language_name
+        );
+        client.shutdown();
+        return Ok(Vec::new());
+    }
 
     let content_by_file_id: BTreeMap<&str, (&str, &str)> = language_files
         .iter()
@@ -184,15 +195,29 @@ fn enrich_language_references(
                 .map(|file| (symbol.id.as_str(), file.path.as_str()))
         })
         .collect();
-    let lsp_symbol_queries =
-        lsp_symbol_queries(spec, root, &mut client, &language_files, files, symbols)?;
-    wait_for_semantic_locations(spec, root, &mut client, &lsp_symbol_queries)?;
+    let lsp_symbol_queries = lsp_symbol_queries(
+        spec,
+        root,
+        &mut client,
+        &language_files,
+        files,
+        symbols,
+        deadline,
+    )?;
+    wait_for_semantic_locations(spec, root, &mut client, &lsp_symbol_queries, deadline)?;
 
     let mut references = Vec::new();
     let mut queried_symbols = 0usize;
     let mut returned_locations = 0usize;
     let mut accepted_locations = 0usize;
     for query in lsp_symbol_queries.iter().take(MAX_LSP_SYMBOLS_PER_LANGUAGE) {
+        if Instant::now() >= deadline {
+            tracing::debug!(
+                "stopped LSP reference queries for {} after hitting enrichment budget",
+                spec.language_name
+            );
+            break;
+        }
         queried_symbols += 1;
         let result = match client
             .request_with_retries("textDocument/references", lsp_reference_params(root, query))
@@ -305,12 +330,16 @@ fn lsp_symbol_queries(
     language_files: &[&(String, String, Language, String)],
     files: &[FileRecord],
     symbols: &[SymbolRecord],
+    deadline: Instant,
 ) -> Result<Vec<LspSymbolQuery>> {
     let files_by_path: BTreeMap<&str, &FileRecord> = files
         .iter()
         .map(|file| (file.path.as_str(), file))
         .collect();
-    let deadline = Instant::now() + document_symbol_ready_timeout(spec);
+    let document_symbol_deadline = capped_deadline(
+        Instant::now() + document_symbol_ready_timeout(spec),
+        deadline,
+    );
 
     loop {
         let mut queries = Vec::new();
@@ -318,6 +347,9 @@ fn lsp_symbol_queries(
         let mut document_symbols = 0usize;
 
         for (_, path, _, _) in language_files {
+            if Instant::now() >= deadline {
+                break;
+            }
             let result = client.request_with_retries(
                 "textDocument/documentSymbol",
                 json!({
@@ -343,7 +375,7 @@ fn lsp_symbol_queries(
             }
         }
 
-        if !queries.is_empty() || Instant::now() >= deadline {
+        if !queries.is_empty() || Instant::now() >= document_symbol_deadline {
             if queries.is_empty() {
                 queries = fallback_symbol_queries(spec, language_files, files, symbols);
             }
@@ -504,6 +536,7 @@ fn wait_for_semantic_locations(
     root: &Path,
     client: &mut LspClient,
     queries: &[LspSymbolQuery],
+    deadline: Instant,
 ) -> Result<()> {
     if spec.language != Language::Rust || queries.is_empty() {
         return Ok(());
@@ -515,12 +548,15 @@ fn wait_for_semantic_locations(
         return Ok(());
     }
 
-    let deadline = Instant::now() + RUST_SEMANTIC_READY_TIMEOUT;
+    let semantic_deadline = capped_deadline(Instant::now() + RUST_SEMANTIC_READY_TIMEOUT, deadline);
     loop {
         let mut ready_queries = 0usize;
         let mut returned_locations = 0usize;
 
         for query in queries.iter().take(probe_count) {
+            if Instant::now() >= semantic_deadline {
+                return Ok(());
+            }
             let result = client.request_with_retries(
                 "textDocument/references",
                 lsp_reference_params(root, query),
@@ -539,7 +575,7 @@ fn wait_for_semantic_locations(
             return Ok(());
         }
 
-        if Instant::now() >= deadline {
+        if Instant::now() >= semantic_deadline {
             tracing::debug!(
                 "rust-analyzer semantic probe timed out: {ready_queries}/{probe_count} symbols, {returned_locations} locations"
             );
@@ -1046,6 +1082,10 @@ fn document_symbol_ready_timeout(spec: ServerSpec) -> Duration {
     } else {
         Duration::ZERO
     }
+}
+
+fn capped_deadline(left: Instant, right: Instant) -> Instant {
+    if left <= right { left } else { right }
 }
 
 fn did_change_configuration_settings(spec: ServerSpec) -> Value {
