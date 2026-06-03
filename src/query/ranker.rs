@@ -26,6 +26,7 @@ pub struct ScoreComponent {
 pub fn rank(index: &CodeIndex, question: &str, limit: usize) -> Vec<RankedMatch> {
     let query = question.to_ascii_lowercase();
     let query_tokens = expand_query_tokens(formatter::tokenize(question));
+    let weights = TokenWeights::new(index, &query_tokens);
     let files_by_id: BTreeMap<&str, &FileRecord> = index
         .files
         .iter()
@@ -38,13 +39,13 @@ pub fn rank(index: &CodeIndex, question: &str, limit: usize) -> Vec<RankedMatch>
         let Some(file) = files_by_id.get(symbol.file_id.as_str()) else {
             continue;
         };
-        if let Some(match_) = score_symbol(symbol, file, &query, &query_tokens) {
+        if let Some(match_) = score_symbol(symbol, file, &query, &query_tokens, &weights) {
             matches.push(match_);
         }
     }
 
     for file in &index.files {
-        if let Some(match_) = score_file(file, &query, &query_tokens) {
+        if let Some(match_) = score_file(file, &query, &query_tokens, &weights) {
             matches.push(match_);
         }
     }
@@ -60,11 +61,112 @@ pub fn rank(index: &CodeIndex, question: &str, limit: usize) -> Vec<RankedMatch>
     matches
 }
 
+/// Per-token rarity weights computed across the indexed corpus so that a token
+/// appearing in nearly every file (for example `index` in this repo) stops
+/// dominating keyword-overlap scoring, while a rare discriminating token keeps
+/// its full weight.
+struct TokenWeights {
+    weights: BTreeMap<String, f32>,
+}
+
+impl TokenWeights {
+    fn new(index: &CodeIndex, query_tokens: &[String]) -> Self {
+        let document_count = index.files.len();
+        let query_set: BTreeSet<&str> = query_tokens.iter().map(String::as_str).collect();
+        let mut document_frequency: BTreeMap<&str, usize> =
+            query_set.iter().map(|token| (*token, 0usize)).collect();
+
+        let mut symbols_by_file: BTreeMap<&str, Vec<&SymbolRecord>> = BTreeMap::new();
+        for symbol in &index.symbols {
+            symbols_by_file
+                .entry(symbol.file_id.as_str())
+                .or_default()
+                .push(symbol);
+        }
+
+        for file in &index.files {
+            let mut terms: BTreeSet<String> = path_tokens(&file.path).into_iter().collect();
+            terms.extend(file.content_terms.iter().cloned());
+            if let Some(symbols) = symbols_by_file.get(file.id.as_str()) {
+                for symbol in symbols {
+                    terms.extend(formatter::tokenize(&symbol.name));
+                    terms.extend(formatter::tokenize(&symbol.signature));
+                }
+            }
+            for token in &query_set {
+                if terms.contains(*token)
+                    && let Some(count) = document_frequency.get_mut(token)
+                {
+                    *count += 1;
+                }
+            }
+        }
+
+        let weights = query_set
+            .iter()
+            .map(|token| {
+                let frequency = document_frequency.get(token).copied().unwrap_or(0);
+                ((*token).to_string(), idf_weight(frequency, document_count))
+            })
+            .collect();
+
+        Self { weights }
+    }
+
+    fn weight(&self, token: &str) -> f32 {
+        self.weights.get(token).copied().unwrap_or(1.0)
+    }
+
+    /// Weighted point total for a keyword-overlap component: each matched token
+    /// contributes `base * rarity_weight` points instead of a flat `base`.
+    fn overlap_points(&self, base: i32, tokens: &[String]) -> i32 {
+        let weighted: f32 = tokens.iter().map(|token| self.weight(token)).sum();
+        ((base as f32 * weighted).round() as i32).max(1)
+    }
+}
+
+/// Maps document frequency to a [0.2, 1.0] multiplier. A token in zero or few
+/// documents keeps full weight; a token in most documents is floored at 0.2 so
+/// it still counts a little but cannot drown out rare, specific terms.
+fn idf_weight(document_frequency: usize, document_count: usize) -> f32 {
+    if document_count == 0 {
+        return 1.0;
+    }
+    let numerator = document_count as f32 + 1.0;
+    let idf = (numerator / (document_frequency as f32 + 1.0)).ln();
+    let idf_max = numerator.ln();
+    if idf_max <= 0.0 {
+        return 1.0;
+    }
+    (idf / idf_max).clamp(0.2, 1.0)
+}
+
+/// Query tokens (with variant expansion) for callers outside the ranker, used to
+/// order a file's snippets by relevance to the query.
+pub fn query_tokens(question: &str) -> Vec<String> {
+    expand_query_tokens(formatter::tokenize(question))
+}
+
+/// How closely a symbol's name and signature match the query, used to pick which
+/// region of a large multi-purpose file to snippet first.
+pub fn symbol_query_affinity(symbol: &SymbolRecord, query_tokens: &[String]) -> i32 {
+    let name_lower = symbol.name.to_ascii_lowercase();
+    let mut terms: BTreeSet<String> = formatter::tokenize(&symbol.name).into_iter().collect();
+    terms.extend(formatter::tokenize(&symbol.signature));
+    let overlap = query_tokens
+        .iter()
+        .filter(|token| terms.contains(token.as_str()))
+        .count() as i32;
+    let exact_name = query_tokens.iter().any(|token| token == &name_lower) as i32;
+    overlap + exact_name * 3
+}
+
 fn score_symbol(
     symbol: &SymbolRecord,
     file: &FileRecord,
     query: &str,
     query_tokens: &[String],
+    weights: &TokenWeights,
 ) -> Option<RankedMatch> {
     let mut score = 0;
     let mut why = Vec::new();
@@ -96,7 +198,15 @@ fn score_symbol(
         .cloned()
         .collect();
     if name_overlap.len() >= 2 {
-        let points = if name_overlap.len() >= 3 { 420 } else { 320 };
+        let base = if name_overlap.len() >= 3 { 420 } else { 320 };
+        // Test function names are long sentences that accidentally cluster many
+        // query tokens; don't let them outrank real API symbols unless the query
+        // is actually about tests.
+        let points = if file.is_test && !has_test_intent(query_tokens) {
+            (base as f32 * 0.4).round() as i32
+        } else {
+            base
+        };
         add_score_component(
             &mut score,
             &mut why,
@@ -154,7 +264,7 @@ fn score_symbol(
             &mut why,
             &mut score_debug,
             "keyword_overlap",
-            14 * overlap.len() as i32,
+            weights.overlap_points(14, &overlap),
             format!("keyword overlap: {}", overlap.join(", ")),
         );
     }
@@ -216,7 +326,12 @@ fn score_symbol(
     })
 }
 
-fn score_file(file: &FileRecord, query: &str, query_tokens: &[String]) -> Option<RankedMatch> {
+fn score_file(
+    file: &FileRecord,
+    query: &str,
+    query_tokens: &[String],
+    weights: &TokenWeights,
+) -> Option<RankedMatch> {
     let mut score = 0;
     let mut why = Vec::new();
     let mut score_debug = Vec::new();
@@ -251,7 +366,7 @@ fn score_file(file: &FileRecord, query: &str, query_tokens: &[String]) -> Option
             &mut why,
             &mut score_debug,
             "path_keyword_overlap",
-            16 * overlap.len() as i32,
+            weights.overlap_points(16, &overlap),
             format!("path keyword overlap: {}", overlap.join(", ")),
         );
     }
@@ -298,7 +413,7 @@ fn score_file(file: &FileRecord, query: &str, query_tokens: &[String]) -> Option
             &mut why,
             &mut score_debug,
             "content_keyword_overlap",
-            weight * content_overlap.len() as i32,
+            weights.overlap_points(weight, &content_overlap),
             format!("content keyword overlap: {}", content_overlap.join(", ")),
         );
     }
@@ -622,6 +737,15 @@ fn push_token_variant(expanded: &mut BTreeSet<String>, token: &str) {
         }
         _ => {}
     }
+
+    // Generic morphology: nominalized adjectives like `freshness`/`staleness`
+    // should also match their `fresh`/`stale` stems, which appear in symbol and
+    // field names.
+    if let Some(stem) = token.strip_suffix("ness")
+        && stem.len() >= 3
+    {
+        expanded.insert(stem.to_string());
+    }
 }
 
 fn basename_cluster_score(file: &FileRecord, query_tokens: &[String]) -> Option<i32> {
@@ -789,6 +913,106 @@ mod tests {
             ranked
                 .iter()
                 .any(|match_| match_.symbol_id.as_deref() == Some("build_context"))
+        );
+    }
+
+    fn build(files: Vec<FileRecord>, symbols: Vec<SymbolRecord>) -> CodeIndex {
+        CodeIndex {
+            schema_version: 1,
+            root: ".".to_string(),
+            metadata: IndexMetadata::default(),
+            files,
+            symbols,
+            imports: Vec::new(),
+            references: Vec::new(),
+            warnings: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn nominalized_query_terms_match_their_stem() {
+        let index = build(
+            vec![file("mcp", "src/mcp.rs")],
+            vec![symbol("is_fresh", "mcp", "status_is_fresh")],
+        );
+
+        // `freshness` must reach the `fresh` stem to match `status_is_fresh`.
+        let ranked = rank(&index, "where is freshness computed", 10);
+
+        assert!(
+            ranked
+                .iter()
+                .any(|match_| match_.symbol_id.as_deref() == Some("is_fresh")),
+            "freshness should stem to fresh and match status_is_fresh"
+        );
+    }
+
+    #[test]
+    fn rare_token_outranks_ubiquitous_token() {
+        let files = vec![
+            file("a", "src/a.rs"),
+            file("b", "src/b.rs"),
+            file("c", "src/c.rs"),
+            file("d", "src/d.rs"),
+            file("e", "src/e.rs"),
+        ];
+        let symbols = vec![
+            symbol("ia", "a", "index_alpha"),
+            symbol("ib", "b", "index_beta"),
+            symbol("ic", "c", "index_gamma"),
+            symbol("id", "d", "index_delta"),
+            symbol("stale", "e", "stale_files"),
+        ];
+        let index = build(files, symbols);
+
+        let ranked = rank(&index, "index stale", 10);
+        let position = |file_id: &str| ranked.iter().position(|match_| match_.file_id == file_id);
+
+        let stale_pos = position("e").expect("stale file should rank");
+        let common_pos = position("a").expect("index file should rank");
+        assert!(
+            stale_pos < common_pos,
+            "rare token `stale` (1/5 files) should outrank ubiquitous `index` (4/5 files)"
+        );
+    }
+
+    #[test]
+    fn off_topic_test_files_are_demoted_unless_query_is_about_tests() {
+        let mut test_record = file("cli_test", "tests/cli.rs");
+        test_record.is_test = true;
+        let impl_record = file("query_mod", "src/query/mod.rs");
+
+        let index = build(
+            vec![impl_record, test_record],
+            vec![
+                symbol("index_status", "query_mod", "index_status"),
+                symbol(
+                    "status_test",
+                    "cli_test",
+                    "status_and_watch_report_fresh_index_state",
+                ),
+            ],
+        );
+
+        let positions = |question: &str| {
+            let ranked = rank(&index, question, 10);
+            let impl_pos = ranked.iter().position(|m| m.file_id == "query_mod");
+            let test_pos = ranked.iter().position(|m| m.file_id == "cli_test");
+            (impl_pos.unwrap(), test_pos.unwrap())
+        };
+
+        // No test intent: the API symbol should outrank the test sentence-name.
+        let (impl_pos, test_pos) = positions("index status fresh");
+        assert!(
+            impl_pos < test_pos,
+            "off-topic test file should not outrank the API symbol"
+        );
+
+        // Test intent present: the test file is allowed back to the top.
+        let (impl_pos, test_pos) = positions("index status fresh tests");
+        assert!(
+            test_pos < impl_pos,
+            "with test intent the test file should be allowed to rank first"
         );
     }
 }

@@ -67,6 +67,13 @@
       "task": "refactor query context helper lookups to use index lookup caches",
       "expected_files": ["src/query/mod.rs"],
       "critical_files": ["src/query/mod.rs"]
+    },
+    {
+      "id": "index-freshness-staleness",
+      "category": "code_edit",
+      "task": "where is index freshness and staleness computed",
+      "expected_files": ["src/query/mod.rs", "src/mcp.rs"],
+      "critical_files": ["src/query/mod.rs"]
     }
   ]
 }

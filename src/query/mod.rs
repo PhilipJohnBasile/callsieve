@@ -1662,6 +1662,7 @@ pub fn build_context_with_options(
             .then(left.file_id.cmp(&right.file_id))
     });
 
+    let snippet_query_tokens = ranker::query_tokens(task);
     let mut selected_symbols = 0;
     let mut selected_related_tests = 0;
     let mut snippet_elapsed = Duration::ZERO;
@@ -1671,11 +1672,19 @@ pub fn build_context_with_options(
         .enumerate()
         .filter_map(|(rank_index, candidate)| {
             let file = lookup.file_by_id(&candidate.file_id)?;
-            let symbol_records: Vec<&SymbolRecord> = candidate
+            let mut symbol_records: Vec<&SymbolRecord> = candidate
                 .symbol_ids
                 .iter()
                 .filter_map(|symbol_id| lookup.symbol_by_id(symbol_id))
                 .collect();
+            // Snippet the region most relevant to the query first, so a large
+            // multi-purpose file points at the matching symbol instead of the
+            // first symbol by accumulation order.
+            symbol_records.sort_by(|left, right| {
+                ranker::symbol_query_affinity(right, &snippet_query_tokens)
+                    .cmp(&ranker::symbol_query_affinity(left, &snippet_query_tokens))
+                    .then(left.start_line.cmp(&right.start_line))
+            });
 
             let symbols: Vec<QuerySymbol> = symbol_records
                 .iter()
