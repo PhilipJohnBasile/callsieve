@@ -1,5 +1,0 @@
-[mcp_servers.callsieve]
-command = "C:\\Users\\Phili\\Git\\callsieve\\target\\debug\\callsieve.exe"
-args = ["mcp"]
-startup_timeout_sec = 20
-tool_timeout_sec = 60

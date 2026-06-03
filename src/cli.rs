@@ -19,7 +19,7 @@ use std::os::windows::process::CommandExt;
 use crate::{indexer, output, query, store};
 
 const REHEARSAL_RETRIEVAL_FIXTURES: &str = "benchmarks/retrieval-fixtures.json";
-const REHEARSAL_EXTERNAL_MANIFEST: &str = "benchmarks/external-github-manifest.local.json";
+const REHEARSAL_EXTERNAL_MANIFEST: &str = "benchmarks/external-github-manifest.example.json";
 const OBSERVED_CODEX_OSS_50_MANIFEST: &str = "benchmarks/evidence/observed-codex-oss-50.local.json";
 const REHEARSAL_REPORT_LIMIT: usize = 24;
 const REHEARSAL_SNIPPETS_PER_FILE: usize = 2;

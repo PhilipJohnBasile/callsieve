@@ -20,5 +20,5 @@
     "token_reduction_percent": 81.77740690518411,
     "token_savings": 7840
   },
-  "trace": "benchmarks/observed-codex-proof-sprint-pass-trace.json"
+  "trace": "benchmarks/proof-sprint-session-trace.example.json"
 }

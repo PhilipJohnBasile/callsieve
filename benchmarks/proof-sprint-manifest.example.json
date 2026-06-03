@@ -17,7 +17,7 @@
       "path": ".",
       "languages": ["rust"],
       "suite_path": "benchmarks/callsieve-real-repo.json",
-      "trace_path": "benchmarks/observed-codex-proof-sprint-pass-trace.json"
+      "trace_path": "benchmarks/proof-sprint-session-trace.example.json"
     }
   ]
 }

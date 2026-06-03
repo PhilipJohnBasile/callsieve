@@ -10,11 +10,19 @@ Stop paying AI agents to grep your repo.
 
 CallSieve is not another coding agent. It is the context and retrieval layer underneath coding agents.
 
+## Open Source And Commercial Model
+
+CallSieve's core local engine is open source under the [MIT License](LICENSE).
+
+The public repo includes the local CLI, MCP server, repository indexer, deterministic retrieval, agent-context workflow, benchmark harness, proof reports, docs, and tests. The commercial motion is not selling access to the code. It is selling outcomes around it: paid pilots, local installation, agent integration, evidence collection, retrieval tuning, private workflow support, and enterprise proof reporting.
+
+Keep broad claims gated. Use `context_payload_reduction` for estimated prompt-payload savings, and use observed token reduction only when real paired transcripts provide audited token counts.
+
 ## Current State
 
-CallSieve is now a local Rust CLI with a JSON index, deterministic retrieval, optional LSP reference enrichment, MCP tools, context-first guardrails, daemon/watch freshness support, agent adoption automation, benchmark reports, observed-session traces, and gated proof reports. The product is still local-first and CLI-first, but it has moved beyond the original bootstrap into an agent-context and evidence collection layer.
+CallSieve is now an open-source local Rust CLI with a JSON index, deterministic retrieval, optional LSP reference enrichment, MCP tools, context-first guardrails, daemon/watch freshness support, agent adoption automation, benchmark reports, observed-session traces, and gated proof reports. The product is still local-first and CLI-first, but it has moved beyond the original bootstrap into an agent-context and evidence collection layer.
 
-For human installation and client setup, see [docs/INSTALL.md](docs/INSTALL.md). For AI CLI and wrapper behavior, see [docs/AGENT_CLI.md](docs/AGENT_CLI.md). For dogfooding and less-grep measurement, see [docs/DOGFOOD.md](docs/DOGFOOD.md).
+For human installation and client setup, see [docs/INSTALL.md](docs/INSTALL.md). For AI CLI and wrapper behavior, see [docs/AGENT_CLI.md](docs/AGENT_CLI.md). For dogfooding and less-grep measurement, see [docs/DOGFOOD.md](docs/DOGFOOD.md). For paid pilot packaging, see [docs/PILOTS.md](docs/PILOTS.md).
 
 The core workflow is:
 
@@ -522,7 +530,7 @@ cargo run -- codex-bootstrap . --model gpt-5-codex --force
 
 It writes `.codex/config.toml`, `.codex/CALLSIEVE.md`, `.callsieve/bin` launchers/shims, and `.callsieve/codex-launch.ps1` / `.callsieve/codex-launch.sh`. The MCP config points at the resolved CallSieve executable instead of relying on a global PATH entry. The launchers start `callsieve daemon --background --lsp`, prepend `.callsieve/bin` only for that launched process, and print the first required `callsieve agent-context` command.
 
-This repo includes `benchmarks/codex-chatgpt-manifest.local.json` as the local Codex pilot manifest.
+This repo includes `benchmarks/codex-chatgpt-manifest.example.json` as the Codex pilot manifest fixture. Copy it to an ignored `.local.json` path before recording local runs.
 
 For hard opt-in grep interception, install local wrappers and prepend `.callsieve/bin` to the agent shell PATH:
 
@@ -597,6 +605,11 @@ See [docs/INSTALL.md](docs/INSTALL.md) for human install and client setup, [docs
 - no API keys
 - no proprietary code leaves the machine
 - no SaaS app, auth system, web dashboard, or vector DB in the current local-first product
+- MIT-licensed local core, with paid pilots and support kept separate from code access
+
+## License
+
+CallSieve is licensed under the [MIT License](LICENSE).
 
 ## Retrieval Model
 
@@ -646,5 +659,5 @@ cargo test
 For verification while investigating a lock, use a separate target directory:
 
 ```bash
-cargo test --target-dir C:\tmp\callsieve-target-test
+cargo test --target-dir <temp-dir>\callsieve-target-test
 ```

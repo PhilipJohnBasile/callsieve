@@ -55,7 +55,7 @@
   "repos": [
     {
       "label": "oss-vscode-scale-proxy",
-      "path": "C:/repos/vscode",
+      "path": "/path/to/scale-proxy-repo",
       "external": true,
       "proof_tier": "oss_scale_proxy",
       "scale_class": "microsoft_scale_oss_proxy",
@@ -68,9 +68,9 @@
       "policy_trace_paths": ["benchmarks/evidence/enterprise/traces/vscode-observed.json"]
     },
     {
-      "label": "pilot-team-alpha",
-      "team": "Example Team Alpha",
-      "path": "C:/repos/private-alpha",
+      "label": "pilot-example-org",
+      "team": "Example Organization",
+      "path": "/path/to/pilot-repo",
       "external": false,
       "proof_tier": "paid_pilot",
       "scale_class": "private_enterprise",
@@ -78,9 +78,9 @@
       "languages": ["typescript", "python", "rust"],
       "clients": ["codex", "claude"],
       "task_categories": ["bug_fix", "test_failure", "dependency_change"],
-      "suite_paths": ["benchmarks/evidence/enterprise/suites/pilot-team-alpha.json"],
-      "trace_paths": ["benchmarks/evidence/enterprise/traces/pilot-team-alpha-observed.json"],
-      "policy_trace_paths": ["benchmarks/evidence/enterprise/traces/pilot-team-alpha-observed.json"]
+      "suite_paths": ["benchmarks/evidence/enterprise/suites/pilot-example-org.json"],
+      "trace_paths": ["benchmarks/evidence/enterprise/traces/pilot-example-org-observed.json"],
+      "policy_trace_paths": ["benchmarks/evidence/enterprise/traces/pilot-example-org-observed.json"]
     }
   ]
 }

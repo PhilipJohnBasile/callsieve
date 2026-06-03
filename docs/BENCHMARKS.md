@@ -21,7 +21,7 @@ cargo run -- session-finish .callsieve/observed-session.json --out .callsieve/ob
 cargo run -- trace-check benchmarks/session-trace.example.json --strict
 cargo run -- benchmark-doctor benchmarks/report-manifest.example.json
 cargo run -- benchmark-report benchmarks/report-manifest.example.json
-cargo run -- benchmark-report benchmarks/external-github-manifest.local.json --limit 24
+cargo run -- benchmark-report benchmarks/external-github-manifest.example.json --limit 24
 cargo run -- proof-rehearsal --fix --resume
 cargo run -- pilot-doctor benchmarks/pilot-manifest.example.json
 cargo run -- pilot-report benchmarks/pilot-manifest.example.json
@@ -168,8 +168,8 @@ cargo run -- enforce . --client codex --trace benchmarks/codex-session.local.jso
 Current local Codex/ChatGPT replay pilot:
 
 ```bash
-cargo run -- pilot-doctor benchmarks/codex-chatgpt-manifest.local.json
-cargo run -- pilot-report benchmarks/codex-chatgpt-manifest.local.json --limit 14
+cargo run -- pilot-doctor benchmarks/codex-chatgpt-manifest.example.json
+cargo run -- pilot-report benchmarks/codex-chatgpt-manifest.example.json --limit 14
 ```
 
 - model label: `gpt-5-codex`
@@ -227,9 +227,9 @@ Current fixture repos:
 Run the local external manifest after the fixture repos have been cloned and indexed:
 
 ```bash
-cargo run -- benchmark-doctor benchmarks/external-github-manifest.local.json
-cargo run -- benchmark-report benchmarks/external-github-manifest.local.json
-cargo run -- benchmark-report benchmarks/external-github-manifest.local.json --limit 24
+cargo run -- benchmark-doctor benchmarks/external-github-manifest.example.json
+cargo run -- benchmark-report benchmarks/external-github-manifest.example.json
+cargo run -- benchmark-report benchmarks/external-github-manifest.example.json --limit 24
 cargo run -- trace-replay benchmarks/github-ripgrep benchmarks/external-ripgrep-suite.json benchmarks/external-ripgrep-trace.json --limit 20
 cargo run -- proof-rehearsal --preflight
 cargo run -- proof-rehearsal --fix --resume
@@ -276,10 +276,10 @@ cargo run -- enterprise-proof-report benchmarks/evidence/enterprise-proof-manife
 Current proof-sprint artifact:
 
 ```bash
-cargo run -- proof-report benchmarks/proof-sprint-manifest.local.json --limit 8 --no-snippets
+cargo run -- proof-report benchmarks/proof-sprint-manifest.example.json --limit 8 --no-snippets
 ```
 
-Latest local proof sprint: `pass`, `1` observed Codex session, `0` controlled replay sessions, `9587` baseline tokens, `1747` CallSieve tokens, `7840` tokens saved, `81.8%` observed token reduction, `0` missed expected files, `0` strict trace-policy violations, fresh LSP index, daemon freshness, and Codex bootstrap present.
+Sample proof sprint fixture: `pass`, `1` observed Codex session, `0` controlled replay sessions, `9587` baseline tokens, `1747` CallSieve tokens, `7840` tokens saved, `81.8%` observed token reduction, `0` missed expected files, `0` strict trace-policy violations, fresh LSP index, daemon freshness, and Codex bootstrap present.
 
 ## Observed Pilot Harness
 

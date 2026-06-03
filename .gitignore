@@ -5,6 +5,8 @@
 # CallSieve local indexes, daemon state, task memory, traces, and shims
 /.callsieve/
 **/.callsieve/
+/.codex/config.toml
+/.mcp.json
 
 # Local benchmark fixture clones
 /benchmarks/github-*/

@@ -201,8 +201,8 @@ A passing rehearsal should include:
 For external benchmark evidence:
 
 ```bash
-callsieve benchmark-doctor benchmarks/external-github-manifest.local.json
-callsieve benchmark-report benchmarks/external-github-manifest.local.json --limit 24
+callsieve benchmark-doctor benchmarks/external-github-manifest.example.json
+callsieve benchmark-report benchmarks/external-github-manifest.example.json --limit 24
 ```
 
 Expected current external fixture gate:

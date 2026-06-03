@@ -84,6 +84,20 @@ The current app includes:
 - first-class adoption automation with `bootstrap`, `doctor`, `begin`, agent setup, Codex bootstrap, editor hooks, and opt-in grep shims
 - benchmark, retrieval-eval, perf-report, observed trace, pilot, evidence-pack, proof-report, and enterprise-proof-report workflows
 
+## Distribution Model
+
+CallSieve's local core is open source under the MIT License. The public project should remain the CLI-first engine: indexer, retrieval, MCP server, agent setup, benchmark harness, proof reports, docs, and tests.
+
+The commercial model is paid adoption and proof work:
+
+- local setup for real teams and repositories
+- agent and MCP integration across Codex, Claude, Cursor, Cline, Roo, and local agents
+- paired baseline versus CallSieve session collection
+- anonymized evidence packs and proof reports
+- custom retrieval tuning, workflow support, and enterprise-readiness reporting
+
+Do not sell source-code access as the main value. Sell the measured reduction in grep, repeated reads, and wasted prompt context.
+
 ## Current CLI Entry Points
 
 ```bash
