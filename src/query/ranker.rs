@@ -382,6 +382,17 @@ fn score_file(
         );
     }
 
+    if let Some(score_boost) = path_intent_cluster_score(file, query_tokens) {
+        add_score_component(
+            &mut score,
+            &mut why,
+            &mut score_debug,
+            "path_intent_cluster",
+            score_boost,
+            "path intent keyword cluster".to_string(),
+        );
+    }
+
     if let Some(score_boost) = basename_cluster_score(file, query_tokens) {
         add_score_component(
             &mut score,
@@ -769,17 +780,46 @@ fn module_anchor_score(file: &FileRecord, query_tokens: &[String]) -> Option<i32
         return None;
     }
 
-    file.path
+    let parent_tokens = file
+        .path
         .rsplit_once('/')
         .and_then(|(parent_path, _)| parent_path.rsplit('/').next())
-        .map(|segment| {
-            let parent_tokens = formatter::tokenize(segment);
-            parent_tokens
-                .iter()
-                .any(|parent| query_tokens.iter().any(|token| token == parent))
-        })
-        .unwrap_or(false)
-        .then_some(380)
+        .map(formatter::tokenize)?;
+    if parent_tokens.is_empty() {
+        return None;
+    }
+
+    let matched = parent_tokens
+        .iter()
+        .filter(|parent| query_tokens.iter().any(|token| token == *parent))
+        .count();
+    match matched {
+        0 => None,
+        count if count == parent_tokens.len() => Some(380),
+        _ => Some(120),
+    }
+}
+
+fn path_intent_cluster_score(file: &FileRecord, query_tokens: &[String]) -> Option<i32> {
+    let basename = file.path.rsplit('/').next().unwrap_or(file.path.as_str());
+    let basename_terms: BTreeSet<String> = path_tokens(basename).into_iter().collect();
+    let path_terms: BTreeSet<String> = path_tokens(&file.path).into_iter().collect();
+    let basename_overlap = query_tokens
+        .iter()
+        .filter(|token| basename_terms.contains(*token))
+        .count();
+    let path_overlap = query_tokens
+        .iter()
+        .filter(|token| path_terms.contains(*token))
+        .count();
+
+    if basename_overlap >= 1 && path_overlap >= 2 {
+        Some(220)
+    } else if path_overlap >= 3 {
+        Some(120)
+    } else {
+        None
+    }
 }
 
 fn is_benchmark_file(file: &FileRecord) -> bool {
@@ -1050,6 +1090,33 @@ mod tests {
         assert!(
             anchor_pos < main_pos,
             "queried module anchor should outrank module declarations in main"
+        );
+    }
+
+    #[test]
+    fn partial_module_anchor_does_not_beat_specific_path_intent() {
+        let index = build(
+            vec![
+                file("from_request_mod", "axum-macros/src/from_request/mod.rs"),
+                file("extract_rejection", "axum/src/extract/rejection.rs"),
+            ],
+            Vec::new(),
+        );
+
+        let ranked = rank(
+            &index,
+            "change extractor rejection behavior for JSON and form requests",
+            10,
+        );
+        let position = |file_id: &str| ranked.iter().position(|match_| match_.file_id == file_id);
+
+        let rejection_pos = position("extract_rejection").expect("specific path should rank");
+        let partial_anchor_pos =
+            position("from_request_mod").expect("partial module anchor should rank");
+
+        assert!(
+            rejection_pos < partial_anchor_pos,
+            "specific extract/rejection path should outrank a partial from_request anchor"
         );
     }
 }
