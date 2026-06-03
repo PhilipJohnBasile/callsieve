@@ -22,7 +22,7 @@ Keep broad claims gated. Use `context_payload_reduction` for estimated prompt-pa
 
 CallSieve is now an open-source local Rust CLI with a JSON index, deterministic retrieval, optional LSP reference enrichment, MCP tools, context-first guardrails, daemon/watch freshness support, agent adoption automation, benchmark reports, observed-session traces, and gated proof reports. The product is still local-first and CLI-first, but it has moved beyond the original bootstrap into an agent-context and evidence collection layer.
 
-For human installation and client setup, see [docs/INSTALL.md](docs/INSTALL.md). For AI CLI and wrapper behavior, see [docs/AGENT_CLI.md](docs/AGENT_CLI.md). For dogfooding and less-grep measurement, see [docs/DOGFOOD.md](docs/DOGFOOD.md). For paid pilot packaging, see [docs/PILOTS.md](docs/PILOTS.md).
+For human installation and client setup, see [docs/INSTALL.md](docs/INSTALL.md). For AI CLI and wrapper behavior, see [docs/AGENT_CLI.md](docs/AGENT_CLI.md). For observed whole-session proof collection, see [docs/OBSERVED_SESSIONS.md](docs/OBSERVED_SESSIONS.md). For dogfooding and less-grep measurement, see [docs/DOGFOOD.md](docs/DOGFOOD.md). For paid pilot packaging, see [docs/PILOTS.md](docs/PILOTS.md).
 
 The core workflow is:
 
@@ -134,6 +134,7 @@ cargo run -- pilot-task add benchmarks/evidence/pilot.local.json . "change login
 cargo run -- pilot-run benchmarks/evidence/pilot.local.json --task-id auth-expiry --mode baseline --command "rg login token expiry" --files-read src/auth/session.ts --tokens 12000
 cargo run -- pilot-run benchmarks/evidence/pilot.local.json --task-id auth-expiry --mode callsieve --command "callsieve agent-context . \"change login token expiry behavior\"" --files-read src/auth/session.ts --tokens 3000
 cargo run -- record-codex-observed-session --manifest benchmarks/evidence/pilot.local.json --task-id auth-expiry --mode callsieve --command "callsieve agent-context . \"change login token expiry behavior\"" --tokens 3000 --files-read src/auth/session.ts
+cargo run -- record-observed-session --manifest benchmarks/evidence/pilot.local.json --client claude --model claude-opus-4-8 --task-id auth-expiry --mode callsieve --command "claude -p \"change login token expiry behavior\" --output-format json" --usage-json .callsieve/observed/auth-expiry-callsieve.json --files-read src/auth/session.ts
 cargo run -- pilot-collect-ollama benchmarks/evidence/observed-generic-ollama-100.local.json --model qwen2.5-coder:7b --limit 10 --context-limit 24
 cargo run -- pilot-qa benchmarks/evidence/pilot.local.json
 cargo run -- pilot-finalize benchmarks/evidence/pilot.local.json --out benchmarks/evidence/proof.local.json
@@ -178,6 +179,7 @@ For the current 50-session observed Codex milestone, preregister the six-repo OS
 
 ```bash
 cargo run -- setup-observed-codex-oss-50
+cargo run -- setup-observed-claude-oss-50 --model claude-opus-4-8
 ```
 
 Run the deterministic rehearsal separately:
@@ -476,6 +478,8 @@ Evidence is separated into three tiers:
 Use `context_payload_reduction` when comparing CallSieve across agent platforms. Use observed token reduction only when a real paired transcript provides audited token counts.
 
 `proof-report` should only be used as claim proof after `pilot-qa` passes for the claim-counted manifest.
+
+For the strict observed-session collection protocol, see [docs/OBSERVED_SESSIONS.md](docs/OBSERVED_SESSIONS.md). The 50-session milestone is the first credible public proof target; the enterprise proof target remains gated at 1,000 paired observed sessions.
 
 Use `evidence-pack` when you need a shareable aggregate for external pilots:
 

@@ -399,6 +399,62 @@ pub enum Command {
         skip_repo_check: bool,
     },
 
+    /// Register the 50-session observed Claude Code OSS milestone manifest.
+    #[command(name = "setup-observed-claude-oss-50")]
+    SetupObservedClaudeOss50 {
+        #[arg(
+            long,
+            default_value = "benchmarks/evidence/observed-claude-oss-50.local.json"
+        )]
+        manifest: PathBuf,
+
+        #[arg(long, default_value = "claude-opus-4-8")]
+        model: String,
+
+        #[arg(long = "bootstrap-repos")]
+        bootstrap_repos: bool,
+
+        #[arg(long)]
+        force: bool,
+
+        #[arg(long = "skip-repo-check")]
+        skip_repo_check: bool,
+    },
+
+    /// Record one real observed paired-session event from any agent.
+    #[command(name = "record-observed-session")]
+    RecordObservedSession {
+        #[arg(long)]
+        manifest: PathBuf,
+
+        #[arg(long, value_enum, default_value_t = AgentClient::Generic)]
+        client: AgentClient,
+
+        #[arg(long)]
+        model: Option<String>,
+
+        #[arg(long = "task-id", alias = "task_id")]
+        task_id: String,
+
+        #[arg(long, value_enum)]
+        mode: PilotSessionMode,
+
+        #[arg(long = "command")]
+        event_command: String,
+
+        #[arg(long)]
+        tokens: Option<usize>,
+
+        #[arg(long = "usage-json", alias = "usage_json")]
+        usage_json: Option<PathBuf>,
+
+        #[arg(long = "files-read", alias = "files_read")]
+        files_read: Vec<String>,
+
+        #[arg(long = "dry-run")]
+        dry_run: bool,
+    },
+
     /// Record one real observed Codex paired-session event with transcript token counts.
     #[command(name = "record-codex-observed-session")]
     RecordCodexObservedSession {
@@ -1276,7 +1332,7 @@ struct ProofRehearsalCheck {
 }
 
 #[derive(Debug, Serialize)]
-struct ObservedCodexSetupOutput {
+struct ObservedSetupOutput {
     command: &'static str,
     status: String,
     manifest: String,
@@ -1290,18 +1346,44 @@ struct ObservedCodexSetupOutput {
 }
 
 #[derive(Debug, Serialize)]
-struct RecordCodexObservedSessionOutput {
+struct RecordObservedSessionOutput {
     command: &'static str,
     status: String,
     manifest: String,
+    client: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model: Option<String>,
     task_id: String,
     mode: PilotSessionMode,
     files_read: Vec<String>,
     tokens: usize,
+    token_accounting_source: &'static str,
+    token_input_source: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    usage_json: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    usage_breakdown: Option<ClaudeCodeUsageBreakdown>,
     pilot_run_command: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pilot_run: Option<serde_json::Value>,
     next_qa: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ClaudeCodeUsageBreakdown {
+    input_tokens: usize,
+    cache_creation_input_tokens: usize,
+    cache_read_input_tokens: usize,
+    output_tokens: usize,
+    total_tokens: usize,
+}
+
+#[derive(Debug, Clone)]
+struct ObservedTokenInput {
+    tokens: usize,
+    token_input_source: String,
+    usage_json: Option<String>,
+    usage_breakdown: Option<ClaudeCodeUsageBreakdown>,
 }
 
 #[derive(Debug, Clone)]
@@ -2101,6 +2183,49 @@ pub fn run() -> Result<()> {
         } => {
             let output =
                 setup_observed_codex_oss_50(&manifest, bootstrap_repos, force, skip_repo_check)?;
+            output::json::print(&output)?;
+        }
+        Command::SetupObservedClaudeOss50 {
+            manifest,
+            model,
+            bootstrap_repos,
+            force,
+            skip_repo_check,
+        } => {
+            let output = setup_observed_claude_oss_50(
+                &manifest,
+                &model,
+                bootstrap_repos,
+                force,
+                skip_repo_check,
+            )?;
+            output::json::print(&output)?;
+        }
+        Command::RecordObservedSession {
+            manifest,
+            client,
+            model,
+            task_id,
+            mode,
+            event_command,
+            tokens,
+            usage_json,
+            files_read,
+            dry_run,
+        } => {
+            let output = record_observed_session(
+                "record-observed-session",
+                &manifest,
+                Some(client),
+                model.as_deref(),
+                &task_id,
+                mode,
+                &event_command,
+                tokens,
+                usage_json.as_deref(),
+                files_read,
+                dry_run,
+            )?;
             output::json::print(&output)?;
         }
         Command::RecordCodexObservedSession {
@@ -3699,7 +3824,56 @@ fn setup_observed_codex_oss_50(
     bootstrap_repos: bool,
     force: bool,
     skip_repo_check: bool,
-) -> Result<ObservedCodexSetupOutput> {
+) -> Result<ObservedSetupOutput> {
+    setup_observed_oss_50(
+        manifest,
+        bootstrap_repos,
+        force,
+        skip_repo_check,
+        AgentClient::Codex,
+        "gpt-5-codex",
+        "setup-observed-codex-oss-50",
+        "real_codex_chatgpt_developer_sessions",
+        true,
+    )
+}
+
+fn setup_observed_claude_oss_50(
+    manifest: &Path,
+    model: &str,
+    bootstrap_repos: bool,
+    force: bool,
+    skip_repo_check: bool,
+) -> Result<ObservedSetupOutput> {
+    let model = model.trim();
+    if model.is_empty() {
+        anyhow::bail!("model is required")
+    }
+    setup_observed_oss_50(
+        manifest,
+        bootstrap_repos,
+        force,
+        skip_repo_check,
+        AgentClient::Claude,
+        model,
+        "setup-observed-claude-oss-50",
+        "real_claude_code_developer_sessions",
+        false,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn setup_observed_oss_50(
+    manifest: &Path,
+    bootstrap_repos: bool,
+    force: bool,
+    skip_repo_check: bool,
+    client: AgentClient,
+    model: &str,
+    command_name: &'static str,
+    collection: &'static str,
+    require_codex_bootstrap: bool,
+) -> Result<ObservedSetupOutput> {
     for fixture in EXTERNAL_BENCHMARK_FIXTURES {
         if !Path::new(fixture.suite).is_file() {
             anyhow::bail!("missing task suite: {}", fixture.suite);
@@ -3709,7 +3883,13 @@ fn setup_observed_codex_oss_50(
         }
     }
 
-    let rows = observed_codex_oss_50_rows()?;
+    let mut rows = observed_codex_oss_50_rows()?;
+    let agent_slug = agent_client_name(client);
+    if agent_slug != "codex" {
+        for row in &mut rows {
+            row.id = row.id.replace("-codex-", &format!("-{agent_slug}-"));
+        }
+    }
     let artifact_root = pilot_artifact_root(manifest);
     for row in &rows {
         let task_dir = artifact_root.join("tasks").join(&row.id);
@@ -3733,7 +3913,7 @@ fn setup_observed_codex_oss_50(
     }
 
     pilot_init(manifest, 50)?;
-    apply_observed_codex_oss_50_protocol(manifest)?;
+    apply_observed_oss_50_protocol(manifest, collection, require_codex_bootstrap)?;
 
     for row in &rows {
         pilot_task_add(
@@ -3744,8 +3924,8 @@ fn setup_observed_codex_oss_50(
             row.expected_files.clone(),
             row.critical_files.clone(),
             true,
-            AgentClient::Codex,
-            "gpt-5-codex",
+            client,
+            model,
             Some(PathBuf::from(&row.suite)),
             Some(row.id.clone()),
             "code_change".to_string(),
@@ -3764,9 +3944,9 @@ fn setup_observed_codex_oss_50(
     let mut bootstrap_outputs = Vec::new();
     if bootstrap_repos {
         for repo in &repos {
-            let bootstrap = bootstrap(Path::new(repo), AgentClient::Codex, true, true, true)?;
+            let bootstrap = bootstrap(Path::new(repo), client, true, true, true)?;
             bootstrap_outputs.push(serde_json::to_value(bootstrap)?);
-            let doctor = doctor(Path::new(repo), AgentClient::Codex, false, true)?;
+            let doctor = doctor(Path::new(repo), client, false, true)?;
             bootstrap_outputs.push(serde_json::to_value(doctor)?);
         }
     }
@@ -3779,8 +3959,8 @@ fn setup_observed_codex_oss_50(
         );
     }
 
-    Ok(ObservedCodexSetupOutput {
-        command: "setup-observed-codex-oss-50",
+    Ok(ObservedSetupOutput {
+        command: command_name,
         status: "ready_for_observed_collection".to_string(),
         manifest: manifest.display().to_string(),
         task_count: manifest_value.tasks.len(),
@@ -3796,11 +3976,15 @@ fn setup_observed_codex_oss_50(
     })
 }
 
-fn apply_observed_codex_oss_50_protocol(manifest_path: &Path) -> Result<()> {
+fn apply_observed_oss_50_protocol(
+    manifest_path: &Path,
+    collection: &'static str,
+    require_codex_bootstrap: bool,
+) -> Result<()> {
     let mut manifest = read_pilot_manifest(manifest_path)?;
     manifest.protocol = PilotEvidenceProtocol {
         evidence_standard: "observed_session_only".to_string(),
-        collection: "real_codex_chatgpt_developer_sessions".to_string(),
+        collection: collection.to_string(),
         pairing: "paired_baseline_and_callsieve_phases".to_string(),
         token_accounting: "transcript_context_tokens".to_string(),
         controlled_replay_policy: "reported_separately_never_counted_as_observed".to_string(),
@@ -3820,7 +4004,7 @@ fn apply_observed_codex_oss_50_protocol(manifest_path: &Path) -> Result<()> {
         "maximum_critical_misses": 0,
         "require_fresh_index": true,
         "require_lsp_where_available": true,
-        "require_codex_bootstrap": true,
+        "require_codex_bootstrap": require_codex_bootstrap,
         "require_transcript_token_accounting": true
     });
     write_pilot_manifest(manifest_path, &manifest)
@@ -3913,7 +4097,36 @@ fn record_codex_observed_session(
     tokens: usize,
     files_read: Vec<String>,
     dry_run: bool,
-) -> Result<RecordCodexObservedSessionOutput> {
+) -> Result<RecordObservedSessionOutput> {
+    record_observed_session(
+        "record-codex-observed-session",
+        manifest,
+        Some(AgentClient::Codex),
+        Some("gpt-5-codex"),
+        task_id,
+        mode,
+        event_command,
+        Some(tokens),
+        None,
+        files_read,
+        dry_run,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn record_observed_session(
+    command_name: &'static str,
+    manifest: &Path,
+    client: Option<AgentClient>,
+    model: Option<&str>,
+    task_id: &str,
+    mode: PilotSessionMode,
+    event_command: &str,
+    tokens: Option<usize>,
+    usage_json: Option<&Path>,
+    files_read: Vec<String>,
+    dry_run: bool,
+) -> Result<RecordObservedSessionOutput> {
     let task_id = task_id.trim();
     if task_id.is_empty() {
         anyhow::bail!("task_id is required")
@@ -3922,11 +4135,7 @@ fn record_codex_observed_session(
     if event_command.is_empty() {
         anyhow::bail!("command is required")
     }
-    if tokens == 0 {
-        anyhow::bail!(
-            "tokens must be a positive transcript context token count. Do not estimate tokens."
-        )
-    }
+    let token_input = observed_token_input(tokens, usage_json)?;
     let files_read: Vec<String> = files_read
         .into_iter()
         .map(|file| file.trim().to_string())
@@ -3936,37 +4145,152 @@ fn record_codex_observed_session(
         anyhow::bail!("files_read must include at least one file actually read")
     }
 
-    let pilot_run_command =
-        record_codex_pilot_run_command(manifest, task_id, mode, event_command, tokens, &files_read);
+    let token_evidence = observed_token_evidence(&token_input);
+    let pilot_run_command = record_observed_pilot_run_command(
+        manifest,
+        task_id,
+        mode,
+        event_command,
+        token_input.tokens,
+        &files_read,
+    );
     let pilot_run = if dry_run {
         None
     } else {
-        Some(serde_json::to_value(pilot_run(
+        Some(serde_json::to_value(pilot_run_with_token_evidence(
             manifest,
             task_id,
             mode,
             event_command,
             files_read.clone(),
-            tokens,
+            token_input.tokens,
+            Some(&token_evidence),
         )?)?)
     };
     let status = if dry_run { "dry_run" } else { "recorded" }.to_string();
 
-    Ok(RecordCodexObservedSessionOutput {
-        command: "record-codex-observed-session",
+    Ok(RecordObservedSessionOutput {
+        command: command_name,
         status,
         manifest: manifest.display().to_string(),
+        client: client
+            .map(agent_client_name)
+            .unwrap_or("unregistered")
+            .to_string(),
+        model: model
+            .map(str::trim)
+            .filter(|model| !model.is_empty())
+            .map(str::to_string),
         task_id: task_id.to_string(),
         mode,
         files_read,
-        tokens,
+        tokens: token_input.tokens,
+        token_accounting_source: "transcript_context_tokens",
+        token_input_source: token_input.token_input_source,
+        usage_json: token_input.usage_json,
+        usage_breakdown: token_input.usage_breakdown,
         pilot_run_command,
         pilot_run,
         next_qa: format!("callsieve pilot-qa {}", manifest.display()),
     })
 }
 
-fn record_codex_pilot_run_command(
+fn observed_token_input(
+    tokens: Option<usize>,
+    usage_json: Option<&Path>,
+) -> Result<ObservedTokenInput> {
+    match (tokens, usage_json) {
+        (Some(_), Some(_)) => {
+            anyhow::bail!("pass either --tokens or --usage-json, not both")
+        }
+        (Some(tokens), None) => {
+            if tokens == 0 {
+                anyhow::bail!(
+                    "tokens must be a positive transcript context token count. Do not estimate tokens."
+                )
+            }
+            Ok(ObservedTokenInput {
+                tokens,
+                token_input_source: "manual_transcript_context_tokens".to_string(),
+                usage_json: None,
+                usage_breakdown: None,
+            })
+        }
+        (None, Some(path)) => claude_code_usage_token_input(path),
+        (None, None) => {
+            anyhow::bail!("tokens are required. Pass --tokens or --usage-json.")
+        }
+    }
+}
+
+fn claude_code_usage_token_input(path: &Path) -> Result<ObservedTokenInput> {
+    let json = fs::read_to_string(path)
+        .with_context(|| format!("failed to read Claude Code usage JSON: {}", path.display()))?;
+    let value: serde_json::Value = serde_json::from_str(&json)
+        .with_context(|| format!("failed to parse Claude Code usage JSON: {}", path.display()))?;
+    let usage = value
+        .get("usage")
+        .context("Claude Code usage JSON is missing top-level usage object")?;
+    let input_tokens = json_field_usize(usage, "input_tokens");
+    let cache_creation_input_tokens = json_field_usize(usage, "cache_creation_input_tokens");
+    let cache_read_input_tokens = json_field_usize(usage, "cache_read_input_tokens");
+    let output_tokens = json_field_usize(usage, "output_tokens");
+    let total_tokens = input_tokens
+        .checked_add(cache_creation_input_tokens)
+        .and_then(|total| total.checked_add(cache_read_input_tokens))
+        .and_then(|total| total.checked_add(output_tokens))
+        .context("Claude Code usage token total overflowed usize")?;
+    if total_tokens == 0 {
+        anyhow::bail!("Claude Code usage JSON reported zero total tokens")
+    }
+
+    Ok(ObservedTokenInput {
+        tokens: total_tokens,
+        token_input_source: "claude_code_usage_total_tokens".to_string(),
+        usage_json: Some(path.display().to_string()),
+        usage_breakdown: Some(ClaudeCodeUsageBreakdown {
+            input_tokens,
+            cache_creation_input_tokens,
+            cache_read_input_tokens,
+            output_tokens,
+            total_tokens,
+        }),
+    })
+}
+
+fn json_field_usize(value: &serde_json::Value, field: &str) -> usize {
+    value
+        .get(field)
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|value| usize::try_from(value).ok())
+        .unwrap_or_default()
+}
+
+fn observed_token_evidence(token_input: &ObservedTokenInput) -> serde_json::Value {
+    let mut evidence = serde_json::json!({
+        "accounting_source": "transcript_context_tokens",
+        "input_source": token_input.token_input_source,
+        "tokens": token_input.tokens
+    });
+    let object = evidence
+        .as_object_mut()
+        .expect("token evidence must be a JSON object");
+    if let Some(path) = &token_input.usage_json {
+        object.insert(
+            "usage_json".to_string(),
+            serde_json::Value::String(path.clone()),
+        );
+    }
+    if let Some(breakdown) = &token_input.usage_breakdown {
+        object.insert(
+            "claude_code_usage".to_string(),
+            serde_json::to_value(breakdown).expect("Claude Code usage breakdown must serialize"),
+        );
+    }
+    evidence
+}
+
+fn record_observed_pilot_run_command(
     manifest: &Path,
     task_id: &str,
     mode: PilotSessionMode,
@@ -4704,12 +5028,23 @@ fn session_event(
     tokens: Option<usize>,
     phase: Option<SessionPhase>,
 ) -> Result<SessionEventOutput> {
+    session_event_with_token_evidence(trace, command, files_read, tokens, phase, None)
+}
+
+fn session_event_with_token_evidence(
+    trace: &Path,
+    command: &str,
+    files_read: Vec<String>,
+    tokens: Option<usize>,
+    phase: Option<SessionPhase>,
+    token_evidence: Option<&serde_json::Value>,
+) -> Result<SessionEventOutput> {
     let mut value = read_trace_value(trace)?;
     let phase_name = phase
         .map(session_phase_name)
         .map(str::to_string)
         .unwrap_or_else(|| infer_session_phase(&value, command).to_string());
-    let event = serde_json::json!({
+    let mut event = serde_json::json!({
         "timestamp": now_unix_seconds(),
         "command": command,
         "files_read": files_read,
@@ -4717,6 +5052,12 @@ fn session_event(
         "classification": classify_session_command(command),
         "phase": phase_name
     });
+    if let Some(token_evidence) = token_evidence {
+        event
+            .as_object_mut()
+            .context("session event must be a JSON object")?
+            .insert("token_evidence".to_string(), token_evidence.clone());
+    }
     let object = value
         .as_object_mut()
         .context("session trace root must be a JSON object")?;
@@ -4945,6 +5286,26 @@ fn pilot_run(
     files_read: Vec<String>,
     tokens: usize,
 ) -> Result<PilotRunOutput> {
+    pilot_run_with_token_evidence(
+        manifest_path,
+        task_id,
+        mode,
+        command,
+        files_read,
+        tokens,
+        None,
+    )
+}
+
+fn pilot_run_with_token_evidence(
+    manifest_path: &Path,
+    task_id: &str,
+    mode: PilotSessionMode,
+    command: &str,
+    files_read: Vec<String>,
+    tokens: usize,
+    token_evidence: Option<&serde_json::Value>,
+) -> Result<PilotRunOutput> {
     let mut manifest = read_pilot_manifest(manifest_path)?;
     let index = manifest
         .tasks
@@ -4965,14 +5326,22 @@ fn pilot_run(
         PilotSessionMode::Baseline => SessionPhase::Baseline,
         PilotSessionMode::Callsieve => SessionPhase::Callsieve,
     };
-    session_event(
+    session_event_with_token_evidence(
         Path::new(&task.trace_path),
         command,
         files_read.clone(),
         Some(tokens),
         Some(phase),
+        token_evidence,
     )?;
-    session_event(mode_trace, command, files_read, Some(tokens), Some(phase))?;
+    session_event_with_token_evidence(
+        mode_trace,
+        command,
+        files_read,
+        Some(tokens),
+        Some(phase),
+        token_evidence,
+    )?;
     let finish = session_finish(Path::new(&task.trace_path), Path::new(&task.summary_path))?;
     let summary_value = serde_json::to_value(&finish.summary)?;
     manifest.tasks[index].status = pilot_task_status(&summary_value);
@@ -8333,6 +8702,37 @@ mod tests {
             "benchmarks/evidence/observed-codex-oss-50.local.json",
             "--bootstrap-repos",
             "--skip-repo-check",
+        ])
+        .unwrap();
+        Cli::try_parse_from([
+            "callsieve",
+            "setup-observed-claude-oss-50",
+            "--manifest",
+            "benchmarks/evidence/observed-claude-oss-50.local.json",
+            "--model",
+            "claude-opus-4-8",
+            "--skip-repo-check",
+        ])
+        .unwrap();
+        Cli::try_parse_from([
+            "callsieve",
+            "record-observed-session",
+            "--manifest",
+            "benchmarks/evidence/observed-claude-oss-50.local.json",
+            "--client",
+            "claude",
+            "--model",
+            "claude-opus-4-8",
+            "--task-id",
+            "auth",
+            "--mode",
+            "baseline",
+            "--command",
+            "claude -p \"fix auth\" --output-format json",
+            "--usage-json",
+            "benchmarks/evidence/claude-auth-baseline.json",
+            "--files-read",
+            "src/main.rs",
         ])
         .unwrap();
         Cli::try_parse_from([

@@ -1818,6 +1818,42 @@ fn setup_observed_codex_oss_50_writes_rust_manifest() {
 }
 
 #[test]
+fn setup_observed_claude_oss_50_writes_claude_manifest() {
+    let manifest_root = tempfile::tempdir().unwrap();
+    let manifest_path = manifest_root
+        .path()
+        .join("observed-claude-oss-50.local.json");
+
+    let setup = json(&run(&[
+        "setup-observed-claude-oss-50",
+        "--manifest",
+        manifest_path.to_str().unwrap(),
+        "--model",
+        "claude-opus-4-8",
+        "--skip-repo-check",
+    ]));
+    assert_eq!(setup["command"], "setup-observed-claude-oss-50");
+    assert_eq!(setup["status"], "ready_for_observed_collection");
+    assert_eq!(setup["task_count"], 50);
+    assert_eq!(setup["target_sessions"], 50);
+
+    let manifest: Value = serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+    assert_eq!(
+        manifest["protocol"]["collection"],
+        "real_claude_code_developer_sessions"
+    );
+    assert_eq!(manifest["thresholds"]["require_codex_bootstrap"], false);
+    assert!(manifest["tasks"].as_array().unwrap().iter().all(|task| {
+        task["client"] == "claude"
+            && task["model"] == "claude-opus-4-8"
+            && task["external"] == true
+            && task["token_accounting_source"] == "transcript_context_tokens"
+            && task["id"].as_str().unwrap().contains("-claude-")
+            && !task["id"].as_str().unwrap().contains("-codex-")
+    }));
+}
+
+#[test]
 fn codex_observed_recording_rust_helper_validates_inputs_and_wraps_pilot_run() {
     let manifest_root = tempfile::tempdir().unwrap();
     let manifest_path = manifest_root.path().join("observed.json");
@@ -1903,6 +1939,132 @@ fn codex_observed_recording_rust_helper_validates_inputs_and_wraps_pilot_run() {
             .as_str()
             .unwrap()
             .contains("files_read must include at least one file")
+    );
+}
+
+#[test]
+fn observed_recording_reads_claude_usage_json_and_records_trace_evidence() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+    let manifest_root = tempfile::tempdir().unwrap();
+    let manifest_path = manifest_root.path().join("observed-claude.json");
+    let usage_path = manifest_root.path().join("claude-auth-baseline.json");
+    write(
+        &usage_path,
+        r#"{
+  "type": "result",
+  "result": "done",
+  "usage": {
+    "input_tokens": 100,
+    "cache_creation_input_tokens": 20,
+    "cache_read_input_tokens": 30,
+    "output_tokens": 10
+  }
+}
+"#,
+    );
+
+    json(&run(&[
+        "pilot-init",
+        manifest_path.to_str().unwrap(),
+        "--sessions",
+        "1",
+    ]));
+    json(&run(&[
+        "pilot-task",
+        "add",
+        manifest_path.to_str().unwrap(),
+        root,
+        "change createSession token behavior",
+        "--id",
+        "auth",
+        "--expected-file",
+        "src/auth/session.ts",
+        "--critical-file",
+        "src/auth/session.ts",
+        "--client",
+        "claude",
+        "--model",
+        "claude-opus-4-8",
+    ]));
+
+    let recorded = json(&run(&[
+        "record-observed-session",
+        "--manifest",
+        manifest_path.to_str().unwrap(),
+        "--client",
+        "claude",
+        "--model",
+        "claude-opus-4-8",
+        "--task-id",
+        "auth",
+        "--mode",
+        "baseline",
+        "--command",
+        "claude -p \"change createSession token behavior\" --output-format json",
+        "--usage-json",
+        usage_path.to_str().unwrap(),
+        "--files-read",
+        "src/auth/session.ts",
+    ]));
+    assert_eq!(recorded["command"], "record-observed-session");
+    assert_eq!(recorded["status"], "recorded");
+    assert_eq!(recorded["client"], "claude");
+    assert_eq!(recorded["model"], "claude-opus-4-8");
+    assert_eq!(recorded["tokens"], 160);
+    assert_eq!(
+        recorded["token_input_source"],
+        "claude_code_usage_total_tokens"
+    );
+    assert_eq!(recorded["usage_breakdown"]["total_tokens"], 160);
+
+    let trace_path = manifest_root
+        .path()
+        .join("tasks")
+        .join("auth")
+        .join("combined-observed.json");
+    let trace: Value = serde_json::from_slice(&fs::read(trace_path).unwrap()).unwrap();
+    let event = &trace["events"].as_array().unwrap()[0];
+    assert_eq!(
+        event["token_evidence"]["accounting_source"],
+        "transcript_context_tokens"
+    );
+    assert_eq!(
+        event["token_evidence"]["input_source"],
+        "claude_code_usage_total_tokens"
+    );
+    assert_eq!(
+        event["token_evidence"]["claude_code_usage"]["total_tokens"],
+        160
+    );
+
+    let ambiguous = run(&[
+        "record-observed-session",
+        "--manifest",
+        manifest_path.to_str().unwrap(),
+        "--client",
+        "claude",
+        "--task-id",
+        "auth",
+        "--mode",
+        "baseline",
+        "--command",
+        "claude -p auth --output-format json",
+        "--tokens",
+        "160",
+        "--usage-json",
+        usage_path.to_str().unwrap(),
+        "--files-read",
+        "src/auth/session.ts",
+        "--dry-run",
+    ]);
+    assert!(!ambiguous.status.success());
+    let ambiguous = json_allow_failure(&ambiguous);
+    assert!(
+        ambiguous["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("either --tokens or --usage-json")
     );
 }
 
