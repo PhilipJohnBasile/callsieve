@@ -5557,6 +5557,54 @@ mod tests {
     }
 
     #[test]
+    fn context_promotes_module_anchor_when_parent_module_matches_task() {
+        let temp = tempfile::tempdir().unwrap();
+        write(
+            temp.path().join("src/main.rs"),
+            "mod filter;\nmod walk;\n\nfn ensure_use_hidden_option_for_leading_dot_pattern() {}\n",
+        );
+        write(
+            temp.path().join("src/walk.rs"),
+            "pub fn walk_directory_tree() {\n  ignore_hidden_entries();\n}\n\nfn ignore_hidden_entries() {}\n",
+        );
+        write(
+            temp.path().join("src/filter/mod.rs"),
+            "mod owner;\nmod size;\nmod time;\n\npub use owner::OwnerFilter;\n",
+        );
+        write(
+            temp.path().join("src/filter/owner.rs"),
+            "pub struct OwnerFilter;\n\npub const IGNORE: OwnerFilter = OwnerFilter;\n\npub fn filter_ignore(owner: OwnerFilter) -> Option<OwnerFilter> {\n  Some(owner)\n}\n",
+        );
+        write(
+            temp.path().join("src/filter/size.rs"),
+            "pub struct SizeFilter;\n\npub fn filter_size() -> SizeFilter {\n  SizeFilter\n}\n",
+        );
+        write(
+            temp.path().join("tests/testenv/mod.rs"),
+            "pub fn create_config_directory_with_global_ignore() {}\n",
+        );
+
+        let index = indexer::build_index(temp.path()).unwrap();
+        let output = build_context(
+            temp.path(),
+            &index,
+            "change directory walking filters and hidden ignore behavior",
+            4,
+            0,
+            true,
+        )
+        .unwrap();
+
+        assert!(
+            output
+                .read_first
+                .iter()
+                .any(|file| file.file == "src/filter/mod.rs"),
+            "module anchor should fit into compact read_first output"
+        );
+    }
+
+    #[test]
     fn benchmark_estimates_token_savings_against_grep_read_loop() {
         let temp = tempfile::tempdir().unwrap();
         write(

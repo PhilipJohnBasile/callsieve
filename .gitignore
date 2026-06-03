@@ -21,6 +21,8 @@
 /benchmarks/**/*.local*.md
 /benchmarks/evidence/suites/
 /benchmarks/evidence/tasks/
+/benchmarks/evidence/**/suites/
+/benchmarks/evidence/**/tasks/
 
 # Secrets and machine-local environment
 .env

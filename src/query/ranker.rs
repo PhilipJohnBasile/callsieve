@@ -371,13 +371,13 @@ fn score_file(
         );
     }
 
-    if is_module_anchor_match(file, query_tokens) {
+    if let Some(score_boost) = module_anchor_score(file, query_tokens) {
         add_score_component(
             &mut score,
             &mut why,
             &mut score_debug,
             "module_anchor",
-            180,
+            score_boost,
             "module anchor path match".to_string(),
         );
     }
@@ -764,9 +764,9 @@ fn basename_cluster_score(file: &FileRecord, query_tokens: &[String]) -> Option<
     }
 }
 
-fn is_module_anchor_match(file: &FileRecord, query_tokens: &[String]) -> bool {
+fn module_anchor_score(file: &FileRecord, query_tokens: &[String]) -> Option<i32> {
     if !file.path.ends_with("/mod.rs") && !file.path.ends_with("/__init__.py") {
-        return false;
+        return None;
     }
 
     file.path
@@ -779,6 +779,7 @@ fn is_module_anchor_match(file: &FileRecord, query_tokens: &[String]) -> bool {
                 .any(|parent| query_tokens.iter().any(|token| token == parent))
         })
         .unwrap_or(false)
+        .then_some(380)
 }
 
 fn is_benchmark_file(file: &FileRecord) -> bool {
@@ -1013,6 +1014,42 @@ mod tests {
         assert!(
             test_pos < impl_pos,
             "with test intent the test file should be allowed to rank first"
+        );
+    }
+
+    #[test]
+    fn module_anchor_for_queried_parent_module_beats_leaf_symbols() {
+        let index = build(
+            vec![
+                file("filter_mod", "src/filter/mod.rs"),
+                file("filter_owner", "src/filter/owner.rs"),
+                file("main", "src/main.rs"),
+            ],
+            vec![
+                symbol("filter_module", "main", "filter"),
+                symbol("walk_module", "main", "walk"),
+                symbol("filter_ignore", "filter_owner", "filter_ignore"),
+            ],
+        );
+
+        let ranked = rank(
+            &index,
+            "change directory walking filters and hidden ignore behavior",
+            10,
+        );
+        let position = |file_id: &str| ranked.iter().position(|match_| match_.file_id == file_id);
+
+        let anchor_pos = position("filter_mod").expect("module anchor should rank");
+        let owner_pos = position("filter_owner").expect("leaf filter file should rank");
+        let main_pos = position("main").expect("main module declarations should rank");
+
+        assert!(
+            anchor_pos < owner_pos,
+            "queried module anchor should outrank leaf files with broad filter symbols"
+        );
+        assert!(
+            anchor_pos < main_pos,
+            "queried module anchor should outrank module declarations in main"
         );
     }
 }
