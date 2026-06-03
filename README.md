@@ -30,6 +30,17 @@ The core workflow is:
 index repo -> ask for agent context -> read returned files first -> grep only if needed -> audit traces and savings
 ```
 
+## Try It In 60 Seconds
+
+```bash
+cargo install --git https://github.com/PhilipJohnBasile/callsieve
+callsieve demo /path/to/repo --task "find where login is handled"
+callsieve hook install /path/to/repo --client generic --strict --force
+callsieve hook doctor /path/to/repo
+```
+
+`demo` proves the retrieval loop without configuring an agent. `hook install` creates repo-local launchers and search shims under `.callsieve/` so testers can start an agent with CallSieve-first guardrails without changing global PATH or shell profiles.
+
 ## Current CLI Surface
 
 ```bash
