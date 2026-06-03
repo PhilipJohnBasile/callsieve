@@ -159,7 +159,7 @@ The collector is preferred when available because it spawns Claude Code directly
 Manual equivalent:
 
 ```bash
-claude -p "<baseline task prompt>" --output-format stream-json --verbose --no-session-persistence --max-budget-usd 2.00 > .callsieve/observed/<task-id>-baseline.ndjson
+printf "%s" "<baseline task prompt>" | claude -p --input-format text --output-format stream-json --verbose --no-session-persistence --max-budget-usd 2.00 > .callsieve/observed/<task-id>-baseline.ndjson
 
 callsieve record-observed-session \
   --manifest benchmarks/evidence/observed-claude-oss-50.local.json \
@@ -167,11 +167,11 @@ callsieve record-observed-session \
   --model claude-opus-4-8 \
   --task-id <task-id> \
   --mode baseline \
-  --command "claude -p <baseline task prompt> --output-format stream-json --verbose" \
+  --command "claude -p --input-format text <baseline prompt on stdin> --output-format stream-json --verbose" \
   --usage-json .callsieve/observed/<task-id>-baseline.ndjson
 
 callsieve agent-context <repo> "<task>" --format markdown > .callsieve/observed/<task-id>-callsieve-context.md
-claude -p "<task prompt with CallSieve context first>" --output-format stream-json --verbose --no-session-persistence --max-budget-usd 2.00 > .callsieve/observed/<task-id>-callsieve.ndjson
+printf "%s" "<task prompt with CallSieve context first>" | claude -p --input-format text --output-format stream-json --verbose --no-session-persistence --max-budget-usd 2.00 > .callsieve/observed/<task-id>-callsieve.ndjson
 
 callsieve record-observed-session \
   --manifest benchmarks/evidence/observed-claude-oss-50.local.json \
@@ -179,7 +179,7 @@ callsieve record-observed-session \
   --model claude-opus-4-8 \
   --task-id <task-id> \
   --mode callsieve \
-  --command "callsieve agent-context <repo> \"<task>\" && claude -p <task prompt with CallSieve context first> --output-format stream-json --verbose" \
+  --command "callsieve agent-context <repo> \"<task>\" && claude -p --input-format text <CallSieve prompt on stdin> --output-format stream-json --verbose" \
   --usage-json .callsieve/observed/<task-id>-callsieve.ndjson
 ```
 

@@ -4255,10 +4255,11 @@ fn collect_claude_observed_session(
             fs::create_dir_all(parent)
                 .with_context(|| format!("failed to create {}", parent.display()))?;
         }
-        let output = ProcessCommand::new("claude")
+        let mut child = ProcessCommand::new("claude")
             .current_dir(repo)
             .arg("-p")
-            .arg(&prompt)
+            .arg("--input-format")
+            .arg("text")
             .arg("--model")
             .arg(model)
             .arg("--output-format")
@@ -4271,8 +4272,20 @@ fn collect_claude_observed_session(
             .arg("acceptEdits")
             .arg("--tools")
             .arg(allowed_tools.join(","))
-            .output()
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
             .with_context(|| format!("failed to run Claude Code in {}", repo.display()))?;
+        {
+            let mut stdin = child.stdin.take().context("failed to open Claude stdin")?;
+            stdin
+                .write_all(prompt.as_bytes())
+                .context("failed to write prompt to Claude stdin")?;
+        }
+        let output = child
+            .wait_with_output()
+            .context("failed to wait for Claude Code")?;
         fs::write(&artifact, &output.stdout)
             .with_context(|| format!("failed to write {}", artifact.display()))?;
         let stderr_path = artifact.with_extension("stderr.txt");
@@ -4395,7 +4408,7 @@ fn claude_observed_command_summary(
         }
     };
     format!(
-        "claude -p {:?} --model {} --output-format stream-json --verbose --no-session-persistence --max-budget-usd {} --tools {}",
+        "claude -p --input-format text <{}> --model {} --output-format stream-json --verbose --no-session-persistence --max-budget-usd {} --tools {}",
         prompt_summary,
         model,
         max_budget_usd,
@@ -8962,6 +8975,22 @@ mod tests {
             .unwrap()
             .join()
             .unwrap();
+    }
+
+    #[test]
+    fn claude_collector_command_summary_uses_stdin_prompt() {
+        let command = claude_observed_command_summary(
+            Path::new("benchmarks/github-axum"),
+            "change Router route method handling and path routing",
+            PilotSessionMode::Callsieve,
+            "sonnet",
+            "0.50",
+            &["Glob".to_string(), "Grep".to_string(), "Read".to_string()],
+        );
+
+        assert!(command.contains("claude -p --input-format text"));
+        assert!(command.contains("<callsieve agent-context benchmarks/github-axum"));
+        assert!(!command.contains("claude -p \""));
     }
 
     fn parses_all_commands_inner() {
