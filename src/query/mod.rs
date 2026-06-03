@@ -1948,7 +1948,7 @@ fn promote_task_specific_test_companion(
         return;
     };
 
-    let replacement_index = (0..selected_len)
+    let replacement_index = (1..selected_len)
         .min_by_key(|&index| {
             let candidate = &candidates[index];
             let keep_priority = lookup
@@ -1969,13 +1969,49 @@ fn selected_non_test_keep_priority(
     candidate: &ContextCandidate,
     query_tokens: &[String],
 ) -> i32 {
-    let direct_match_bonus =
+    let exact_match_bonus =
         candidate.why.iter().any(|reason| {
             reason.starts_with("exact symbol match") || reason.starts_with("exact path")
         }) as i32
-            * 10;
+            * 15;
+    let direct_surface_bonus = candidate_has_direct_surface_signal(candidate) as i32 * 25;
+    let agent_facing_doc_bonus = is_agent_facing_doc_path(&file.path) as i32 * 25;
     let code_bonus = file.language.is_code() as i32 * 10;
-    test_candidate_specificity(file, candidate, query_tokens) + direct_match_bonus + code_bonus
+    let graph_only_penalty = candidate_is_graph_only(candidate) as i32 * -20;
+    test_candidate_specificity(file, candidate, query_tokens)
+        + exact_match_bonus
+        + direct_surface_bonus
+        + agent_facing_doc_bonus
+        + code_bonus
+        + graph_only_penalty
+}
+
+fn candidate_has_direct_surface_signal(candidate: &ContextCandidate) -> bool {
+    candidate.why.iter().any(|reason| {
+        reason.starts_with("exact symbol match")
+            || reason.starts_with("exact path")
+            || reason.starts_with("path or filename match")
+            || reason.starts_with("path keyword overlap")
+            || reason.starts_with("filename keyword cluster")
+            || reason.starts_with("path intent keyword cluster")
+            || reason.starts_with("content keyword overlap")
+            || reason == "docs intent"
+            || reason == "docs path intent"
+            || reason == "command surface intent"
+    })
+}
+
+fn candidate_is_graph_only(candidate: &ContextCandidate) -> bool {
+    !candidate_has_direct_surface_signal(candidate)
+}
+
+fn is_agent_facing_doc_path(path: &str) -> bool {
+    let path = path.to_ascii_lowercase();
+    path.starts_with("docs/")
+        || matches!(
+            path.as_str(),
+            "readme.md" | "agents.md" | "claude.md" | "product_brief.md"
+        )
 }
 
 fn is_test_init_file(path: &str) -> bool {
@@ -5334,6 +5370,14 @@ fn is_grep_command(command: &str) -> bool {
         || lower.contains(" rg ")
         || lower.contains(" grep ")
         || lower.contains("ripgrep")
+        || lower.starts_with("git grep")
+        || lower.contains(" git grep ")
+        || matches!(first, "find" | "fd")
+        || lower.contains(" select-string ")
+        || lower.starts_with("select-string ")
+        || (lower.contains("get-childitem") && lower.contains("-recurse"))
+        || (lower.starts_with("dir ") && lower.contains("/s"))
+        || (lower.starts_with("ls ") && lower.contains("-r"))
 }
 
 fn is_file_read_command(command: &str) -> bool {
@@ -5872,6 +5916,96 @@ mod tests {
         assert!(
             files.contains(&"httpx/_config.py".to_string()),
             "selected files: {files:?}"
+        );
+    }
+
+    #[test]
+    fn context_keeps_mcp_docs_when_promoting_cli_test_companion() {
+        let temp = tempfile::tempdir().unwrap();
+        write(
+            temp.path().join("src/mcp.rs"),
+            "pub fn execute_context_tool() {\n    call_tool();\n}\n\nfn call_tool() {}\n",
+        );
+        write(
+            temp.path().join("src/cli.rs"),
+            "pub enum Command { Mcp }\n\npub fn run() {\n    setup_agent();\n}\n\nfn setup_agent() {}\n",
+        );
+        write(
+            temp.path().join("src/query/mod.rs"),
+            "pub fn build_context() {}\nfn add_graph_context() {}\nfn add_reference_context() {}\n",
+        );
+        write(
+            temp.path().join("tests/cli.rs"),
+            "#[test]\nfn mcp_lists_and_calls_context_tool() {\n    assert!(true);\n}\n",
+        );
+        write(
+            temp.path().join("docs/MCP.md"),
+            "MCP callsieve_context tool setup documentation for coding agents and client config.\n",
+        );
+        write(
+            temp.path().join("src/indexer/lsp.rs"),
+            "pub fn server_specs() {\n    let _context = \"mcp tool\";\n}\n",
+        );
+        write(
+            temp.path().join("src/indexer/imports.rs"),
+            "pub fn add_import_context() {}\n",
+        );
+
+        let index = indexer::build_index(temp.path()).unwrap();
+        let output = build_context(
+            temp.path(),
+            &index,
+            "add an MCP tool that exposes CallSieve context packets to coding agents",
+            5,
+            0,
+            false,
+        )
+        .unwrap();
+        let files = context_read_first_files(&output);
+
+        for expected in ["src/mcp.rs", "src/cli.rs", "docs/MCP.md", "tests/cli.rs"] {
+            assert!(
+                files.contains(&expected.to_string()),
+                "expected {expected}; selected files: {files:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_companion_promotion_does_not_evict_top_ranked_implementation() {
+        let temp = tempfile::tempdir().unwrap();
+        write(
+            temp.path().join("src/query/mod.rs"),
+            "pub fn enterprise_proof_report() {}\npub fn proof_report() {}\npub struct ProofReportOutput;\n",
+        );
+        write(
+            temp.path().join("docs/ENTERPRISE_PROOF.md"),
+            "Enterprise proof evidence gates and report schema.\n",
+        );
+        write(
+            temp.path().join("tests/cli.rs"),
+            "#[test]\nfn enterprise_proof_report_requires_clients_and_session_savings_ratios() {}\n",
+        );
+
+        let index = indexer::build_index(temp.path()).unwrap();
+        let output = build_context(
+            temp.path(),
+            &index,
+            "change enterprise_proof_report proof report implementation",
+            2,
+            0,
+            false,
+        )
+        .unwrap();
+        let files = context_read_first_files(&output);
+
+        assert!(
+            files.contains(&"src/query/mod.rs".to_string()),
+            "top implementation should be retained when test companion is promoted: {files:?}"
+        );
+        assert!(
+            files.contains(&"tests/cli.rs".to_string()),
+            "task-specific test should still be promoted: {files:?}"
         );
     }
 

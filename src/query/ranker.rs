@@ -114,7 +114,12 @@ impl TokenWeights {
     }
 
     fn weight(&self, token: &str) -> f32 {
-        self.weights.get(token).copied().unwrap_or(1.0)
+        let weight = self.weights.get(token).copied().unwrap_or(1.0);
+        if is_generic_action_token(token) {
+            weight * 0.25
+        } else {
+            weight
+        }
     }
 
     /// Weighted point total for a keyword-overlap component: each matched token
@@ -176,10 +181,12 @@ fn score_symbol(
 
     let symbol_name_tokens = formatter::tokenize(&symbol.name);
     let symbol_token_count = symbol_name_tokens.len();
-    if query == symbol_lower
+    let exact_symbol_match = query == symbol_lower
         || query_tokens.iter().any(|token| token == &symbol_lower)
-        || (symbol_token_count > 1 && query.contains(&symbol_lower))
-    {
+        || (symbol_token_count > 1 && query.contains(&symbol_lower));
+    let generic_single_symbol =
+        symbol_token_count == 1 && is_generic_action_token(symbol_lower.as_str());
+    if exact_symbol_match && (!generic_single_symbol || has_symbol_lookup_intent(query_tokens)) {
         let points = if symbol_token_count > 1 { 320 } else { 180 };
         add_score_component(
             &mut score,
@@ -189,6 +196,18 @@ fn score_symbol(
             points,
             format!("exact symbol match: {}", symbol.name),
         );
+    } else if exact_symbol_match && generic_single_symbol {
+        add_score_component(
+            &mut score,
+            &mut why,
+            &mut score_debug,
+            "generic_action_token_penalty",
+            -80,
+            format!(
+                "generic action token ignored as exact symbol: {}",
+                symbol.name
+            ),
+        );
     }
 
     let symbol_name_terms: BTreeSet<String> = symbol_name_tokens.into_iter().collect();
@@ -197,8 +216,17 @@ fn score_symbol(
         .filter(|token| symbol_name_terms.contains(*token))
         .cloned()
         .collect();
-    if name_overlap.len() >= 2 {
-        let base = if name_overlap.len() >= 3 { 420 } else { 320 };
+    let signal_name_overlap: Vec<String> = name_overlap
+        .iter()
+        .filter(|token| !is_generic_action_token(token))
+        .cloned()
+        .collect();
+    if signal_name_overlap.len() >= 2 {
+        let base = if signal_name_overlap.len() >= 3 {
+            420
+        } else {
+            320
+        };
         // Test function names are long sentences that accidentally cluster many
         // query tokens; don't let them outrank real API symbols unless the query
         // is actually about tests.
@@ -213,7 +241,10 @@ fn score_symbol(
             &mut score_debug,
             "symbol_name_keyword_cluster",
             points,
-            format!("symbol name keyword cluster: {}", name_overlap.join(", ")),
+            format!(
+                "symbol name keyword cluster: {}",
+                signal_name_overlap.join(", ")
+            ),
         );
     }
 
@@ -522,14 +553,36 @@ fn score_file(
         );
     }
 
-    if is_docs_file(file) && has_docs_intent(query_tokens) {
+    if is_docs_file(file) {
+        if has_docs_intent(query_tokens) {
+            add_score_component(
+                &mut score,
+                &mut why,
+                &mut score_debug,
+                "docs_intent",
+                260,
+                "docs intent".to_string(),
+            );
+        } else if docs_path_matches_tool_intent(file, query_tokens) {
+            add_score_component(
+                &mut score,
+                &mut why,
+                &mut score_debug,
+                "docs_path_intent",
+                220,
+                "docs path intent".to_string(),
+            );
+        }
+    }
+
+    if is_command_surface_file(file) && has_command_surface_intent(query_tokens) {
         add_score_component(
             &mut score,
             &mut why,
             &mut score_debug,
-            "docs_intent",
-            260,
-            "docs intent".to_string(),
+            "command_surface_intent",
+            240,
+            "command surface intent".to_string(),
         );
     }
 
@@ -614,8 +667,43 @@ const DOCS_INTENT: &[&str] = &[
     "docs",
     "documentation",
     "guide",
+    "install",
     "readme",
+    "setup",
     "workflow",
+];
+
+const COMMAND_SURFACE_INTENT: &[&str] = &[
+    "cli",
+    "command",
+    "commands",
+    "hook",
+    "integration",
+    "integrations",
+    "mcp",
+    "setup",
+    "shim",
+    "tool",
+    "tools",
+];
+
+const GENERIC_ACTION_TOKENS: &[&str] = &[
+    "add", "build", "change", "default", "fix", "format", "get", "make", "new", "run", "set",
+    "update",
+];
+
+const SYMBOL_LOOKUP_INTENT: &[&str] = &[
+    "class",
+    "enum",
+    "function",
+    "functions",
+    "macro",
+    "method",
+    "methods",
+    "struct",
+    "symbol",
+    "symbols",
+    "trait",
 ];
 
 fn has_config_intent(query_tokens: &[String]) -> bool {
@@ -646,6 +734,32 @@ fn has_docs_intent(query_tokens: &[String]) -> bool {
     query_tokens
         .iter()
         .any(|token| DOCS_INTENT.contains(&token.as_str()))
+}
+
+fn has_command_surface_intent(query_tokens: &[String]) -> bool {
+    query_tokens
+        .iter()
+        .any(|token| COMMAND_SURFACE_INTENT.contains(&token.as_str()))
+}
+
+fn docs_path_matches_tool_intent(file: &FileRecord, query_tokens: &[String]) -> bool {
+    let path_terms: BTreeSet<String> = path_tokens(&file.path).into_iter().collect();
+    query_tokens.iter().any(|token| {
+        matches!(
+            token.as_str(),
+            "cli" | "command" | "commands" | "hook" | "mcp" | "shim" | "tool" | "tools"
+        ) && path_terms.contains(token)
+    })
+}
+
+fn has_symbol_lookup_intent(query_tokens: &[String]) -> bool {
+    query_tokens
+        .iter()
+        .any(|token| SYMBOL_LOOKUP_INTENT.contains(&token.as_str()))
+}
+
+fn is_generic_action_token(token: &str) -> bool {
+    GENERIC_ACTION_TOKENS.contains(&token)
 }
 
 fn expand_query_tokens(tokens: Vec<String>) -> Vec<String> {
@@ -829,6 +943,13 @@ fn is_benchmark_file(file: &FileRecord) -> bool {
 fn is_docs_file(file: &FileRecord) -> bool {
     let path = file.path.to_ascii_lowercase();
     path.starts_with("docs/") || path == "readme.md"
+}
+
+fn is_command_surface_file(file: &FileRecord) -> bool {
+    matches!(
+        file.path.as_str(),
+        "src/cli.rs" | "src/mcp.rs" | "src/main.rs"
+    )
 }
 
 fn is_fixture_data(file: &FileRecord) -> bool {
@@ -1117,6 +1238,44 @@ mod tests {
         assert!(
             rejection_pos < partial_anchor_pos,
             "specific extract/rejection path should outrank a partial from_request anchor"
+        );
+    }
+
+    #[test]
+    fn generic_action_symbols_do_not_beat_mcp_docs_and_command_surface() {
+        let mut docs = file("mcp_docs", "docs/MCP.md");
+        docs.language = Language::Markdown;
+        docs.content_terms = formatter::tokenize(
+            "MCP tool exposes CallSieve context packets to coding agents setup",
+        );
+        let cli = file("cli", "src/cli.rs");
+        let query_mod = file("query", "src/query/mod.rs");
+        let index = build(
+            vec![docs, cli, query_mod],
+            vec![
+                symbol("add", "query", "add"),
+                symbol("add_context", "query", "add_graph_context"),
+                symbol("run", "cli", "run"),
+            ],
+        );
+
+        let ranked = rank(
+            &index,
+            "add an MCP tool that exposes CallSieve context packets to coding agents",
+            10,
+        );
+        let position = |file_id: &str| ranked.iter().position(|match_| match_.file_id == file_id);
+
+        let docs_pos = position("mcp_docs").expect("MCP docs should rank");
+        let cli_pos = position("cli").expect("CLI command surface should rank");
+        let query_pos = position("query").expect("query helper should still rank");
+        assert!(
+            docs_pos < query_pos,
+            "MCP docs should outrank generic add helpers"
+        );
+        assert!(
+            cli_pos < query_pos,
+            "CLI command surface should outrank generic add helpers"
         );
     }
 }

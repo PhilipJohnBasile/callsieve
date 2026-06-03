@@ -11,7 +11,7 @@
 
 For human installation and client setup, start with [INSTALL.md](INSTALL.md). For AI CLI behavior and automation rules, see [AGENT_CLI.md](AGENT_CLI.md).
 
-The MCP server is one integration surface for agents. It does not replace the CLI: indexing, hook launchers, Markdown or JSON context output, watching, daemon refresh, evidence collection, proof reports, and enterprise-proof reports still run through `callsieve` commands.
+The MCP server is one integration surface for agents. It does not replace the CLI: indexing, lifecycle hooks or plugins, hook launchers, Markdown or JSON context output, watching, daemon refresh, evidence collection, proof reports, and enterprise-proof reports still run through `callsieve` commands.
 
 Build or install CallSieve first. You can index each repository up front, or let the first `callsieve_context` call rebuild a missing or stale local index:
 
@@ -49,8 +49,21 @@ callsieve doctor /path/to/repo --client generic --strict
 callsieve doctor /path/to/repo --client generic --fix --strict
 callsieve agent-setup /path/to/repo --client codex
 callsieve agent-setup /path/to/repo --client claude
+callsieve agent-setup /path/to/repo --client copilot
+callsieve agent-setup /path/to/repo --client opencode
+callsieve agent-setup /path/to/repo --client antigravity
 callsieve agent-setup /path/to/repo --client cursor
+callsieve agent-setup /path/to/repo --client vscode
+callsieve agent-setup /path/to/repo --client windsurf
+callsieve agent-setup /path/to/repo --client continue
+callsieve agent-setup /path/to/repo --client zed
+callsieve agent-setup /path/to/repo --client junie
+callsieve agent-setup /path/to/repo --client jetbrains
+callsieve agent-setup /path/to/repo --client amp
+callsieve agent-setup /path/to/repo --client goose
+callsieve agent-setup /path/to/repo --client warp
 callsieve agent-setup /path/to/repo --client cline
+callsieve agent-setup /path/to/repo --client zoo
 callsieve agent-setup /path/to/repo --client roo
 callsieve agent-setup /path/to/repo --client generic
 ```
@@ -63,6 +76,7 @@ For AI CLIs without a dedicated setup command, print a portable MCP config:
 ```bash
 callsieve mcp-config /path/to/repo --format json
 callsieve mcp-config /path/to/repo --format toml
+callsieve mcp-registry-manifest --out server.json
 ```
 
 Audit generated setup with:
@@ -72,7 +86,7 @@ callsieve enforce /path/to/repo --client codex
 callsieve enforce /path/to/repo --client codex --trace /path/to/trace.json --strict
 ```
 
-`enforce` checks index freshness, generated client policy/config files, optional trace policy, and shim state. Missing shims are a warning unless `--require-shim` is passed.
+`enforce` checks index freshness, generated client policy/config files, optional trace policy, lifecycle hook surfaces where supported, and shim state. Strict mode requires hook/plugin files for Codex, Claude Code, Copilot, OpenCode, Antigravity, and Cline. Cursor, VS Code, Windsurf, Continue, Zed, Junie, JetBrains AI Assistant, Amp, Goose, Warp, and Zoo do not require lifecycle hooks. Generic clients can fail missing shims with `--require-shim`.
 
 ## Codex
 
@@ -105,6 +119,15 @@ callsieve enforce /path/to/repo --client codex --trace /path/to/repo/.callsieve/
 
 Use a different `--model` label for each Codex/ChatGPT model you test. `codex-session` is controlled replay evidence: useful for setup checks, but not counted as observed-session proof. For claim-counted sessions, use `session-start`, `session-event`, and `session-finish` with transcript token accounting.
 
+For enforcement in Codex, prefer lifecycle hooks over MCP alone:
+
+```bash
+callsieve codex-hooks install /path/to/repo --strict --force
+callsieve codex-hooks doctor /path/to/repo --strict
+```
+
+The generated `.codex/hooks.json` injects context at prompt submit, blocks broad search before context, records local hook traces, and asks Codex to continue after strict violations. Review and trust project hooks in Codex with `/hooks`.
+
 Reference: https://developers.openai.com/codex/mcp
 
 ## Claude Code
@@ -134,6 +157,18 @@ Reference: https://code.claude.com/docs/en/mcp
 
 Ask Claude Code to call `callsieve_context` before `rg` for codebase discovery tasks, then read the returned `read_first` files.
 
+For enforcement in Claude Code, prefer lifecycle hooks plus repo-local shims over MCP alone:
+
+```bash
+callsieve hook install /path/to/repo --client claude --strict --force --lsp
+callsieve claude-hooks doctor /path/to/repo --strict
+callsieve enforce /path/to/repo --client claude --strict
+```
+
+The generated `.claude/settings.local.json` preserves unrelated local Claude settings, injects context at prompt submit, blocks pre-context `Bash`, `Read`, `Grep`, and `Glob` in strict mode, and records local hook traces under `.callsieve/claude-hooks/`. The same install also writes `.mcp.json`, `CLAUDE.md`, `.callsieve/agent-launch.*`, and `.callsieve/bin/*`. Review and trust project hooks in Claude Code with `/hooks`.
+
+Reference: https://code.claude.com/docs/en/hooks
+
 ## Claude Desktop
 
 Claude Desktop's current local MCP path is desktop extensions. For broad Desktop distribution, package CallSieve as an `.mcpb` extension that launches `callsieve mcp`.
@@ -141,6 +176,39 @@ Claude Desktop's current local MCP path is desktop extensions. For broad Desktop
 Until that package exists, use Claude Code or another stdio MCP client for direct local CallSieve access.
 
 Reference: https://support.claude.com/en/articles/10949351-getting-started-with-local-mcp-servers-on-claude-desktop
+
+## GitHub Copilot
+
+Generate local Copilot CLI files with:
+
+```bash
+callsieve hook install /path/to/repo --client copilot --strict --force --lsp
+callsieve copilot-hooks doctor /path/to/repo --strict
+```
+
+This writes `.github/copilot-mcp.json`, `.github/copilot-instructions.md`, `.github/agents/callsieve-context.agent.md`, and `.github/hooks/callsieve.json`. Local hooks call `callsieve copilot-hook ...`. Copilot cloud agents remain template-only unless the local `callsieve` binary is available in that sandbox.
+
+## OpenCode
+
+Generate local OpenCode MCP and plugin files with:
+
+```bash
+callsieve hook install /path/to/repo --client opencode --strict --force --lsp
+callsieve opencode-hooks doctor /path/to/repo --strict
+```
+
+This preserves unrelated `opencode.json` settings while adding `mcp.callsieve` and `.opencode/CALLSIEVE.md`. The plugin `.opencode/plugins/callsieve.js` uses tool and session events to call `callsieve opencode-hook ...`.
+
+## Antigravity CLI
+
+Generate Antigravity MCP, hooks, skill, and rule files with:
+
+```bash
+callsieve hook install /path/to/repo --client antigravity --strict --force --lsp
+callsieve antigravity-hooks doctor /path/to/repo --strict
+```
+
+This writes `.agents/mcp_config.json`, `.agents/hooks.json`, `.agents/skills/callsieve-context.md`, and `.agents/rules/callsieve.md`. The hook config calls `callsieve antigravity-hook ...`.
 
 ## Cursor
 
@@ -163,6 +231,36 @@ Global config uses `~/.cursor/mcp.json`.
 In Cursor, call `callsieve_context` before repository-wide search when starting a coding task.
 
 Reference: https://docs.cursor.com/en/context/mcp
+
+## VS Code, Windsurf, Continue, Zed, Junie, JetBrains, Amp, Goose, and Warp
+
+These clients are MCP/rules/skills/setup-template targets only. Generate project-local setup with:
+
+```bash
+callsieve agent-setup /path/to/repo --client vscode --force
+callsieve agent-setup /path/to/repo --client windsurf --force
+callsieve agent-setup /path/to/repo --client continue --force
+callsieve agent-setup /path/to/repo --client zed --force
+callsieve agent-setup /path/to/repo --client junie --force
+callsieve agent-setup /path/to/repo --client jetbrains --force
+callsieve agent-setup /path/to/repo --client amp --force
+callsieve agent-setup /path/to/repo --client goose --force
+callsieve agent-setup /path/to/repo --client warp --force
+```
+
+Generated files:
+
+- VS Code: `.vscode/mcp.json` plus `.github/copilot-instructions.md`
+- Windsurf: `.windsurf/rules/callsieve.md` plus `.callsieve/integrations/windsurf-mcp.json`
+- Continue: `.continue/mcpServers/callsieve.yaml` plus `.continue/rules/callsieve.md`
+- Zed: merged `.zed/settings.json` when it is valid JSON, otherwise `.callsieve/integrations/zed-settings.json` with a warning
+- Junie: `.junie/mcp/mcp.json` plus `.junie/guidelines.md`
+- JetBrains AI Assistant: `.callsieve/integrations/jetbrains-mcp.json` with a docs-only warning; use `--client junie` for Junie
+- Amp: `.agents/skills/callsieve-context/SKILL.md` plus `.agents/skills/callsieve-context/mcp.json`
+- Goose: `.callsieve/integrations/goose-config.yaml` plus `.callsieve/integrations/goose-deeplink.txt`
+- Warp: `.callsieve/integrations/warp-mcp.json` plus `.callsieve/integrations/warp-agent.yaml`
+
+Strict mode requires these generated files, a fresh index, daemon state, and shims. It does not require lifecycle hooks. Global/user config files are not mutated automatically. Warp cloud-agent templates are only usable when the Warp/Oz runtime can run the local `callsieve` binary.
 
 ## Cline
 
@@ -188,15 +286,22 @@ Reference: https://docs.cline.bot/mcp/mcp-overview
 
 In Cline, use `callsieve_context` before broad search tools and only grep when the returned packet is insufficient.
 
-## Roo
-
-Roo can use the generated `.roo/mcp.json` and `.roo/rules/callsieve.md` files:
+For strict Cline enforcement, generate hook scripts too:
 
 ```bash
-callsieve agent-setup /path/to/repo --client roo
+callsieve hook install /path/to/repo --client cline --strict --force --lsp
+callsieve cline-hooks doctor /path/to/repo --strict
 ```
 
-Use `callsieve_context` before broad search tools and repeated file reads.
+## Zoo Code
+
+Zoo Code uses generated `.roo` config paths:
+
+```bash
+callsieve agent-setup /path/to/repo --client zoo
+```
+
+Generated files include `.roo/mcp.json`, `.roo/rules/callsieve.md`, and `.roo/rules-code/callsieve.md`. Use `callsieve_context` before broad search tools and repeated file reads. The deprecated `--client roo` alias still generates the same Zoo-compatible files and emits a warning.
 
 ## Tool Workflow
 

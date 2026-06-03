@@ -19,6 +19,25 @@ fn run(args: &[&str]) -> Output {
         .expect("failed to run callsieve")
 }
 
+fn run_with_stdin(args: &[&str], input: &str) -> Output {
+    let mut child = Command::new(callsieve())
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to run callsieve");
+    child
+        .stdin
+        .as_mut()
+        .expect("stdin should be piped")
+        .write_all(input.as_bytes())
+        .expect("failed to write hook input");
+    child
+        .wait_with_output()
+        .expect("failed to collect callsieve output")
+}
+
 fn json(output: &Output) -> Value {
     assert!(
         output.status.success(),
@@ -3621,6 +3640,303 @@ fn setup_agent_generates_policy_files() {
 }
 
 #[test]
+fn six_client_agent_setup_generates_expected_files() {
+    let repo = tempfile::tempdir().unwrap();
+    let root = repo.path().to_str().unwrap();
+    let setup = json(&run(&["agent-setup", root, "--client", "copilot"]));
+    assert_eq!(setup["client"], "copilot");
+    assert!(repo.path().join(".github/copilot-mcp.json").is_file());
+    assert!(
+        repo.path()
+            .join(".github/copilot-instructions.md")
+            .is_file()
+    );
+    assert!(
+        repo.path()
+            .join(".github/agents/callsieve-context.agent.md")
+            .is_file()
+    );
+
+    let repo = tempfile::tempdir().unwrap();
+    write(
+        repo.path().join("opencode.json"),
+        r#"{"theme":"dark","instructions":["README.md"]}"#,
+    );
+    let root = repo.path().to_str().unwrap();
+    let setup = json(&run(&[
+        "agent-setup",
+        root,
+        "--client",
+        "opencode",
+        "--force",
+    ]));
+    assert_eq!(setup["client"], "opencode");
+    assert!(repo.path().join(".opencode/CALLSIEVE.md").is_file());
+    let opencode: Value =
+        serde_json::from_slice(&fs::read(repo.path().join("opencode.json")).unwrap()).unwrap();
+    assert_eq!(opencode["theme"], "dark");
+    assert!(
+        opencode["mcp"]["callsieve"]["command"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|arg| arg == "mcp")
+    );
+    assert!(
+        opencode["instructions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry == ".opencode/CALLSIEVE.md")
+    );
+
+    let repo = tempfile::tempdir().unwrap();
+    let root = repo.path().to_str().unwrap();
+    let setup = json(&run(&["agent-setup", root, "--client", "antigravity"]));
+    assert_eq!(setup["client"], "antigravity");
+    assert!(repo.path().join(".agents/mcp_config.json").is_file());
+    assert!(
+        repo.path()
+            .join(".agents/skills/callsieve-context.md")
+            .is_file()
+    );
+    assert!(repo.path().join(".agents/rules/callsieve.md").is_file());
+
+    let repo = tempfile::tempdir().unwrap();
+    let root = repo.path().to_str().unwrap();
+    let setup = json(&run(&["agent-setup", root, "--client", "cline"]));
+    assert_eq!(setup["client"], "cline");
+    assert!(repo.path().join(".cline/mcp.json").is_file());
+    assert!(repo.path().join(".cline/rules/callsieve.md").is_file());
+    assert!(repo.path().join(".clinerules/callsieve.md").is_file());
+
+    let repo = tempfile::tempdir().unwrap();
+    let root = repo.path().to_str().unwrap();
+    let setup = json(&run(&["agent-setup", root, "--client", "zoo"]));
+    assert_eq!(setup["client"], "zoo");
+    assert!(repo.path().join(".roo/mcp.json").is_file());
+    assert!(repo.path().join(".roo/rules/callsieve.md").is_file());
+    assert!(repo.path().join(".roo/rules-code/callsieve.md").is_file());
+    assert!(!repo.path().join(".roomodes").is_file());
+
+    let repo = tempfile::tempdir().unwrap();
+    let root = repo.path().to_str().unwrap();
+    let setup = json(&run(&["agent-setup", root, "--client", "roo", "--force"]));
+    assert_eq!(setup["client"], "roo");
+    assert!(repo.path().join(".roo/rules-code/callsieve.md").is_file());
+    assert!(repo.path().join(".roomodes").is_file());
+    assert!(
+        setup["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| warning.as_str().unwrap().contains("deprecated"))
+    );
+}
+
+#[test]
+fn next_client_agent_setup_generates_expected_files_and_preserves_json() {
+    let repo = tempfile::tempdir().unwrap();
+    write(
+        repo.path().join(".vscode/mcp.json"),
+        r#"{"inputs":[],"servers":{"existing":{"command":"node"}}}"#,
+    );
+    let root = repo.path().to_str().unwrap();
+    let setup = json(&run(&[
+        "agent-setup",
+        root,
+        "--client",
+        "vscode",
+        "--force",
+    ]));
+    assert_eq!(setup["client"], "vscode");
+    assert!(repo.path().join(".vscode/mcp.json").is_file());
+    assert!(
+        repo.path()
+            .join(".github/copilot-instructions.md")
+            .is_file()
+    );
+    let vscode: Value =
+        serde_json::from_slice(&fs::read(repo.path().join(".vscode/mcp.json")).unwrap()).unwrap();
+    assert!(vscode["inputs"].is_array());
+    assert_eq!(vscode["servers"]["existing"]["command"], "node");
+    assert_eq!(vscode["servers"]["callsieve"]["type"], "stdio");
+    assert_eq!(vscode["servers"]["callsieve"]["args"][0], "mcp");
+    assert!(
+        !fs::read_to_string(repo.path().join(".github/copilot-instructions.md"))
+            .unwrap()
+            .contains(root)
+    );
+
+    let repo = tempfile::tempdir().unwrap();
+    let root = repo.path().to_str().unwrap();
+    let setup = json(&run(&["agent-setup", root, "--client", "windsurf"]));
+    assert_eq!(setup["client"], "windsurf");
+    assert!(repo.path().join(".windsurf/rules/callsieve.md").is_file());
+    assert!(
+        repo.path()
+            .join(".callsieve/integrations/windsurf-mcp.json")
+            .is_file()
+    );
+
+    let repo = tempfile::tempdir().unwrap();
+    let root = repo.path().to_str().unwrap();
+    let setup = json(&run(&["agent-setup", root, "--client", "continue"]));
+    assert_eq!(setup["client"], "continue");
+    let continue_yaml =
+        fs::read_to_string(repo.path().join(".continue/mcpServers/callsieve.yaml")).unwrap();
+    assert!(continue_yaml.contains("schema: v1"));
+    assert!(continue_yaml.contains("mcpServers:"));
+    assert!(continue_yaml.contains("      - \"mcp\""));
+    assert!(repo.path().join(".continue/rules/callsieve.md").is_file());
+
+    let repo = tempfile::tempdir().unwrap();
+    write(
+        repo.path().join(".junie/mcp/mcp.json"),
+        r#"{"mcpServers":{"Existing":{"command":"node"}},"custom":true}"#,
+    );
+    let root = repo.path().to_str().unwrap();
+    let setup = json(&run(&["agent-setup", root, "--client", "junie", "--force"]));
+    assert_eq!(setup["client"], "junie");
+    let junie: Value =
+        serde_json::from_slice(&fs::read(repo.path().join(".junie/mcp/mcp.json")).unwrap())
+            .unwrap();
+    assert_eq!(junie["custom"], true);
+    assert_eq!(junie["mcpServers"]["Existing"]["command"], "node");
+    assert_eq!(junie["mcpServers"]["callsieve"]["args"][0], "mcp");
+    assert!(repo.path().join(".junie/guidelines.md").is_file());
+    assert!(
+        !fs::read_to_string(repo.path().join(".junie/guidelines.md"))
+            .unwrap()
+            .contains(root)
+    );
+
+    let repo = tempfile::tempdir().unwrap();
+    let root = repo.path().to_str().unwrap();
+    let setup = json(&run(&["agent-setup", root, "--client", "jetbrains"]));
+    assert_eq!(setup["client"], "jetbrains");
+    assert!(
+        repo.path()
+            .join(".callsieve/integrations/jetbrains-mcp.json")
+            .is_file()
+    );
+    assert!(
+        setup["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| warning.as_str().unwrap().contains("--client junie"))
+    );
+
+    let repo = tempfile::tempdir().unwrap();
+    write(
+        repo.path().join(".agents/skills/existing/SKILL.md"),
+        "# Existing Skill\n",
+    );
+    let root = repo.path().to_str().unwrap();
+    let setup = json(&run(&["agent-setup", root, "--client", "amp"]));
+    assert_eq!(setup["client"], "amp");
+    assert!(
+        repo.path()
+            .join(".agents/skills/callsieve-context/SKILL.md")
+            .is_file()
+    );
+    assert!(
+        repo.path()
+            .join(".agents/skills/callsieve-context/mcp.json")
+            .is_file()
+    );
+    assert!(
+        repo.path()
+            .join(".agents/skills/existing/SKILL.md")
+            .is_file()
+    );
+
+    let repo = tempfile::tempdir().unwrap();
+    let root = repo.path().to_str().unwrap();
+    let setup = json(&run(&["agent-setup", root, "--client", "goose"]));
+    assert_eq!(setup["client"], "goose");
+    assert!(
+        repo.path()
+            .join(".callsieve/integrations/goose-config.yaml")
+            .is_file()
+    );
+    assert!(
+        repo.path()
+            .join(".callsieve/integrations/goose-deeplink.txt")
+            .is_file()
+    );
+
+    let repo = tempfile::tempdir().unwrap();
+    let root = repo.path().to_str().unwrap();
+    let setup = json(&run(&["agent-setup", root, "--client", "warp"]));
+    assert_eq!(setup["client"], "warp");
+    assert!(
+        repo.path()
+            .join(".callsieve/integrations/warp-mcp.json")
+            .is_file()
+    );
+    assert!(
+        repo.path()
+            .join(".callsieve/integrations/warp-agent.yaml")
+            .is_file()
+    );
+    assert!(
+        setup["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| warning.as_str().unwrap().contains("template-only"))
+    );
+}
+
+#[test]
+fn zed_setup_merges_valid_settings_and_preserves_invalid_settings() {
+    let repo = tempfile::tempdir().unwrap();
+    write(
+        repo.path().join(".zed/settings.json"),
+        r#"{"theme":"One Dark","context_servers":{"existing":{"command":"node"}}}"#,
+    );
+    let root = repo.path().to_str().unwrap();
+    let setup = json(&run(&["agent-setup", root, "--client", "zed", "--force"]));
+    assert_eq!(setup["client"], "zed");
+    let settings: Value =
+        serde_json::from_slice(&fs::read(repo.path().join(".zed/settings.json")).unwrap()).unwrap();
+    assert_eq!(settings["theme"], "One Dark");
+    assert_eq!(settings["context_servers"]["existing"]["command"], "node");
+    assert_eq!(settings["context_servers"]["callsieve"]["args"][0], "mcp");
+    assert!(
+        !repo
+            .path()
+            .join(".callsieve/integrations/zed-settings.json")
+            .is_file()
+    );
+
+    let repo = tempfile::tempdir().unwrap();
+    let invalid = "{\n  // JSONC is not overwritten\n  \"theme\": \"One Dark\"\n}\n";
+    write(repo.path().join(".zed/settings.json"), invalid);
+    let root = repo.path().to_str().unwrap();
+    let setup = json(&run(&["agent-setup", root, "--client", "zed"]));
+    assert_eq!(setup["client"], "zed");
+    assert_eq!(
+        fs::read_to_string(repo.path().join(".zed/settings.json")).unwrap(),
+        invalid
+    );
+    assert!(
+        repo.path()
+            .join(".callsieve/integrations/zed-settings.json")
+            .is_file()
+    );
+    assert!(
+        setup["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| warning.as_str().unwrap().contains("not mergeable JSON"))
+    );
+}
+
+#[test]
 fn mcp_config_prints_portable_json_and_toml() {
     let repo = tempfile::tempdir().unwrap();
     let root = repo.path().to_str().unwrap();
@@ -3641,6 +3957,30 @@ fn mcp_config_prints_portable_json_and_toml() {
             .unwrap()
             .contains("[mcp_servers.callsieve]")
     );
+}
+
+#[test]
+fn mcp_registry_manifest_prints_and_writes_server_descriptor() {
+    let manifest = json(&run(&["mcp-registry-manifest"]));
+    assert_eq!(manifest["name"], "io.github.philipjohnbasile/callsieve");
+    assert_eq!(manifest["title"], "CallSieve");
+    assert_eq!(manifest["packages"][0]["transport"]["type"], "stdio");
+    assert_eq!(manifest["packages"][0]["transport"]["args"][0], "mcp");
+    assert_eq!(
+        manifest["_meta"]["io.modelcontextprotocol.registry/publisher-provided"]["publishing"],
+        "descriptor only; this command does not contact the network or publish"
+    );
+
+    let repo = tempfile::tempdir().unwrap();
+    let out = repo.path().join("server.json");
+    let written = json(&run(&[
+        "mcp-registry-manifest",
+        "--out",
+        out.to_str().unwrap(),
+    ]));
+    assert!(out.is_file());
+    let saved: Value = serde_json::from_slice(&fs::read(out).unwrap()).unwrap();
+    assert_eq!(saved, written);
 }
 
 #[test]
@@ -3841,6 +4181,671 @@ fn hook_install_doctor_and_uninstall_manage_repo_local_launchers() {
     assert_eq!(uninstall["command"], "hook uninstall");
     assert!(!repo.path().join(".callsieve/agent-launch.ps1").is_file());
     assert!(!repo.path().join(".callsieve/agent-launch.sh").is_file());
+}
+
+#[test]
+fn codex_hooks_install_doctor_and_uninstall_manage_lifecycle_hooks() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+
+    let install = json(&run(&[
+        "codex-hooks",
+        "install",
+        root,
+        "--strict",
+        "--force",
+        "--limit",
+        "6",
+        "--snippets-per-file",
+        "1",
+    ]));
+    assert_eq!(install["command"], "codex-hooks install");
+    assert_eq!(install["status"], "pass");
+    assert!(repo.path().join(".codex/hooks.json").is_file());
+    assert!(repo.path().join(".callsieve/codex-hooks").is_dir());
+
+    let hooks: Value =
+        serde_json::from_str(&fs::read_to_string(repo.path().join(".codex/hooks.json")).unwrap())
+            .unwrap();
+    for event in [
+        "UserPromptSubmit",
+        "PreToolUse",
+        "PostToolUse",
+        "PermissionRequest",
+        "Stop",
+    ] {
+        assert!(
+            hooks["hooks"][event].as_array().is_some(),
+            "{event} hook should be installed"
+        );
+    }
+    let hooks_text = fs::read_to_string(repo.path().join(".codex/hooks.json")).unwrap();
+    assert!(hooks_text.contains("commandWindows"));
+    assert!(hooks_text.contains("codex-hook"));
+    assert!(hooks_text.contains("--strict"));
+
+    let doctor = json(&run(&["codex-hooks", "doctor", root, "--strict"]));
+    assert_eq!(doctor["status"], "pass");
+    assert!(
+        doctor["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(
+                |check| check["check"] == "codex_hook_command_windows" && check["status"] == "pass"
+            )
+    );
+
+    let uninstall = json(&run(&["codex-hooks", "uninstall", root]));
+    assert_eq!(uninstall["status"], "pass");
+    assert!(!repo.path().join(".codex/hooks.json").is_file());
+}
+
+#[test]
+fn codex_hook_user_prompt_submit_injects_callsieve_context() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+    json(&run(&["index", root]));
+
+    let input = r#"{
+  "session_id": "hook-session",
+  "turn_id": "turn-1",
+  "prompt": "change createSession token handling"
+}"#;
+    let output = json(&run_with_stdin(
+        &[
+            "codex-hook",
+            "user-prompt-submit",
+            root,
+            "--strict",
+            "--limit",
+            "6",
+            "--snippets-per-file",
+            "1",
+        ],
+        input,
+    ));
+
+    let context = output["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap();
+    assert!(context.contains("CallSieve hook context injected"));
+    assert!(context.contains("src/auth/session.ts"));
+    assert!(
+        repo.path()
+            .join(".callsieve/codex-hooks/hook-session.trace.json")
+            .is_file()
+    );
+}
+
+#[test]
+fn codex_pre_tool_hook_blocks_broad_search_before_context() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+
+    let input = r#"{
+  "session_id": "pre-deny",
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Bash",
+  "tool_input": { "command": "rg createSession" }
+}"#;
+    let output = json(&run_with_stdin(
+        &["codex-hook", "pre-tool-use", root, "--strict"],
+        input,
+    ));
+
+    assert_eq!(output["hookSpecificOutput"]["permissionDecision"], "deny");
+    assert!(
+        output["hookSpecificOutput"]["permissionDecisionReason"]
+            .as_str()
+            .unwrap()
+            .contains("broad repository search")
+    );
+}
+
+#[test]
+fn codex_pre_tool_hook_allows_callsieve_context_command() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+
+    let input = format!(
+        r#"{{
+  "session_id": "pre-allow",
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Bash",
+  "tool_input": {{ "command": "callsieve agent-context {} \"change auth\"" }}
+}}"#,
+        root.replace('\\', "\\\\")
+    );
+    let output = json(&run_with_stdin(
+        &["codex-hook", "pre-tool-use", root, "--strict"],
+        &input,
+    ));
+
+    assert_eq!(output["hookSpecificOutput"]["permissionDecision"], "allow");
+}
+
+#[test]
+fn codex_pre_tool_hook_strict_blocks_file_reads_but_allows_policy_reads() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+
+    let denied = json(&run_with_stdin(
+        &["codex-hook", "pre-tool-use", root, "--strict"],
+        r#"{
+  "session_id": "strict-read-deny",
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Bash",
+  "tool_input": { "command": "Get-Content src\\auth\\session.ts" }
+}"#,
+    ));
+    assert_eq!(denied["hookSpecificOutput"]["permissionDecision"], "deny");
+
+    let allowed = json(&run_with_stdin(
+        &["codex-hook", "pre-tool-use", root, "--strict"],
+        r#"{
+  "session_id": "strict-read-allow",
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Bash",
+  "tool_input": { "command": "Get-Content AGENTS.md" }
+}"#,
+    ));
+    assert_eq!(allowed["hookSpecificOutput"]["permissionDecision"], "allow");
+}
+
+#[test]
+fn codex_stop_hook_blocks_once_after_strict_violation() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+
+    let violation = r#"{
+  "session_id": "stop-after-violation",
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Bash",
+  "tool_input": { "command": "rg createSession" }
+}"#;
+    let pre = json(&run_with_stdin(
+        &["codex-hook", "pre-tool-use", root, "--strict"],
+        violation,
+    ));
+    assert_eq!(pre["hookSpecificOutput"]["permissionDecision"], "deny");
+
+    let stop_input = r#"{
+  "session_id": "stop-after-violation",
+  "hook_event_name": "Stop",
+  "stop_hook_active": false
+}"#;
+    let first = json(&run_with_stdin(
+        &["codex-hook", "stop", root, "--strict"],
+        stop_input,
+    ));
+    assert_eq!(first["decision"], "block");
+
+    let second = json(&run_with_stdin(
+        &["codex-hook", "stop", root, "--strict"],
+        stop_input,
+    ));
+    assert!(second.get("decision").is_none());
+}
+
+#[test]
+fn codex_hook_install_and_enforce_require_lifecycle_hooks() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+
+    let install = json(&run(&[
+        "hook", "install", root, "--client", "codex", "--strict", "--force",
+    ]));
+    assert_eq!(install["status"], "pass");
+    assert!(
+        install["codex_hooks"]["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|file| file.as_str().unwrap().contains(".codex"))
+    );
+    assert!(repo.path().join(".codex/hooks.json").is_file());
+
+    let enforce = json(&run(&["enforce", root, "--client", "codex", "--strict"]));
+    assert_eq!(enforce["status"], "pass");
+    assert!(
+        enforce["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|check| { check["check"] == "codex_hooks" && check["status"] == "pass" })
+    );
+
+    fs::remove_file(repo.path().join(".codex/hooks.json")).unwrap();
+    let failed = json(&run(&["enforce", root, "--client", "codex", "--strict"]));
+    assert_eq!(failed["status"], "fail");
+    assert!(
+        failed["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|check| { check["check"] == "codex_hooks" && check["status"] == "fail" })
+    );
+}
+
+#[test]
+fn claude_hooks_install_doctor_and_uninstall_manage_lifecycle_hooks() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+
+    write(
+        repo.path().join(".claude/settings.local.json"),
+        r#"{
+  "permissions": {
+    "allow": ["Bash(git status)"]
+  }
+}"#,
+    );
+
+    let install = json(&run(&[
+        "claude-hooks",
+        "install",
+        root,
+        "--strict",
+        "--force",
+        "--limit",
+        "6",
+        "--snippets-per-file",
+        "1",
+    ]));
+    assert_eq!(install["command"], "claude-hooks install");
+    assert_eq!(install["status"], "pass");
+    assert!(repo.path().join(".claude/settings.local.json").is_file());
+    assert!(repo.path().join(".callsieve/claude-hooks").is_dir());
+
+    let settings_text =
+        fs::read_to_string(repo.path().join(".claude/settings.local.json")).unwrap();
+    assert!(settings_text.contains("claude-hook"));
+    assert!(settings_text.contains("\"args\""));
+    assert!(settings_text.contains("--strict"));
+    assert!(settings_text.contains("Bash(git status)"));
+    let settings: Value = serde_json::from_str(&settings_text).unwrap();
+    for event in [
+        "UserPromptSubmit",
+        "PreToolUse",
+        "PostToolUse",
+        "PermissionRequest",
+        "Stop",
+    ] {
+        assert!(
+            settings["hooks"][event].as_array().is_some(),
+            "{event} hook should be installed"
+        );
+    }
+
+    let doctor = json(&run(&["claude-hooks", "doctor", root, "--strict"]));
+    assert_eq!(doctor["status"], "pass");
+    assert!(
+        doctor["checks"].as_array().unwrap().iter().any(|check| {
+            check["check"] == "claude_hook_exec_form" && check["status"] == "pass"
+        })
+    );
+
+    let uninstall = json(&run(&["claude-hooks", "uninstall", root]));
+    assert_eq!(uninstall["status"], "pass");
+    let remaining_text =
+        fs::read_to_string(repo.path().join(".claude/settings.local.json")).unwrap();
+    assert!(!remaining_text.contains("claude-hook"));
+    assert!(remaining_text.contains("Bash(git status)"));
+}
+
+#[test]
+fn claude_hook_user_prompt_submit_injects_callsieve_context() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+    json(&run(&["index", root]));
+
+    let input = r#"{
+  "session_id": "claude-hook-session",
+  "turn_id": "turn-1",
+  "prompt": "change createSession token handling"
+}"#;
+    let output = json(&run_with_stdin(
+        &[
+            "claude-hook",
+            "user-prompt-submit",
+            root,
+            "--strict",
+            "--limit",
+            "6",
+            "--snippets-per-file",
+            "1",
+        ],
+        input,
+    ));
+
+    let context = output["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap();
+    assert!(context.contains("CallSieve Claude hook context injected"));
+    assert!(context.contains("src/auth/session.ts"));
+    assert!(
+        repo.path()
+            .join(".callsieve/claude-hooks/claude-hook-session.trace.json")
+            .is_file()
+    );
+}
+
+#[test]
+fn claude_pre_tool_hook_blocks_broad_search_before_context() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+
+    let bash = json(&run_with_stdin(
+        &["claude-hook", "pre-tool-use", root, "--strict"],
+        r#"{
+  "session_id": "claude-pre-deny",
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Bash",
+  "tool_input": { "command": "rg createSession" }
+}"#,
+    ));
+    assert_eq!(bash["hookSpecificOutput"]["permissionDecision"], "deny");
+
+    let grep = json(&run_with_stdin(
+        &["claude-hook", "pre-tool-use", root, "--strict"],
+        r#"{
+  "session_id": "claude-grep-deny",
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Grep",
+  "tool_input": { "pattern": "createSession", "path": "src" }
+}"#,
+    ));
+    assert_eq!(grep["hookSpecificOutput"]["permissionDecision"], "deny");
+}
+
+#[test]
+fn claude_permission_request_uses_claude_decision_shape() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+
+    let output = json(&run_with_stdin(
+        &["claude-hook", "permission-request", root, "--strict"],
+        r#"{
+  "session_id": "claude-permission-deny",
+  "hook_event_name": "PermissionRequest",
+  "tool_name": "Bash",
+  "tool_input": { "command": "rg createSession" }
+}"#,
+    ));
+
+    assert_eq!(output["hookSpecificOutput"]["decision"]["behavior"], "deny");
+    assert!(
+        output["hookSpecificOutput"]["decision"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("broad repository search")
+    );
+}
+
+#[test]
+fn claude_hook_install_enforce_and_uninstall_cover_hook_shim_and_mcp() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+
+    let install = json(&run(&[
+        "hook", "install", root, "--client", "claude", "--strict", "--force",
+    ]));
+    assert_eq!(install["status"], "pass");
+    assert!(repo.path().join(".mcp.json").is_file());
+    assert!(repo.path().join("CLAUDE.md").is_file());
+    assert!(repo.path().join(".claude/settings.local.json").is_file());
+    assert!(repo.path().join(".callsieve/bin").is_dir());
+    assert!(
+        install["claude_hooks"]["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|file| file.as_str().unwrap().contains(".claude"))
+    );
+
+    let enforce = json(&run(&["enforce", root, "--client", "claude", "--strict"]));
+    assert_eq!(enforce["status"], "pass");
+    assert!(
+        enforce["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|check| { check["check"] == "claude_hooks" && check["status"] == "pass" })
+    );
+
+    let uninstall = json(&run(&["hook", "uninstall", root]));
+    assert_eq!(uninstall["command"], "hook uninstall");
+    assert!(!repo.path().join(".claude/settings.local.json").is_file());
+    assert!(!repo.path().join(".callsieve/agent-launch.ps1").is_file());
+}
+
+#[test]
+fn new_client_hook_install_enforce_and_uninstall_cover_required_surfaces() {
+    for (client, hook_file, hook_check) in [
+        ("copilot", ".github/hooks/callsieve.json", "copilot_hooks"),
+        (
+            "opencode",
+            ".opencode/plugins/callsieve.js",
+            "opencode_hooks",
+        ),
+        ("antigravity", ".agents/hooks.json", "antigravity_hooks"),
+        ("cline", ".cline/hooks/callsieve.json", "cline_hooks"),
+    ] {
+        let repo = fixture_repo();
+        let root = repo.path().to_str().unwrap();
+
+        let install = json(&run(&[
+            "hook", "install", root, "--client", client, "--strict", "--force",
+        ]));
+        assert_eq!(install["status"], "pass", "{client}");
+        assert!(
+            install["client_hooks"]["files"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|file| file.as_str().unwrap().contains(hook_file))
+        );
+        assert!(repo.path().join(hook_file).is_file(), "{client}");
+        assert!(
+            repo.path()
+                .join(format!(".callsieve/{client}-hooks"))
+                .is_dir(),
+            "{client}"
+        );
+
+        let enforce = json(&run(&["enforce", root, "--client", client, "--strict"]));
+        assert_eq!(
+            enforce["status"],
+            "pass",
+            "{client}: {}",
+            serde_json::to_string_pretty(&enforce).unwrap()
+        );
+        assert!(
+            enforce["checks"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|check| check["check"] == hook_check && check["status"] == "pass")
+        );
+
+        fs::remove_file(repo.path().join(hook_file)).unwrap();
+        let failed = json(&run(&["enforce", root, "--client", client, "--strict"]));
+        assert_eq!(failed["status"], "fail", "{client}");
+        assert!(
+            failed["checks"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|check| check["check"] == hook_check && check["status"] == "fail")
+        );
+
+        let uninstall = json(&run(&["hook", "uninstall", root]));
+        assert_eq!(uninstall["command"], "hook uninstall");
+        assert!(!repo.path().join(".callsieve/agent-launch.ps1").is_file());
+    }
+}
+
+#[test]
+fn new_client_hook_handlers_inject_context_block_search_and_trace() {
+    for client in ["copilot", "opencode", "antigravity", "cline"] {
+        let repo = fixture_repo();
+        let root = repo.path().to_str().unwrap();
+        json(&run(&["index", root]));
+
+        let session_id = format!("{client}-hook-session");
+        let prompt_input = format!(
+            r#"{{
+  "session_id": "{session_id}",
+  "turn_id": "turn-1",
+  "prompt": "change createSession token handling"
+}}"#
+        );
+        let prompt = json(&run_with_stdin(
+            &[
+                &format!("{client}-hook"),
+                "user-prompt-submit",
+                root,
+                "--strict",
+                "--limit",
+                "6",
+                "--snippets-per-file",
+                "1",
+            ],
+            &prompt_input,
+        ));
+        let context = prompt["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap();
+        assert!(context.contains("CallSieve"), "{client}");
+        assert!(context.contains("src/auth/session.ts"), "{client}");
+        assert!(
+            repo.path()
+                .join(format!(".callsieve/{client}-hooks/{session_id}.trace.json"))
+                .is_file(),
+            "{client}"
+        );
+
+        let deny_input = format!(
+            r#"{{
+  "session_id": "{client}-deny",
+  "hook_event_name": "PreToolUse",
+  "tool_name": "grep_search",
+  "tool_input": {{ "pattern": "createSession", "path": "src" }}
+}}"#
+        );
+        let denied = json(&run_with_stdin(
+            &[&format!("{client}-hook"), "pre-tool-use", root, "--strict"],
+            &deny_input,
+        ));
+        assert_eq!(
+            denied["hookSpecificOutput"]["permissionDecision"], "deny",
+            "{client}"
+        );
+
+        let allowed_input = format!(
+            r#"{{
+  "session_id": "{client}-allow",
+  "hook_event_name": "PreToolUse",
+  "tool_name": "read_file",
+  "tool_input": {{ "path": "AGENTS.md" }}
+}}"#
+        );
+        let allowed = json(&run_with_stdin(
+            &[&format!("{client}-hook"), "pre-tool-use", root, "--strict"],
+            &allowed_input,
+        ));
+        assert_eq!(
+            allowed["hookSpecificOutput"]["permissionDecision"], "allow",
+            "{client}"
+        );
+    }
+}
+
+#[test]
+fn cursor_and_zoo_strict_do_not_require_lifecycle_hooks() {
+    for (client, forbidden_check) in [("cursor", "cursor_hooks"), ("zoo", "zoo_hooks")] {
+        let repo = fixture_repo();
+        let root = repo.path().to_str().unwrap();
+        let install = json(&run(&[
+            "hook", "install", root, "--client", client, "--strict", "--force",
+        ]));
+        assert_eq!(install["status"], "pass", "{client}");
+        assert!(install.get("client_hooks").is_none(), "{client}");
+
+        let enforce = json(&run(&["enforce", root, "--client", client, "--strict"]));
+        assert_eq!(
+            enforce["status"],
+            "pass",
+            "{client}: {}",
+            serde_json::to_string_pretty(&enforce).unwrap()
+        );
+        assert!(
+            !enforce["checks"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|check| check["check"] == forbidden_check)
+        );
+    }
+}
+
+#[test]
+fn next_clients_strict_require_setup_index_and_shims_but_not_lifecycle_hooks() {
+    for (client, required_file) in [
+        ("vscode", ".vscode/mcp.json"),
+        ("windsurf", ".callsieve/integrations/windsurf-mcp.json"),
+        ("continue", ".continue/mcpServers/callsieve.yaml"),
+        ("zed", ".zed/settings.json"),
+        ("junie", ".junie/mcp/mcp.json"),
+        ("jetbrains", ".callsieve/integrations/jetbrains-mcp.json"),
+        ("amp", ".agents/skills/callsieve-context/SKILL.md"),
+        ("goose", ".callsieve/integrations/goose-config.yaml"),
+        ("warp", ".callsieve/integrations/warp-mcp.json"),
+    ] {
+        let repo = fixture_repo();
+        let root = repo.path().to_str().unwrap();
+        let install = json(&run(&[
+            "hook", "install", root, "--client", client, "--strict", "--force",
+        ]));
+        assert_eq!(install["status"], "pass", "{client}");
+        assert!(install.get("client_hooks").is_none(), "{client}");
+        assert!(install.get("codex_hooks").is_none(), "{client}");
+        assert!(install.get("claude_hooks").is_none(), "{client}");
+        assert!(repo.path().join(required_file).is_file(), "{client}");
+
+        let enforce = json(&run(&["enforce", root, "--client", client, "--strict"]));
+        assert_eq!(
+            enforce["status"],
+            "pass",
+            "{client}: {}",
+            serde_json::to_string_pretty(&enforce).unwrap()
+        );
+        assert!(
+            !enforce["checks"].as_array().unwrap().iter().any(|check| {
+                check["check"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .ends_with("_hooks")
+            }),
+            "{client}"
+        );
+
+        fs::remove_file(repo.path().join(required_file)).unwrap();
+        let failed = json(&run(&["enforce", root, "--client", client, "--strict"]));
+        assert_eq!(failed["status"], "fail", "{client}");
+        assert!(
+            failed["checks"].as_array().unwrap().iter().any(|check| {
+                check["check"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .ends_with(required_file)
+                    && check["status"] == "fail"
+            }),
+            "{client}: {}",
+            serde_json::to_string_pretty(&failed).unwrap()
+        );
+    }
 }
 
 #[test]

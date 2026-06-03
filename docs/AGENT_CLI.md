@@ -4,7 +4,7 @@ This document is for AI coding agents, AI CLIs, wrappers, and schedulers that ru
 
 CallSieve is the local codebase context layer. Its job is to select the right files, symbols, snippets, tests, and blast-radius hints before an agent spends tokens on broad search or repeated file reads.
 
-Humans installing CallSieve or adding it to Codex, Claude, Cursor, Cline, Roo, Gemini CLI, Kimi CLI, or another tool should start with [INSTALL.md](INSTALL.md).
+Humans installing CallSieve or adding it to Codex, Claude Code, GitHub Copilot, OpenCode, Antigravity CLI, Cursor, VS Code, Windsurf, Continue, Zed, Junie, JetBrains AI Assistant, Amp, Goose, Warp, Cline, Zoo Code, the deprecated Roo alias, or another stdio MCP tool should start with [INSTALL.md](INSTALL.md).
 
 ## Core Contract
 
@@ -44,6 +44,8 @@ Do not start with `rg`, `grep`, `find`, `Get-Content`, `cat`, `sed`, `nl`, `read
 
 Use the simplest available interface:
 
+- Lifecycle hooks or plugins available for Codex, Claude Code, GitHub Copilot, OpenCode, Antigravity CLI, or Cline: rely on injected CallSieve context and hook blocking before broad search.
+- MCP/rules/template setup available for Cursor, VS Code, Windsurf, Continue, Zed, Junie, JetBrains AI Assistant, Amp, Goose, Warp, or Zoo: rely on generated setup plus strict shims, not lifecycle hooks.
 - Hook launcher available: start the agent through `.callsieve/agent-launch.ps1` or `.callsieve/agent-launch.sh` so repo-local shims and daemon startup apply only to that process.
 - MCP client available: call `callsieve_context` first.
 - Plain AI CLI available: run `callsieve agent-context`.
@@ -173,11 +175,24 @@ Safe local repair commands:
 
 ```bash
 callsieve index <repo> --lsp
+callsieve codex-hooks install <repo> --strict --force
+callsieve codex-hooks doctor <repo> --strict
+callsieve claude-hooks install <repo> --strict --force
+callsieve claude-hooks doctor <repo> --strict
+callsieve copilot-hooks install <repo> --strict --force
+callsieve copilot-hooks doctor <repo> --strict
+callsieve opencode-hooks install <repo> --strict --force
+callsieve opencode-hooks doctor <repo> --strict
+callsieve antigravity-hooks install <repo> --strict --force
+callsieve antigravity-hooks doctor <repo> --strict
+callsieve cline-hooks install <repo> --strict --force
+callsieve cline-hooks doctor <repo> --strict
 callsieve hook install <repo> --client generic --strict --force --lsp
 callsieve hook doctor <repo>
 callsieve doctor <repo> --client generic --fix --strict
 callsieve mcp-config <repo> --format json
 callsieve mcp-config <repo> --format toml
+callsieve mcp-registry-manifest --out server.json
 callsieve proof-rehearsal --preflight
 callsieve proof-rehearsal --fix --resume
 ```
@@ -249,7 +264,7 @@ CallSieve reports two different kinds of savings evidence.
 `context_payload_reduction`:
 
 - Platform-neutral proxy.
-- Works across Codex, Claude, Gemini, Kimi, Cursor, Cline, Roo, and local agents.
+- Works across Codex, Claude Code, GitHub Copilot, OpenCode, Antigravity CLI, Cursor, VS Code, Windsurf, Continue, Zed, Junie, JetBrains AI Assistant, Amp, Goose, Warp, Cline, Zoo Code, the deprecated Roo alias, generic stdio MCP tools, and local agents.
 - Estimates the repo context payload avoided versus deterministic grep/read replay.
 - Good wording: "estimated context payload reduction."
 - Bad wording: "observed session token savings."
@@ -291,6 +306,7 @@ If an MCP client needs config:
 ```bash
 callsieve mcp-config <repo> --format json
 callsieve mcp-config <repo> --format toml
+callsieve mcp-registry-manifest --out server.json
 ```
 
 If `proof-rehearsal --preflight` fails:

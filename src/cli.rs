@@ -1,7 +1,8 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     env, fs,
-    io::Write,
+    io::{Read, Write},
+    net::TcpStream,
     path::{Path, PathBuf},
     process::{Command as ProcessCommand, Stdio},
     thread,
@@ -603,6 +604,36 @@ pub enum Command {
         baseline_line_limit: usize,
     },
 
+    /// Collect audited local LM Studio paired sessions for pending pilot tasks.
+    #[command(name = "pilot-collect-lm-studio")]
+    PilotCollectLmStudio {
+        manifest: PathBuf,
+
+        #[arg(long, default_value = "qwen3-coder-next")]
+        model: String,
+
+        #[arg(long = "base-url", default_value = "http://127.0.0.1:1234/v1")]
+        base_url: String,
+
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
+
+        #[arg(long = "context-limit", default_value_t = 24)]
+        context_limit: usize,
+
+        #[arg(long, default_value_t = 2)]
+        snippets_per_file: usize,
+
+        #[arg(long = "baseline-file-limit", default_value_t = 48)]
+        baseline_file_limit: usize,
+
+        #[arg(long = "baseline-line-limit", default_value_t = 240)]
+        baseline_line_limit: usize,
+
+        #[arg(long = "max-tokens", default_value_t = 512)]
+        max_tokens: usize,
+    },
+
     /// Validate paired observed pilot evidence before final proof generation.
     PilotQa { manifest: PathBuf },
 
@@ -704,6 +735,13 @@ pub enum Command {
 
         #[arg(long, value_enum, default_value_t = McpConfigFormat::Json)]
         format: McpConfigFormat,
+    },
+
+    /// Print or write a local-first MCP Registry server.json descriptor.
+    #[command(name = "mcp-registry-manifest")]
+    McpRegistryManifest {
+        #[arg(long)]
+        out: Option<PathBuf>,
     },
 
     /// Show index freshness, watch, schema, and LSP-enrichment status.
@@ -812,6 +850,90 @@ pub enum Command {
 
         #[arg(long)]
         force: bool,
+    },
+
+    /// Install, inspect, or remove Codex lifecycle hooks.
+    #[command(name = "codex-hooks")]
+    CodexHooks {
+        #[command(subcommand)]
+        command: CodexHooksCommand,
+    },
+
+    /// Internal Codex lifecycle hook entrypoints.
+    #[command(name = "codex-hook", hide = true)]
+    CodexHook {
+        #[command(subcommand)]
+        command: CodexHookCommand,
+    },
+
+    /// Install, inspect, or remove Claude Code lifecycle hooks.
+    #[command(name = "claude-hooks")]
+    ClaudeHooks {
+        #[command(subcommand)]
+        command: ClaudeHooksCommand,
+    },
+
+    /// Internal Claude Code lifecycle hook entrypoints.
+    #[command(name = "claude-hook", hide = true)]
+    ClaudeHook {
+        #[command(subcommand)]
+        command: ClaudeHookCommand,
+    },
+
+    /// Install, inspect, or remove GitHub Copilot lifecycle hooks.
+    #[command(name = "copilot-hooks")]
+    CopilotHooks {
+        #[command(subcommand)]
+        command: ClientHooksCommand,
+    },
+
+    /// Internal GitHub Copilot lifecycle hook entrypoints.
+    #[command(name = "copilot-hook", hide = true)]
+    CopilotHook {
+        #[command(subcommand)]
+        command: ClientHookCommand,
+    },
+
+    /// Install, inspect, or remove OpenCode plugin hooks.
+    #[command(name = "opencode-hooks")]
+    OpenCodeHooks {
+        #[command(subcommand)]
+        command: ClientHooksCommand,
+    },
+
+    /// Internal OpenCode plugin hook entrypoints.
+    #[command(name = "opencode-hook", hide = true)]
+    OpenCodeHook {
+        #[command(subcommand)]
+        command: ClientHookCommand,
+    },
+
+    /// Install, inspect, or remove Antigravity CLI lifecycle hooks.
+    #[command(name = "antigravity-hooks")]
+    AntigravityHooks {
+        #[command(subcommand)]
+        command: ClientHooksCommand,
+    },
+
+    /// Internal Antigravity CLI lifecycle hook entrypoints.
+    #[command(name = "antigravity-hook", hide = true)]
+    AntigravityHook {
+        #[command(subcommand)]
+        command: ClientHookCommand,
+    },
+
+    /// Install, inspect, or remove Cline lifecycle hooks.
+    #[command(name = "cline-hooks")]
+    ClineHooks {
+        #[command(subcommand)]
+        command: ClientHooksCommand,
+    },
+
+    /// Internal Cline lifecycle hook entrypoints.
+    #[command(name = "cline-hook", hide = true)]
+    ClineHook {
+        #[command(subcommand)]
+        command: ClientHookCommand,
     },
 
     /// Generate project-local editor hooks that start the CallSieve daemon.
@@ -997,6 +1119,267 @@ pub enum HookCommand {
     Uninstall { path: PathBuf },
 }
 
+#[derive(Debug, Subcommand)]
+pub enum CodexHooksCommand {
+    /// Install repo-local Codex lifecycle hooks.
+    Install {
+        path: PathBuf,
+
+        #[arg(long)]
+        strict: bool,
+
+        #[arg(long)]
+        force: bool,
+
+        #[arg(long, default_value_t = 6)]
+        limit: usize,
+
+        #[arg(long, default_value_t = 1)]
+        snippets_per_file: usize,
+
+        #[arg(long)]
+        lsp: bool,
+    },
+
+    /// Verify repo-local Codex lifecycle hooks.
+    Doctor {
+        path: PathBuf,
+
+        #[arg(long)]
+        strict: bool,
+    },
+
+    /// Remove generated repo-local Codex lifecycle hooks.
+    Uninstall { path: PathBuf },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum CodexHookCommand {
+    /// Handle Codex UserPromptSubmit hook JSON from stdin.
+    #[command(name = "user-prompt-submit")]
+    UserPromptSubmit {
+        path: PathBuf,
+
+        #[arg(long)]
+        strict: bool,
+
+        #[arg(long, default_value_t = 6)]
+        limit: usize,
+
+        #[arg(long, default_value_t = 1)]
+        snippets_per_file: usize,
+    },
+
+    /// Handle Codex PreToolUse hook JSON from stdin.
+    #[command(name = "pre-tool-use")]
+    PreToolUse {
+        path: PathBuf,
+
+        #[arg(long)]
+        strict: bool,
+    },
+
+    /// Handle Codex PostToolUse hook JSON from stdin.
+    #[command(name = "post-tool-use")]
+    PostToolUse {
+        path: PathBuf,
+
+        #[arg(long)]
+        strict: bool,
+    },
+
+    /// Handle Codex PermissionRequest hook JSON from stdin.
+    #[command(name = "permission-request")]
+    PermissionRequest {
+        path: PathBuf,
+
+        #[arg(long)]
+        strict: bool,
+    },
+
+    /// Handle Codex Stop hook JSON from stdin.
+    Stop {
+        path: PathBuf,
+
+        #[arg(long)]
+        strict: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ClaudeHooksCommand {
+    /// Install repo-local Claude Code lifecycle hooks.
+    Install {
+        path: PathBuf,
+
+        #[arg(long)]
+        strict: bool,
+
+        #[arg(long)]
+        force: bool,
+
+        #[arg(long, default_value_t = 6)]
+        limit: usize,
+
+        #[arg(long, default_value_t = 1)]
+        snippets_per_file: usize,
+
+        #[arg(long)]
+        lsp: bool,
+    },
+
+    /// Verify repo-local Claude Code lifecycle hooks.
+    Doctor {
+        path: PathBuf,
+
+        #[arg(long)]
+        strict: bool,
+    },
+
+    /// Remove generated repo-local Claude Code lifecycle hooks.
+    Uninstall { path: PathBuf },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ClaudeHookCommand {
+    /// Handle Claude Code UserPromptSubmit hook JSON from stdin.
+    #[command(name = "user-prompt-submit")]
+    UserPromptSubmit {
+        path: PathBuf,
+
+        #[arg(long)]
+        strict: bool,
+
+        #[arg(long, default_value_t = 6)]
+        limit: usize,
+
+        #[arg(long, default_value_t = 1)]
+        snippets_per_file: usize,
+    },
+
+    /// Handle Claude Code PreToolUse hook JSON from stdin.
+    #[command(name = "pre-tool-use")]
+    PreToolUse {
+        path: PathBuf,
+
+        #[arg(long)]
+        strict: bool,
+    },
+
+    /// Handle Claude Code PostToolUse hook JSON from stdin.
+    #[command(name = "post-tool-use")]
+    PostToolUse {
+        path: PathBuf,
+
+        #[arg(long)]
+        strict: bool,
+    },
+
+    /// Handle Claude Code PermissionRequest hook JSON from stdin.
+    #[command(name = "permission-request")]
+    PermissionRequest {
+        path: PathBuf,
+
+        #[arg(long)]
+        strict: bool,
+    },
+
+    /// Handle Claude Code Stop hook JSON from stdin.
+    Stop {
+        path: PathBuf,
+
+        #[arg(long)]
+        strict: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ClientHooksCommand {
+    /// Install repo-local lifecycle hook or plugin files.
+    Install {
+        path: PathBuf,
+
+        #[arg(long)]
+        strict: bool,
+
+        #[arg(long)]
+        force: bool,
+
+        #[arg(long, default_value_t = 6)]
+        limit: usize,
+
+        #[arg(long, default_value_t = 1)]
+        snippets_per_file: usize,
+
+        #[arg(long)]
+        lsp: bool,
+    },
+
+    /// Verify repo-local lifecycle hook or plugin files.
+    Doctor {
+        path: PathBuf,
+
+        #[arg(long)]
+        strict: bool,
+    },
+
+    /// Remove generated repo-local lifecycle hook or plugin files.
+    Uninstall { path: PathBuf },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ClientHookCommand {
+    /// Handle UserPromptSubmit or equivalent prompt hook JSON from stdin.
+    #[command(name = "user-prompt-submit")]
+    UserPromptSubmit {
+        path: PathBuf,
+
+        #[arg(long)]
+        strict: bool,
+
+        #[arg(long, default_value_t = 6)]
+        limit: usize,
+
+        #[arg(long, default_value_t = 1)]
+        snippets_per_file: usize,
+    },
+
+    /// Handle PreToolUse or equivalent pre-tool hook JSON from stdin.
+    #[command(name = "pre-tool-use")]
+    PreToolUse {
+        path: PathBuf,
+
+        #[arg(long)]
+        strict: bool,
+    },
+
+    /// Handle PostToolUse or equivalent post-tool hook JSON from stdin.
+    #[command(name = "post-tool-use")]
+    PostToolUse {
+        path: PathBuf,
+
+        #[arg(long)]
+        strict: bool,
+    },
+
+    /// Handle PermissionRequest or equivalent permission hook JSON from stdin.
+    #[command(name = "permission-request")]
+    PermissionRequest {
+        path: PathBuf,
+
+        #[arg(long)]
+        strict: bool,
+    },
+
+    /// Handle Stop or equivalent session-complete hook JSON from stdin.
+    Stop {
+        path: PathBuf,
+
+        #[arg(long)]
+        strict: bool,
+    },
+}
+
 #[derive(Debug, Clone, Copy, ValueEnum)]
 pub enum ShimTool {
     Rg,
@@ -1065,8 +1448,24 @@ pub enum PilotTaskCommand {
 pub enum AgentClient {
     Codex,
     Claude,
+    Copilot,
+    #[value(name = "opencode")]
+    OpenCode,
+    Antigravity,
     Cursor,
+    #[value(name = "vscode")]
+    Vscode,
+    Windsurf,
+    Continue,
+    Zed,
+    Junie,
+    #[value(name = "jetbrains")]
+    JetBrains,
+    Amp,
+    Goose,
+    Warp,
     Cline,
+    Zoo,
     Roo,
     Generic,
 }
@@ -1103,7 +1502,7 @@ pub enum EditorKind {
     Generic,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 struct IndexOutput {
     command: &'static str,
     root: String,
@@ -1189,6 +1588,8 @@ struct SetupAgentOutput {
     files: Vec<String>,
     first_required_command: String,
     policy: &'static str,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    warnings: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1639,20 +2040,22 @@ struct PilotRunOutput {
 }
 
 #[derive(Debug, Serialize)]
-struct PilotCollectOllamaOutput {
+struct PilotCollectLocalOutput {
     command: &'static str,
     manifest: String,
     model: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    base_url: Option<String>,
     requested_sessions: usize,
     collected_sessions: usize,
     skipped_sessions: usize,
     observed_sessions: usize,
     qa_status: String,
-    sessions: Vec<PilotCollectOllamaSessionOutput>,
+    sessions: Vec<PilotCollectLocalSessionOutput>,
 }
 
 #[derive(Debug, Serialize)]
-struct PilotCollectOllamaSessionOutput {
+struct PilotCollectLocalSessionOutput {
     task_id: String,
     repo: String,
     status: String,
@@ -1696,6 +2099,50 @@ struct OllamaRun {
     response: String,
     prompt_eval_count: usize,
     eval_count: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct LmStudioTranscriptArtifact {
+    schema_version: u32,
+    collection: &'static str,
+    collector: &'static str,
+    task_id: String,
+    phase: String,
+    repo: String,
+    model: String,
+    base_url: String,
+    command: String,
+    files_read: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    context_selected_files: Vec<String>,
+    prompt: String,
+    response: String,
+    token_accounting: LmStudioTokenAccounting,
+    raw_response: serde_json::Value,
+    created_at: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct LmStudioTokenAccounting {
+    source: &'static str,
+    counted_tokens: usize,
+    prompt_tokens: usize,
+    completion_tokens: usize,
+    total_tokens: usize,
+}
+
+struct LmStudioRun {
+    response: String,
+    prompt_tokens: usize,
+    completion_tokens: usize,
+    total_tokens: usize,
+    raw_response: serde_json::Value,
+}
+
+struct HttpEndpoint {
+    host: String,
+    port: u16,
+    path: String,
 }
 
 struct PilotPromptPlan {
@@ -1855,10 +2302,18 @@ struct HookInstallOutput {
     index: IndexOutput,
     setup: SetupAgentOutput,
     shim: ShimOutput,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    codex_hooks: Option<CodexHooksInstallOutput>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    claude_hooks: Option<ClaudeHooksInstallOutput>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    client_hooks: Option<ClientHooksInstallOutput>,
     launchers: Vec<String>,
     first_required_command: String,
     path_instruction: String,
     policy: &'static str,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    warnings: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1867,8 +2322,145 @@ struct HookDoctorOutput {
     status: String,
     root: String,
     checks: Vec<EnforceCheck>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    codex_hooks: Option<CodexHooksDoctorOutput>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    claude_hooks: Option<ClaudeHooksDoctorOutput>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    client_hooks: Vec<ClientHooksDoctorOutput>,
     shim: ShimDoctorOutput,
     path_instruction: String,
+}
+
+#[derive(Debug, Serialize)]
+struct CodexHooksInstallOutput {
+    command: &'static str,
+    status: String,
+    root: String,
+    strict: bool,
+    hooks_file: String,
+    trace_dir: String,
+    files: Vec<String>,
+    index: IndexOutput,
+    first_required_command: String,
+    trust_instruction: &'static str,
+    policy: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+struct CodexHooksDoctorOutput {
+    command: &'static str,
+    status: String,
+    root: String,
+    strict: bool,
+    hooks_file: String,
+    trace_dir: String,
+    checks: Vec<EnforceCheck>,
+    trust_instruction: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+struct CodexHooksUninstallOutput {
+    command: &'static str,
+    status: String,
+    root: String,
+    files: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct ClaudeHooksInstallOutput {
+    command: &'static str,
+    status: String,
+    root: String,
+    strict: bool,
+    hooks_file: String,
+    trace_dir: String,
+    files: Vec<String>,
+    index: IndexOutput,
+    first_required_command: String,
+    trust_instruction: &'static str,
+    policy: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+struct ClaudeHooksDoctorOutput {
+    command: &'static str,
+    status: String,
+    root: String,
+    strict: bool,
+    hooks_file: String,
+    trace_dir: String,
+    checks: Vec<EnforceCheck>,
+    trust_instruction: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+struct ClaudeHooksUninstallOutput {
+    command: &'static str,
+    status: String,
+    root: String,
+    files: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct ClientHooksInstallOutput {
+    command: String,
+    status: String,
+    root: String,
+    client: String,
+    strict: bool,
+    hooks_file: String,
+    trace_dir: String,
+    files: Vec<String>,
+    index: IndexOutput,
+    first_required_command: String,
+    trust_instruction: String,
+    policy: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ClientHooksDoctorOutput {
+    command: String,
+    status: String,
+    root: String,
+    client: String,
+    strict: bool,
+    hooks_file: String,
+    trace_dir: String,
+    checks: Vec<EnforceCheck>,
+    trust_instruction: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ClientHooksUninstallOutput {
+    command: String,
+    status: String,
+    root: String,
+    client: String,
+    files: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HookClient {
+    Copilot,
+    OpenCode,
+    Antigravity,
+    Cline,
+}
+
+#[derive(Debug, Serialize, Deserialize, Default)]
+struct CodexHookState {
+    version: u32,
+    session_id: String,
+    turn_id: String,
+    root: String,
+    strict: bool,
+    context_seen: bool,
+    violation_seen: bool,
+    stop_blocked: bool,
+    last_prompt_hash: String,
+    selected_files: Vec<String>,
+    updated_at: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -2455,6 +3047,30 @@ pub fn run() -> Result<()> {
             )?;
             output::json::print(&output)?;
         }
+        Command::PilotCollectLmStudio {
+            manifest,
+            model,
+            base_url,
+            limit,
+            context_limit,
+            snippets_per_file,
+            baseline_file_limit,
+            baseline_line_limit,
+            max_tokens,
+        } => {
+            let output = pilot_collect_lm_studio(
+                &manifest,
+                &model,
+                &base_url,
+                limit,
+                context_limit,
+                snippets_per_file,
+                baseline_file_limit,
+                baseline_line_limit,
+                max_tokens,
+            )?;
+            output::json::print(&output)?;
+        }
         Command::PilotQa { manifest } => {
             let output = pilot_qa(&manifest)?;
             output::json::print(&output)?;
@@ -2592,6 +3208,18 @@ pub fn run() -> Result<()> {
             let output = mcp_config_output(&path, format);
             output::json::print(&output)?;
         }
+        Command::McpRegistryManifest { out } => {
+            let manifest = mcp_registry_manifest();
+            if let Some(out) = out {
+                if let Some(parent) = out.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+                    fs::create_dir_all(parent)
+                        .with_context(|| format!("failed to create {}", parent.display()))?;
+                }
+                fs::write(&out, serde_json::to_string_pretty(&manifest)?)
+                    .with_context(|| format!("failed to write {}", out.display()))?;
+            }
+            output::json::print(&manifest)?;
+        }
         Command::Status { path } => {
             let index = store::json_store::load_index(&path).ok();
             let output = query::index_status(&path, index.as_ref());
@@ -2677,6 +3305,116 @@ pub fn run() -> Result<()> {
         Command::CodexBootstrap { path, model, force } => {
             let output = codex_bootstrap(&path, &model, force)?;
             output::json::print(&output)?;
+        }
+        Command::CodexHooks { command } => match command {
+            CodexHooksCommand::Install {
+                path,
+                strict,
+                force,
+                limit,
+                snippets_per_file,
+                lsp,
+            } => {
+                let output =
+                    codex_hooks_install(&path, strict, force, limit, snippets_per_file, lsp)?;
+                output::json::print(&output)?;
+            }
+            CodexHooksCommand::Doctor { path, strict } => {
+                let output = codex_hooks_doctor(&path, strict);
+                output::json::print(&output)?;
+            }
+            CodexHooksCommand::Uninstall { path } => {
+                let output = codex_hooks_uninstall(&path)?;
+                output::json::print(&output)?;
+            }
+        },
+        Command::CodexHook { command } => {
+            let output = match command {
+                CodexHookCommand::UserPromptSubmit {
+                    path,
+                    strict,
+                    limit,
+                    snippets_per_file,
+                } => codex_hook_user_prompt_submit(&path, strict, limit, snippets_per_file)?,
+                CodexHookCommand::PreToolUse { path, strict } => {
+                    codex_hook_pre_tool_use(&path, strict)?
+                }
+                CodexHookCommand::PostToolUse { path, strict } => {
+                    codex_hook_post_tool_use(&path, strict)?
+                }
+                CodexHookCommand::PermissionRequest { path, strict } => {
+                    codex_hook_permission_request(&path, strict)?
+                }
+                CodexHookCommand::Stop { path, strict } => codex_hook_stop(&path, strict)?,
+            };
+            output::json::print(&output)?;
+        }
+        Command::ClaudeHooks { command } => match command {
+            ClaudeHooksCommand::Install {
+                path,
+                strict,
+                force,
+                limit,
+                snippets_per_file,
+                lsp,
+            } => {
+                let output =
+                    claude_hooks_install(&path, strict, force, limit, snippets_per_file, lsp)?;
+                output::json::print(&output)?;
+            }
+            ClaudeHooksCommand::Doctor { path, strict } => {
+                let output = claude_hooks_doctor(&path, strict);
+                output::json::print(&output)?;
+            }
+            ClaudeHooksCommand::Uninstall { path } => {
+                let output = claude_hooks_uninstall(&path)?;
+                output::json::print(&output)?;
+            }
+        },
+        Command::ClaudeHook { command } => {
+            let output = match command {
+                ClaudeHookCommand::UserPromptSubmit {
+                    path,
+                    strict,
+                    limit,
+                    snippets_per_file,
+                } => claude_hook_user_prompt_submit(&path, strict, limit, snippets_per_file)?,
+                ClaudeHookCommand::PreToolUse { path, strict } => {
+                    claude_hook_pre_tool_use(&path, strict)?
+                }
+                ClaudeHookCommand::PostToolUse { path, strict } => {
+                    claude_hook_post_tool_use(&path, strict)?
+                }
+                ClaudeHookCommand::PermissionRequest { path, strict } => {
+                    claude_hook_permission_request(&path, strict)?
+                }
+                ClaudeHookCommand::Stop { path, strict } => claude_hook_stop(&path, strict)?,
+            };
+            output::json::print(&output)?;
+        }
+        Command::CopilotHooks { command } => {
+            run_client_hooks_command(HookClient::Copilot, command)?;
+        }
+        Command::CopilotHook { command } => {
+            run_client_hook_command(HookClient::Copilot, command)?;
+        }
+        Command::OpenCodeHooks { command } => {
+            run_client_hooks_command(HookClient::OpenCode, command)?;
+        }
+        Command::OpenCodeHook { command } => {
+            run_client_hook_command(HookClient::OpenCode, command)?;
+        }
+        Command::AntigravityHooks { command } => {
+            run_client_hooks_command(HookClient::Antigravity, command)?;
+        }
+        Command::AntigravityHook { command } => {
+            run_client_hook_command(HookClient::Antigravity, command)?;
+        }
+        Command::ClineHooks { command } => {
+            run_client_hooks_command(HookClient::Cline, command)?;
+        }
+        Command::ClineHook { command } => {
+            run_client_hook_command(HookClient::Cline, command)?;
         }
         Command::EditorHook {
             path,
@@ -2911,6 +3649,55 @@ pub fn run() -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+fn run_client_hooks_command(client: HookClient, command: ClientHooksCommand) -> Result<()> {
+    match command {
+        ClientHooksCommand::Install {
+            path,
+            strict,
+            force,
+            limit,
+            snippets_per_file,
+            lsp,
+        } => {
+            let output =
+                client_hooks_install(&path, client, strict, force, limit, snippets_per_file, lsp)?;
+            output::json::print(&output)?;
+        }
+        ClientHooksCommand::Doctor { path, strict } => {
+            let output = client_hooks_doctor(&path, client, strict);
+            output::json::print(&output)?;
+        }
+        ClientHooksCommand::Uninstall { path } => {
+            let output = client_hooks_uninstall(&path, client)?;
+            output::json::print(&output)?;
+        }
+    }
+    Ok(())
+}
+
+fn run_client_hook_command(client: HookClient, command: ClientHookCommand) -> Result<()> {
+    let output = match command {
+        ClientHookCommand::UserPromptSubmit {
+            path,
+            strict,
+            limit,
+            snippets_per_file,
+        } => client_hook_user_prompt_submit(&path, client, strict, limit, snippets_per_file)?,
+        ClientHookCommand::PreToolUse { path, strict } => {
+            client_hook_pre_tool_use(&path, client, strict)?
+        }
+        ClientHookCommand::PostToolUse { path, strict } => {
+            client_hook_post_tool_use(&path, client, strict)?
+        }
+        ClientHookCommand::PermissionRequest { path, strict } => {
+            client_hook_permission_request(&path, client, strict)?
+        }
+        ClientHookCommand::Stop { path, strict } => client_hook_stop(&path, client, strict)?,
+    };
+    output::json::print(&output)?;
     Ok(())
 }
 
@@ -3167,6 +3954,35 @@ fn mcp_config_toml(callsieve_command: &str) -> String {
         "[mcp_servers.callsieve]\ncommand = {}\nargs = [\"mcp\"]\nstartup_timeout_sec = 20\ntool_timeout_sec = 60\n",
         toml_basic_string(callsieve_command)
     )
+}
+
+fn mcp_registry_manifest() -> serde_json::Value {
+    serde_json::json!({
+        "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+        "name": "io.github.philipjohnbasile/callsieve",
+        "title": "CallSieve",
+        "description": "Local-first codebase retrieval for AI coding agents. Runs `callsieve mcp` over stdio and indexes repositories locally without cloud services or API keys.",
+        "version": env!("CARGO_PKG_VERSION"),
+        "packages": [
+            {
+                "registryType": "oci",
+                "identifier": format!("ghcr.io/philipjohnbasile/callsieve:{}", env!("CARGO_PKG_VERSION")),
+                "version": env!("CARGO_PKG_VERSION"),
+                "transport": {
+                    "type": "stdio",
+                    "args": ["mcp"]
+                }
+            }
+        ],
+        "_meta": {
+            "io.modelcontextprotocol.registry/publisher-provided": {
+                "local_first": true,
+                "generated_by": "callsieve mcp-registry-manifest",
+                "server_command": "callsieve mcp",
+                "publishing": "descriptor only; this command does not contact the network or publish"
+            }
+        }
+    })
 }
 
 fn retrieval_manifest_root(value: &serde_json::Value) -> PathBuf {
@@ -5085,6 +5901,35 @@ fn bootstrap(
             "pass",
             format!("wrote {} Codex launcher file(s)", launchers.len()),
         ));
+        let (_, _, hook_files) = write_codex_hooks_files(root, strict, force, 6, 1)?;
+        generated_files.extend(hook_files.clone());
+        steps.push(automation_step(
+            "codex_hooks",
+            "pass",
+            format!("wrote {} Codex hook file(s)", hook_files.len()),
+        ));
+    }
+    if matches!(client, AgentClient::Claude) {
+        let (_, _, hook_files) = write_claude_hooks_files(root, strict, force, 6, 1)?;
+        generated_files.extend(hook_files.clone());
+        steps.push(automation_step(
+            "claude_hooks",
+            "pass",
+            format!("wrote {} Claude Code hook file(s)", hook_files.len()),
+        ));
+    }
+    if let Some(hook_client) = hook_client_for_agent(client) {
+        let (_, _, hook_files) = write_client_hooks_files(root, hook_client, strict, force, 6, 1)?;
+        generated_files.extend(hook_files.clone());
+        steps.push(automation_step(
+            format!("{}_hooks", hook_client_name(hook_client)),
+            "pass",
+            format!(
+                "wrote {} {} hook file(s)",
+                hook_files.len(),
+                hook_client_display(hook_client)
+            ),
+        ));
     }
 
     let daemon = run_daemon(root, lsp, 1000, false, false)?;
@@ -5158,6 +6003,53 @@ fn doctor(root: &Path, client: AgentClient, fix: bool, strict: bool) -> Result<D
                 "codex_launchers",
                 "pass",
                 format!("wrote {} missing Codex launcher file(s)", launchers.len()),
+            ));
+        }
+        if matches!(client, AgentClient::Codex)
+            && checks
+                .iter()
+                .any(|check| check.check.starts_with("codex_hooks") && check.status == "fail")
+        {
+            let (_, _, hook_files) = write_codex_hooks_files(root, strict, true, 6, 1)?;
+            fixes.push(automation_step(
+                "codex_hooks",
+                "pass",
+                format!("wrote {} missing Codex hook file(s)", hook_files.len()),
+            ));
+        }
+        if matches!(client, AgentClient::Claude)
+            && checks
+                .iter()
+                .any(|check| check.check.starts_with("claude_hooks") && check.status == "fail")
+        {
+            let (_, _, hook_files) = write_claude_hooks_files(root, strict, true, 6, 1)?;
+            fixes.push(automation_step(
+                "claude_hooks",
+                "pass",
+                format!(
+                    "wrote {} missing Claude Code hook file(s)",
+                    hook_files.len()
+                ),
+            ));
+        }
+        if let Some(hook_client) = hook_client_for_agent(client)
+            && checks.iter().any(|check| {
+                check
+                    .check
+                    .starts_with(&format!("{}_hooks", hook_client_name(hook_client)))
+                    && check.status == "fail"
+            })
+        {
+            let (_, _, hook_files) =
+                write_client_hooks_files(root, hook_client, strict, true, 6, 1)?;
+            fixes.push(automation_step(
+                format!("{}_hooks", hook_client_name(hook_client)),
+                "pass",
+                format!(
+                    "wrote {} missing {} hook file(s)",
+                    hook_files.len(),
+                    hook_client_display(hook_client)
+                ),
             ));
         }
         if check_failed(&checks, "daemon_state") {
@@ -5317,6 +6209,45 @@ fn doctor_checks(root: &Path, client: AgentClient, strict: bool) -> Result<Vec<E
                 },
             ));
         }
+        let codex_hooks = codex_hooks_doctor(root, true);
+        checks.push(enforce_check(
+            "codex_hooks",
+            codex_hooks.status == "pass",
+            if codex_hooks.status == "pass" {
+                "Codex lifecycle hooks are installed"
+            } else {
+                "Codex lifecycle hooks are missing or stale"
+            },
+        ));
+    }
+    if matches!(client, AgentClient::Claude) && strict {
+        let claude_hooks = claude_hooks_doctor(root, true);
+        checks.push(enforce_check(
+            "claude_hooks",
+            claude_hooks.status == "pass",
+            if claude_hooks.status == "pass" {
+                "Claude Code lifecycle hooks are installed"
+            } else {
+                "Claude Code lifecycle hooks are missing or stale"
+            },
+        ));
+    }
+    if let Some(hook_client) = hook_client_for_agent(client)
+        && strict
+    {
+        let hooks = client_hooks_doctor(root, hook_client, true);
+        checks.push(enforce_check(
+            format!("{}_hooks", hook_client_name(hook_client)),
+            hooks.status == "pass",
+            if hooks.status == "pass" {
+                format!("{} hooks are installed", hook_client_display(hook_client))
+            } else {
+                format!(
+                    "{} hooks are missing or stale",
+                    hook_client_display(hook_client)
+                )
+            },
+        ));
     }
 
     let daemon = load_daemon_state(root).unwrap_or_else(|| missing_daemon_state(root));
@@ -5381,6 +6312,7 @@ fn setup_missing_agent_files(client: AgentClient, root: &Path) -> Result<SetupAg
         files: written,
         first_required_command,
         policy: "Call callsieve_context before broad grep, rg, repository search, or repeated file reads.",
+        warnings: agent_client_warnings_for_root(client, root),
     })
 }
 
@@ -5388,8 +6320,21 @@ fn default_agent_model(client: AgentClient) -> &'static str {
     match client {
         AgentClient::Codex => "gpt-5-codex",
         AgentClient::Claude => "claude",
+        AgentClient::Copilot => "copilot",
+        AgentClient::OpenCode => "opencode",
+        AgentClient::Antigravity => "antigravity",
         AgentClient::Cursor => "cursor",
+        AgentClient::Vscode => "vscode",
+        AgentClient::Windsurf => "windsurf",
+        AgentClient::Continue => "continue",
+        AgentClient::Zed => "zed",
+        AgentClient::Junie => "junie",
+        AgentClient::JetBrains => "jetbrains",
+        AgentClient::Amp => "amp",
+        AgentClient::Goose => "goose",
+        AgentClient::Warp => "warp",
         AgentClient::Cline => "cline",
+        AgentClient::Zoo => "zoo",
         AgentClient::Roo => "roo",
         AgentClient::Generic => "generic-agent",
     }
@@ -5870,7 +6815,7 @@ fn pilot_collect_ollama(
     snippets_per_file: usize,
     baseline_file_limit: usize,
     baseline_line_limit: usize,
-) -> Result<PilotCollectOllamaOutput> {
+) -> Result<PilotCollectLocalOutput> {
     let manifest = read_pilot_manifest(manifest_path)?;
     let candidates: Vec<PilotHarnessTask> = manifest
         .tasks
@@ -5903,10 +6848,11 @@ fn pilot_collect_ollama(
     }
 
     let qa = pilot_qa(manifest_path)?;
-    Ok(PilotCollectOllamaOutput {
+    Ok(PilotCollectLocalOutput {
         command: "pilot-collect-ollama",
         manifest: manifest_path.display().to_string(),
         model: model.to_string(),
+        base_url: None,
         requested_sessions: limit,
         collected_sessions: sessions.len(),
         skipped_sessions,
@@ -5925,7 +6871,7 @@ fn collect_ollama_task(
     snippets_per_file: usize,
     baseline_file_limit: usize,
     baseline_line_limit: usize,
-) -> Result<PilotCollectOllamaSessionOutput> {
+) -> Result<PilotCollectLocalSessionOutput> {
     let root = Path::new(&task.repo);
     let index = load_or_build_index(root)?;
     let task_dir = Path::new(&task.trace_path)
@@ -6009,7 +6955,178 @@ fn collect_ollama_task(
         (token_savings as f64 / baseline_tokens as f64) * 100.0
     };
 
-    Ok(PilotCollectOllamaSessionOutput {
+    Ok(PilotCollectLocalSessionOutput {
+        task_id: task.id.clone(),
+        repo: task.repo.clone(),
+        status: pilot_task_status(&summary_value),
+        baseline_tokens,
+        callsieve_tokens,
+        token_reduction_percent,
+        baseline_files,
+        callsieve_files,
+        baseline_artifact: baseline_artifact.display().to_string(),
+        callsieve_artifact: callsieve_artifact.display().to_string(),
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn pilot_collect_lm_studio(
+    manifest_path: &Path,
+    model: &str,
+    base_url: &str,
+    limit: usize,
+    context_limit: usize,
+    snippets_per_file: usize,
+    baseline_file_limit: usize,
+    baseline_line_limit: usize,
+    max_tokens: usize,
+) -> Result<PilotCollectLocalOutput> {
+    let manifest = read_pilot_manifest(manifest_path)?;
+    let candidates: Vec<PilotHarnessTask> = manifest
+        .tasks
+        .iter()
+        .filter(|task| task.status == "pending" || task.status == "baseline_recorded")
+        .filter(|task| pilot_task_matches_lm_studio_model(task, model))
+        .take(limit)
+        .cloned()
+        .collect();
+    let skipped_sessions = manifest
+        .tasks
+        .iter()
+        .filter(|task| !candidates.iter().any(|candidate| candidate.id == task.id))
+        .filter(|task| task.status == "complete" || task.status == "rejected")
+        .count();
+    let mut sessions = Vec::new();
+
+    for task in candidates {
+        let session = collect_lm_studio_task(
+            manifest_path,
+            &task,
+            model,
+            base_url,
+            context_limit,
+            snippets_per_file,
+            baseline_file_limit,
+            baseline_line_limit,
+            max_tokens,
+        )
+        .with_context(|| format!("failed to collect LM Studio pilot task {}", task.id))?;
+        sessions.push(session);
+    }
+
+    let qa = pilot_qa(manifest_path)?;
+    Ok(PilotCollectLocalOutput {
+        command: "pilot-collect-lm-studio",
+        manifest: manifest_path.display().to_string(),
+        model: model.to_string(),
+        base_url: Some(base_url.to_string()),
+        requested_sessions: limit,
+        collected_sessions: sessions.len(),
+        skipped_sessions,
+        observed_sessions: qa.observed_sessions,
+        qa_status: qa.status,
+        sessions,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn collect_lm_studio_task(
+    manifest_path: &Path,
+    task: &PilotHarnessTask,
+    model: &str,
+    base_url: &str,
+    context_limit: usize,
+    snippets_per_file: usize,
+    baseline_file_limit: usize,
+    baseline_line_limit: usize,
+    max_tokens: usize,
+) -> Result<PilotCollectLocalSessionOutput> {
+    let root = Path::new(&task.repo);
+    let index = load_or_build_index(root)?;
+    let task_dir = Path::new(&task.trace_path)
+        .parent()
+        .unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(task_dir)
+        .with_context(|| format!("failed to create {}", task_dir.display()))?;
+    let baseline_artifact = task_dir.join("baseline-lm-studio-transcript.local.json");
+    let callsieve_artifact = task_dir.join("callsieve-lm-studio-transcript.local.json");
+    let mut baseline_tokens = 0;
+    let mut baseline_files = 0;
+
+    if task.status == "pending" {
+        let baseline_plan = build_baseline_prompt_plan(
+            root,
+            &index,
+            task,
+            baseline_file_limit,
+            baseline_line_limit,
+        )?;
+        let baseline_run = run_lm_studio_chat(base_url, model, &baseline_plan.prompt, max_tokens)
+            .with_context(|| format!("LM Studio baseline failed for {}", task.id))?;
+        baseline_tokens = baseline_run.prompt_tokens;
+        baseline_files = baseline_plan.files_read.len();
+        write_lm_studio_artifact(
+            &baseline_artifact,
+            task,
+            model,
+            base_url,
+            "baseline",
+            &baseline_plan,
+            &baseline_run,
+        )?;
+        pilot_run(
+            manifest_path,
+            &task.id,
+            PilotSessionMode::Baseline,
+            &baseline_plan.command,
+            baseline_plan.files_read,
+            baseline_plan.context_selected_files,
+            baseline_tokens,
+        )?;
+    } else if Path::new(&task.trace_path).is_file() {
+        let trace_json = fs::read_to_string(&task.trace_path)
+            .with_context(|| format!("failed to read trace: {}", task.trace_path))?;
+        let summary = query::trace_summary_from_str(&trace_json)?;
+        let summary_value = serde_json::to_value(&summary)?;
+        baseline_tokens = summary_number(&summary_value, "baseline_tokens");
+    }
+
+    let callsieve_plan =
+        build_callsieve_prompt_plan(root, &index, task, context_limit, snippets_per_file)?;
+    let callsieve_run = run_lm_studio_chat(base_url, model, &callsieve_plan.prompt, max_tokens)
+        .with_context(|| format!("LM Studio CallSieve phase failed for {}", task.id))?;
+    let callsieve_tokens = callsieve_run.prompt_tokens;
+    let callsieve_files = callsieve_plan.context_selected_files.len();
+    write_lm_studio_artifact(
+        &callsieve_artifact,
+        task,
+        model,
+        base_url,
+        "callsieve",
+        &callsieve_plan,
+        &callsieve_run,
+    )?;
+    let output = pilot_run(
+        manifest_path,
+        &task.id,
+        PilotSessionMode::Callsieve,
+        &callsieve_plan.command,
+        callsieve_plan.files_read,
+        callsieve_plan.context_selected_files,
+        callsieve_tokens,
+    )?;
+    let summary_value = serde_json::to_value(&output.summary)?;
+    if baseline_tokens == 0 {
+        baseline_tokens = summary_number(&summary_value, "baseline_tokens");
+    }
+    let token_savings = baseline_tokens as isize - callsieve_tokens as isize;
+    let token_reduction_percent = if baseline_tokens == 0 {
+        0.0
+    } else {
+        (token_savings as f64 / baseline_tokens as f64) * 100.0
+    };
+
+    Ok(PilotCollectLocalSessionOutput {
         task_id: task.id.clone(),
         repo: task.repo.clone(),
         status: pilot_task_status(&summary_value),
@@ -6028,6 +7145,18 @@ fn pilot_task_matches_ollama_model(task: &PilotHarnessTask, model: &str) -> bool
         .strip_prefix("ollama:")
         .is_some_and(|registered| registered == model)
         || task.model == model
+}
+
+fn pilot_task_matches_lm_studio_model(task: &PilotHarnessTask, model: &str) -> bool {
+    task.model
+        .strip_prefix("lm-studio:")
+        .is_some_and(|registered| registered == model)
+        || task
+            .model
+            .strip_prefix("openai-compatible:")
+            .is_some_and(|registered| registered == model)
+        || task.model == model
+        || task.client == "generic"
 }
 
 fn load_or_build_index(root: &Path) -> Result<store::CodeIndex> {
@@ -6408,6 +7537,50 @@ fn write_ollama_artifact(
         .with_context(|| format!("failed to write {}", path.display()))
 }
 
+fn write_lm_studio_artifact(
+    path: &Path,
+    task: &PilotHarnessTask,
+    model: &str,
+    base_url: &str,
+    phase: &str,
+    plan: &PilotPromptPlan,
+    run: &LmStudioRun,
+) -> Result<()> {
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    let artifact = LmStudioTranscriptArtifact {
+        schema_version: 1,
+        collection: "observed_session",
+        collector: "callsieve pilot-collect-lm-studio",
+        task_id: task.id.clone(),
+        phase: phase.to_string(),
+        repo: task.repo.clone(),
+        model: model.to_string(),
+        base_url: base_url.to_string(),
+        command: plan.command.clone(),
+        files_read: plan.files_read.clone(),
+        context_selected_files: plan.context_selected_files.clone(),
+        prompt: plan.prompt.clone(),
+        response: run.response.clone(),
+        token_accounting: LmStudioTokenAccounting {
+            source: "lm_studio_openai_usage_prompt_tokens",
+            counted_tokens: run.prompt_tokens,
+            prompt_tokens: run.prompt_tokens,
+            completion_tokens: run.completion_tokens,
+            total_tokens: run.total_tokens,
+        },
+        raw_response: run.raw_response.clone(),
+        created_at: now_unix_seconds(),
+    };
+    fs::write(path, serde_json::to_vec_pretty(&artifact)?)
+        .with_context(|| format!("failed to write {}", path.display()))
+}
+
 fn run_ollama_verbose(model: &str, prompt: &str) -> Result<OllamaRun> {
     let mut command = ProcessCommand::new("ollama");
     command
@@ -6448,6 +7621,173 @@ fn run_ollama_verbose(model: &str, prompt: &str) -> Result<OllamaRun> {
         prompt_eval_count,
         eval_count,
     })
+}
+
+fn run_lm_studio_chat(
+    base_url: &str,
+    model: &str,
+    prompt: &str,
+    max_tokens: usize,
+) -> Result<LmStudioRun> {
+    let endpoint = openai_chat_endpoint(base_url)?;
+    let request = serde_json::json!({
+        "model": model,
+        "messages": [
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ],
+        "temperature": 0.0,
+        "stream": false,
+        "max_tokens": max_tokens
+    });
+    let response_body = post_json_http(&endpoint, &request)
+        .with_context(|| format!("failed to call LM Studio at {base_url}"))?;
+    let raw_response: serde_json::Value =
+        serde_json::from_str(&response_body).with_context(|| "LM Studio returned invalid JSON")?;
+    let prompt_tokens = json_usize(&raw_response, &["usage", "prompt_tokens"])
+        .context("LM Studio response missing usage.prompt_tokens")?;
+    let completion_tokens =
+        json_usize(&raw_response, &["usage", "completion_tokens"]).unwrap_or_default();
+    let total_tokens = json_usize(&raw_response, &["usage", "total_tokens"])
+        .unwrap_or(prompt_tokens + completion_tokens);
+    let response = raw_response
+        .get("choices")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|choices| choices.first())
+        .and_then(|choice| {
+            choice
+                .get("message")
+                .and_then(|message| message.get("content"))
+                .and_then(serde_json::Value::as_str)
+                .or_else(|| choice.get("text").and_then(serde_json::Value::as_str))
+        })
+        .unwrap_or_default()
+        .to_string();
+
+    Ok(LmStudioRun {
+        response,
+        prompt_tokens,
+        completion_tokens,
+        total_tokens,
+        raw_response,
+    })
+}
+
+fn openai_chat_endpoint(base_url: &str) -> Result<HttpEndpoint> {
+    let trimmed = base_url.trim().trim_end_matches('/');
+    let rest = trimmed
+        .strip_prefix("http://")
+        .context("only http:// LM Studio endpoints are supported")?;
+    let (authority, raw_path) = rest.split_once('/').unwrap_or((rest, ""));
+    if authority.trim().is_empty() {
+        anyhow::bail!("LM Studio base URL is missing a host");
+    }
+    let (host, port) = parse_http_authority(authority)?;
+    let mut path = if raw_path.trim().is_empty() {
+        "/v1".to_string()
+    } else {
+        format!("/{}", raw_path.trim_matches('/'))
+    };
+    if !path.ends_with("/chat/completions") {
+        path.push_str("/chat/completions");
+    }
+    Ok(HttpEndpoint { host, port, path })
+}
+
+fn parse_http_authority(authority: &str) -> Result<(String, u16)> {
+    let (host, port) = match authority.rsplit_once(':') {
+        Some((host, port)) if !host.is_empty() && !port.is_empty() => {
+            let port = port
+                .parse::<u16>()
+                .with_context(|| format!("invalid LM Studio port: {port}"))?;
+            (host.to_string(), port)
+        }
+        _ => (authority.to_string(), 80),
+    };
+    Ok((host, port))
+}
+
+fn post_json_http(endpoint: &HttpEndpoint, body: &serde_json::Value) -> Result<String> {
+    let body = serde_json::to_string(body)?;
+    let mut stream = TcpStream::connect((endpoint.host.as_str(), endpoint.port))
+        .with_context(|| format!("failed to connect to {}:{}", endpoint.host, endpoint.port))?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(900)))
+        .context("failed to set LM Studio read timeout")?;
+    stream
+        .set_write_timeout(Some(Duration::from_secs(30)))
+        .context("failed to set LM Studio write timeout")?;
+    let request = format!(
+        "POST {} HTTP/1.1\r\nHost: {}:{}\r\nContent-Type: application/json\r\nAccept: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        endpoint.path,
+        endpoint.host,
+        endpoint.port,
+        body.len(),
+        body
+    );
+    stream
+        .write_all(request.as_bytes())
+        .context("failed to write LM Studio request")?;
+    let mut response = Vec::new();
+    stream
+        .read_to_end(&mut response)
+        .context("failed to read LM Studio response")?;
+    let (status, body) = parse_http_response(&response)?;
+    if !(200..300).contains(&status) {
+        anyhow::bail!("LM Studio returned HTTP {status}: {body}");
+    }
+    Ok(body)
+}
+
+fn parse_http_response(response: &[u8]) -> Result<(u16, String)> {
+    let header_end = response
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .context("HTTP response missing header terminator")?;
+    let headers = String::from_utf8_lossy(&response[..header_end]);
+    let status = headers
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .and_then(|status| status.parse::<u16>().ok())
+        .context("HTTP response missing numeric status")?;
+    let body = &response[header_end + 4..];
+    let body = if headers
+        .lines()
+        .any(|line| line.eq_ignore_ascii_case("transfer-encoding: chunked"))
+    {
+        decode_chunked_body(body)?
+    } else {
+        body.to_vec()
+    };
+    let body = String::from_utf8(body).context("HTTP response body was not UTF-8")?;
+    Ok((status, body))
+}
+
+fn decode_chunked_body(mut input: &[u8]) -> Result<Vec<u8>> {
+    let mut output = Vec::new();
+    loop {
+        let line_end = find_crlf(input).context("chunked body missing chunk size")?;
+        let size_text = String::from_utf8_lossy(&input[..line_end]);
+        let size = usize::from_str_radix(size_text.split_whitespace().next().unwrap_or(""), 16)
+            .with_context(|| format!("invalid chunk size: {size_text}"))?;
+        input = &input[line_end + 2..];
+        if size == 0 {
+            break;
+        }
+        if input.len() < size + 2 {
+            anyhow::bail!("chunked body ended before full chunk");
+        }
+        output.extend_from_slice(&input[..size]);
+        input = &input[size + 2..];
+    }
+    Ok(output)
+}
+
+fn find_crlf(input: &[u8]) -> Option<usize> {
+    input.windows(2).position(|window| window == b"\r\n")
 }
 
 fn parse_ollama_verbose_counts(output: &str) -> Result<(usize, usize)> {
@@ -6993,8 +8333,21 @@ fn agent_client_from_name(name: &str) -> AgentClient {
     match name.to_ascii_lowercase().as_str() {
         "codex" => AgentClient::Codex,
         "claude" => AgentClient::Claude,
+        "copilot" => AgentClient::Copilot,
+        "opencode" => AgentClient::OpenCode,
+        "antigravity" => AgentClient::Antigravity,
         "cursor" => AgentClient::Cursor,
+        "vscode" => AgentClient::Vscode,
+        "windsurf" => AgentClient::Windsurf,
+        "continue" => AgentClient::Continue,
+        "zed" => AgentClient::Zed,
+        "junie" => AgentClient::Junie,
+        "jetbrains" => AgentClient::JetBrains,
+        "amp" => AgentClient::Amp,
+        "goose" => AgentClient::Goose,
+        "warp" => AgentClient::Warp,
         "cline" => AgentClient::Cline,
+        "zoo" => AgentClient::Zoo,
         "roo" => AgentClient::Roo,
         _ => AgentClient::Generic,
     }
@@ -7434,7 +8787,7 @@ fn infer_session_phase(value: &serde_json::Value, command: &str) -> &'static str
 fn classify_session_command(command: &str) -> &'static str {
     if is_callsieve_context_command_local(command) {
         "callsieve_context"
-    } else if is_grep_command_local(command) {
+    } else if is_broad_search_command_local(command) {
         "grep"
     } else if is_file_read_command_local(command) {
         "file_read"
@@ -7462,15 +8815,49 @@ fn is_grep_command_local(command: &str) -> bool {
         || lower.contains("ripgrep")
 }
 
+fn is_broad_search_command_local(command: &str) -> bool {
+    let lower = command.to_ascii_lowercase();
+    let first = lower.split_whitespace().next().unwrap_or_default();
+    is_grep_command_local(command)
+        || lower.starts_with("git grep")
+        || lower.contains(" git grep ")
+        || matches!(
+            first,
+            "find" | "fd" | "glob" | "grep_search" | "find_by_name" | "codebase_search"
+        )
+        || lower.contains(" grep_search")
+        || lower.contains(" find_by_name")
+        || lower.contains(" codebase_search")
+        || lower.contains(" select-string ")
+        || lower.starts_with("select-string ")
+        || (lower.contains("get-childitem") && lower.contains("-recurse"))
+        || (lower.starts_with("dir ") && lower.contains("/s"))
+        || (lower.starts_with("ls ") && lower.contains("-r"))
+}
+
 fn is_file_read_command_local(command: &str) -> bool {
     let lower = command.to_ascii_lowercase();
     let first = lower.split_whitespace().next().unwrap_or_default();
     matches!(
         first,
-        "cat" | "less" | "more" | "head" | "tail" | "sed" | "nl" | "bat" | "type" | "get-content"
+        "cat"
+            | "less"
+            | "more"
+            | "head"
+            | "tail"
+            | "sed"
+            | "nl"
+            | "bat"
+            | "type"
+            | "get-content"
+            | "read"
+            | "read_file"
+            | "view_file"
     ) || lower.contains(" get-content ")
         || lower.starts_with("read_file")
+        || lower.starts_with("view_file")
         || lower.contains(" read_file")
+        || lower.contains(" view_file")
 }
 
 fn is_callsieve_context_command_local(command: &str) -> bool {
@@ -7489,6 +8876,7 @@ fn setup_agent(client: AgentClient, root: &Path, force: bool) -> Result<SetupAge
     let first_required_command = format!("callsieve agent-context {} \"<task>\"", root.display());
     let files = agent_files(client, root);
     let mut written = Vec::new();
+    let warnings = agent_client_warnings_for_root(client, root);
 
     for (path, content) in files {
         if path.exists() && !force {
@@ -7504,6 +8892,19 @@ fn setup_agent(client: AgentClient, root: &Path, force: bool) -> Result<SetupAge
         fs::write(&path, content).with_context(|| format!("failed to write {}", path.display()))?;
         written.push(repo_relative_display(root, &path));
     }
+    if matches!(client, AgentClient::Zoo | AgentClient::Roo)
+        && (force || root.join(".roomodes").is_file())
+    {
+        write_project_file(
+            root,
+            &root.join(".roomodes"),
+            &zoo_roomodes_json(),
+            true,
+            &mut written,
+        )?;
+    }
+    written.sort();
+    written.dedup();
 
     Ok(SetupAgentOutput {
         command: "setup-agent",
@@ -7512,6 +8913,7 @@ fn setup_agent(client: AgentClient, root: &Path, force: bool) -> Result<SetupAge
         files: written,
         first_required_command,
         policy: "Call callsieve_context before broad grep, rg, repository search, or repeated file reads.",
+        warnings,
     })
 }
 
@@ -7524,6 +8926,10 @@ fn codex_bootstrap(root: &Path, model: &str, force: bool) -> Result<CodexBootstr
     let first_required_command = format!("callsieve agent-context {} \"<task>\"", root.display());
     let launchers = write_codex_launchers(root, &first_required_command, force)?;
     files.extend(launchers.clone());
+    let hooks = codex_hooks_install(root, true, force, 6, 1, false)?;
+    files.extend(hooks.files.clone());
+    files.sort();
+    files.dedup();
 
     Ok(CodexBootstrapOutput {
         command: "codex-bootstrap",
@@ -7536,6 +8942,1320 @@ fn codex_bootstrap(root: &Path, model: &str, force: bool) -> Result<CodexBootstr
     })
 }
 
+fn codex_hooks_install(
+    root: &Path,
+    strict: bool,
+    force: bool,
+    limit: usize,
+    snippets_per_file: usize,
+    lsp: bool,
+) -> Result<CodexHooksInstallOutput> {
+    let index = build_index_output(root, lsp)?;
+    let (hooks_file, trace_dir, files) =
+        write_codex_hooks_files(root, strict, force, limit, snippets_per_file)?;
+
+    Ok(CodexHooksInstallOutput {
+        command: "codex-hooks install",
+        status: "pass".to_string(),
+        root: root_label(root),
+        strict,
+        hooks_file,
+        trace_dir,
+        files,
+        index,
+        first_required_command: format!("callsieve agent-context {} \"<task>\"", root.display()),
+        trust_instruction: "Review and trust project hooks in Codex with /hooks.",
+        policy: "Codex lifecycle hooks inject CallSieve context and block broad search before context.",
+    })
+}
+
+fn write_codex_hooks_files(
+    root: &Path,
+    strict: bool,
+    force: bool,
+    limit: usize,
+    snippets_per_file: usize,
+) -> Result<(String, String, Vec<String>)> {
+    let mut files = Vec::new();
+    let hooks_path = codex_hooks_path(root);
+    let config = codex_hooks_json(root, strict, limit, snippets_per_file);
+    let config_text = serde_json::to_string_pretty(&config)?;
+    write_project_file(root, &hooks_path, &config_text, force, &mut files)?;
+    let trace_dir = codex_hook_dir(root);
+    fs::create_dir_all(&trace_dir)
+        .with_context(|| format!("failed to create {}", trace_dir.display()))?;
+    files.push(repo_relative_display(root, &trace_dir));
+    files.sort();
+    files.dedup();
+    Ok((
+        repo_relative_display(root, &hooks_path),
+        repo_relative_display(root, &trace_dir),
+        files,
+    ))
+}
+
+fn codex_hooks_doctor(root: &Path, strict: bool) -> CodexHooksDoctorOutput {
+    let hooks_path = codex_hooks_path(root);
+    let trace_dir = codex_hook_dir(root);
+    let content = fs::read_to_string(&hooks_path).ok();
+    let parsed = content
+        .as_deref()
+        .and_then(|content| serde_json::from_str::<serde_json::Value>(content).ok());
+    let mut checks = Vec::new();
+    checks.push(enforce_check(
+        "codex_hooks_file",
+        hooks_path.is_file(),
+        if hooks_path.is_file() {
+            "Codex hooks file exists"
+        } else {
+            "Codex hooks file is missing"
+        },
+    ));
+    checks.push(enforce_check(
+        "codex_hooks_json",
+        parsed.is_some(),
+        if parsed.is_some() {
+            "Codex hooks file is valid JSON"
+        } else {
+            "Codex hooks file is missing or invalid JSON"
+        },
+    ));
+
+    for event in CODEX_HOOK_EVENTS {
+        let installed = parsed
+            .as_ref()
+            .and_then(|value| value.get("hooks"))
+            .and_then(|hooks| hooks.get(event))
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|entries| !entries.is_empty());
+        checks.push(enforce_check(
+            format!("codex_hook_event:{event}"),
+            installed,
+            if installed {
+                format!("{event} hook is installed")
+            } else {
+                format!("{event} hook is missing")
+            },
+        ));
+    }
+
+    let command_text = content.as_deref().unwrap_or_default();
+    checks.push(enforce_check(
+        "codex_hook_commands",
+        CODEX_HOOK_COMMAND_NAMES
+            .iter()
+            .all(|command| command_text.contains(command)),
+        "Codex hooks point at CallSieve hook handlers",
+    ));
+    checks.push(enforce_check(
+        "codex_hook_command_windows",
+        command_text.contains("commandWindows"),
+        "Codex hooks include Windows command strings",
+    ));
+    checks.push(enforce_check(
+        "codex_hook_strict",
+        !strict || command_text.contains("--strict"),
+        if strict {
+            "Codex hooks are installed in strict mode"
+        } else {
+            "strict Codex hooks are optional"
+        },
+    ));
+    checks.push(check_with_status(
+        "codex_hook_trace_dir",
+        if trace_dir.is_dir() { "pass" } else { "warn" },
+        if trace_dir.is_dir() {
+            "Codex hook trace directory exists"
+        } else {
+            "Codex hook trace directory will be created on first hook run"
+        },
+    ));
+    checks.push(check_with_status(
+        "codex_hook_trust",
+        "warn",
+        "Review and trust project hooks in Codex with /hooks before relying on enforcement",
+    ));
+
+    CodexHooksDoctorOutput {
+        command: "codex-hooks doctor",
+        status: status_from_checks(&checks),
+        root: root_label(root),
+        strict,
+        hooks_file: repo_relative_display(root, &hooks_path),
+        trace_dir: repo_relative_display(root, &trace_dir),
+        checks,
+        trust_instruction: "Review and trust project hooks in Codex with /hooks.",
+    }
+}
+
+fn codex_hooks_uninstall(root: &Path) -> Result<CodexHooksUninstallOutput> {
+    let hooks_path = codex_hooks_path(root);
+    let mut files = Vec::new();
+    if hooks_path.is_file() {
+        fs::remove_file(&hooks_path)
+            .with_context(|| format!("failed to remove {}", hooks_path.display()))?;
+        files.push(repo_relative_display(root, &hooks_path));
+    }
+    Ok(CodexHooksUninstallOutput {
+        command: "codex-hooks uninstall",
+        status: "pass".to_string(),
+        root: root_label(root),
+        files,
+    })
+}
+
+fn claude_hooks_install(
+    root: &Path,
+    strict: bool,
+    force: bool,
+    limit: usize,
+    snippets_per_file: usize,
+    lsp: bool,
+) -> Result<ClaudeHooksInstallOutput> {
+    let index = build_index_output(root, lsp)?;
+    let (hooks_file, trace_dir, files) =
+        write_claude_hooks_files(root, strict, force, limit, snippets_per_file)?;
+
+    Ok(ClaudeHooksInstallOutput {
+        command: "claude-hooks install",
+        status: "pass".to_string(),
+        root: root_label(root),
+        strict,
+        hooks_file,
+        trace_dir,
+        files,
+        index,
+        first_required_command: format!("callsieve agent-context {} \"<task>\"", root.display()),
+        trust_instruction: "Review and trust project hooks in Claude Code with /hooks.",
+        policy: "Claude Code lifecycle hooks inject CallSieve context and block broad search before context.",
+    })
+}
+
+fn write_claude_hooks_files(
+    root: &Path,
+    strict: bool,
+    force: bool,
+    limit: usize,
+    snippets_per_file: usize,
+) -> Result<(String, String, Vec<String>)> {
+    let mut files = Vec::new();
+    let hooks_path = claude_hooks_path(root);
+    let config = claude_hooks_json(root, strict, limit, snippets_per_file, force)?;
+    let config_text = serde_json::to_string_pretty(&config)?;
+    if let Some(parent) = hooks_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    fs::write(&hooks_path, config_text)
+        .with_context(|| format!("failed to write {}", hooks_path.display()))?;
+    files.push(repo_relative_display(root, &hooks_path));
+
+    let trace_dir = claude_hook_dir(root);
+    fs::create_dir_all(&trace_dir)
+        .with_context(|| format!("failed to create {}", trace_dir.display()))?;
+    files.push(repo_relative_display(root, &trace_dir));
+    files.sort();
+    files.dedup();
+    Ok((
+        repo_relative_display(root, &hooks_path),
+        repo_relative_display(root, &trace_dir),
+        files,
+    ))
+}
+
+fn claude_hooks_doctor(root: &Path, strict: bool) -> ClaudeHooksDoctorOutput {
+    let hooks_path = claude_hooks_path(root);
+    let trace_dir = claude_hook_dir(root);
+    let content = fs::read_to_string(&hooks_path).ok();
+    let parsed = content
+        .as_deref()
+        .and_then(|content| serde_json::from_str::<serde_json::Value>(content).ok());
+    let mut checks = Vec::new();
+    checks.push(enforce_check(
+        "claude_hooks_file",
+        hooks_path.is_file(),
+        if hooks_path.is_file() {
+            "Claude Code settings.local.json exists"
+        } else {
+            "Claude Code settings.local.json is missing"
+        },
+    ));
+    checks.push(enforce_check(
+        "claude_hooks_json",
+        parsed.is_some(),
+        if parsed.is_some() {
+            "Claude Code settings file is valid JSON"
+        } else {
+            "Claude Code settings file is missing or invalid JSON"
+        },
+    ));
+
+    for event in CLAUDE_HOOK_EVENTS {
+        let installed = parsed
+            .as_ref()
+            .and_then(|value| value.get("hooks"))
+            .and_then(|hooks| hooks.get(event))
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|entries| !entries.is_empty());
+        checks.push(enforce_check(
+            format!("claude_hook_event:{event}"),
+            installed,
+            if installed {
+                format!("{event} hook is installed")
+            } else {
+                format!("{event} hook is missing")
+            },
+        ));
+    }
+
+    let command_text = content.as_deref().unwrap_or_default();
+    checks.push(enforce_check(
+        "claude_hook_commands",
+        CLAUDE_HOOK_COMMAND_NAMES
+            .iter()
+            .all(|command| command_text.contains(command)),
+        "Claude Code hooks point at CallSieve hook handlers",
+    ));
+    checks.push(enforce_check(
+        "claude_hook_exec_form",
+        command_text.contains("\"args\"") && command_text.contains("claude-hook"),
+        "Claude Code hooks use command plus args form",
+    ));
+    checks.push(enforce_check(
+        "claude_hook_strict",
+        !strict || command_text.contains("--strict"),
+        if strict {
+            "Claude Code hooks are installed in strict mode"
+        } else {
+            "Claude Code strict hook mode not required"
+        },
+    ));
+    checks.push(enforce_check(
+        "claude_hook_trace_dir",
+        trace_dir.is_dir(),
+        if trace_dir.is_dir() {
+            "Claude Code hook trace directory exists"
+        } else {
+            "Claude Code hook trace directory is missing"
+        },
+    ));
+    checks.push(check_with_status(
+        "claude_hook_trust",
+        "warn",
+        "Review and trust project hooks in Claude Code with /hooks before relying on enforcement",
+    ));
+
+    ClaudeHooksDoctorOutput {
+        command: "claude-hooks doctor",
+        status: status_from_checks(&checks),
+        root: root_label(root),
+        strict,
+        hooks_file: repo_relative_display(root, &hooks_path),
+        trace_dir: repo_relative_display(root, &trace_dir),
+        checks,
+        trust_instruction: "Review and trust project hooks in Claude Code with /hooks.",
+    }
+}
+
+fn claude_hooks_uninstall(root: &Path) -> Result<ClaudeHooksUninstallOutput> {
+    let hooks_path = claude_hooks_path(root);
+    let mut files = Vec::new();
+    if hooks_path.is_file() {
+        let content = fs::read_to_string(&hooks_path)
+            .with_context(|| format!("failed to read {}", hooks_path.display()))?;
+        let mut value: serde_json::Value = serde_json::from_str(&content)
+            .with_context(|| format!("failed to parse {}", hooks_path.display()))?;
+        remove_claude_hook_entries(&mut value);
+        if value
+            .get("hooks")
+            .and_then(serde_json::Value::as_object)
+            .is_some_and(|hooks| hooks.is_empty())
+        {
+            value
+                .as_object_mut()
+                .context("Claude settings root must be a JSON object")?
+                .remove("hooks");
+        }
+        if value.as_object().is_some_and(|object| object.is_empty()) {
+            fs::remove_file(&hooks_path)
+                .with_context(|| format!("failed to remove {}", hooks_path.display()))?;
+        } else {
+            fs::write(&hooks_path, serde_json::to_vec_pretty(&value)?)
+                .with_context(|| format!("failed to write {}", hooks_path.display()))?;
+        }
+        files.push(repo_relative_display(root, &hooks_path));
+    }
+    Ok(ClaudeHooksUninstallOutput {
+        command: "claude-hooks uninstall",
+        status: "pass".to_string(),
+        root: root_label(root),
+        files,
+    })
+}
+
+fn client_hooks_install(
+    root: &Path,
+    client: HookClient,
+    strict: bool,
+    force: bool,
+    limit: usize,
+    snippets_per_file: usize,
+    lsp: bool,
+) -> Result<ClientHooksInstallOutput> {
+    let index = build_index_output(root, lsp)?;
+    let (hooks_file, trace_dir, files) =
+        write_client_hooks_files(root, client, strict, force, limit, snippets_per_file)?;
+
+    Ok(ClientHooksInstallOutput {
+        command: format!("{}-hooks install", hook_client_name(client)),
+        status: "pass".to_string(),
+        root: root_label(root),
+        client: agent_client_name(hook_client_agent(client)).to_string(),
+        strict,
+        hooks_file,
+        trace_dir,
+        files,
+        index,
+        first_required_command: format!("callsieve agent-context {} \"<task>\"", root.display()),
+        trust_instruction: hook_client_trust_instruction(client).to_string(),
+        policy: hook_client_policy(client).to_string(),
+    })
+}
+
+fn write_client_hooks_files(
+    root: &Path,
+    client: HookClient,
+    strict: bool,
+    force: bool,
+    limit: usize,
+    snippets_per_file: usize,
+) -> Result<(String, String, Vec<String>)> {
+    let mut files = Vec::new();
+    match client {
+        HookClient::OpenCode => {
+            let plugin_path = client_hooks_path(root, client);
+            write_project_file(
+                root,
+                &plugin_path,
+                &opencode_callsieve_plugin(root, strict, limit, snippets_per_file),
+                force,
+                &mut files,
+            )?;
+        }
+        HookClient::Cline => {
+            let manifest_path = client_hooks_path(root, client);
+            write_project_file(
+                root,
+                &manifest_path,
+                &cline_hooks_manifest(root, strict, limit, snippets_per_file),
+                force,
+                &mut files,
+            )?;
+            for hook_name in CLIENT_HOOK_COMMAND_NAMES {
+                for windows in [true, false] {
+                    let path = cline_hook_script_path(root, hook_name, windows);
+                    let content = if windows {
+                        cline_hook_script_ps1(
+                            root,
+                            hook_name,
+                            strict,
+                            context_options(hook_name, limit, snippets_per_file),
+                        )
+                    } else {
+                        cline_hook_script_sh(
+                            root,
+                            hook_name,
+                            strict,
+                            context_options(hook_name, limit, snippets_per_file),
+                        )
+                    };
+                    write_project_file(root, &path, &content, force, &mut files)?;
+                    if !windows {
+                        set_executable(&path)?;
+                    }
+                }
+            }
+        }
+        HookClient::Copilot | HookClient::Antigravity => {
+            let hooks_path = client_hooks_path(root, client);
+            let config = client_hooks_json(root, client, strict, limit, snippets_per_file);
+            write_project_file(
+                root,
+                &hooks_path,
+                &serde_json::to_string_pretty(&config)?,
+                force,
+                &mut files,
+            )?;
+        }
+    }
+
+    let trace_dir = client_hook_dir(root, client);
+    fs::create_dir_all(&trace_dir)
+        .with_context(|| format!("failed to create {}", trace_dir.display()))?;
+    files.push(repo_relative_display(root, &trace_dir));
+    files.sort();
+    files.dedup();
+    Ok((
+        repo_relative_display(root, &client_hooks_path(root, client)),
+        repo_relative_display(root, &trace_dir),
+        files,
+    ))
+}
+
+fn client_hooks_doctor(root: &Path, client: HookClient, strict: bool) -> ClientHooksDoctorOutput {
+    let hooks_path = client_hooks_path(root, client);
+    let trace_dir = client_hook_dir(root, client);
+    let content = fs::read_to_string(&hooks_path).ok();
+    let mut checks = Vec::new();
+    checks.push(enforce_check(
+        format!("{}_hooks_file", hook_client_name(client)),
+        hooks_path.is_file(),
+        if hooks_path.is_file() {
+            format!("{} hook file exists", hook_client_display(client))
+        } else {
+            format!("{} hook file is missing", hook_client_display(client))
+        },
+    ));
+
+    match client {
+        HookClient::OpenCode => {
+            let text = content.as_deref().unwrap_or_default();
+            checks.push(enforce_check(
+                "opencode_plugin_before_hook",
+                text.contains("tool.execute.before"),
+                "OpenCode plugin registers tool.execute.before",
+            ));
+            checks.push(enforce_check(
+                "opencode_plugin_after_hook",
+                text.contains("tool.execute.after"),
+                "OpenCode plugin registers tool.execute.after",
+            ));
+            checks.push(enforce_check(
+                "opencode_plugin_session_events",
+                text.contains("session.start") && text.contains("session.end"),
+                "OpenCode plugin records session events",
+            ));
+        }
+        HookClient::Cline => {
+            let parsed = content
+                .as_deref()
+                .and_then(|content| serde_json::from_str::<serde_json::Value>(content).ok());
+            checks.push(enforce_check(
+                "cline_hooks_json",
+                parsed.is_some(),
+                "Cline hook manifest is valid JSON",
+            ));
+            for hook_name in CLIENT_HOOK_COMMAND_NAMES {
+                let scripts_installed = cline_hook_script_path(root, hook_name, true).is_file()
+                    && cline_hook_script_path(root, hook_name, false).is_file();
+                checks.push(enforce_check(
+                    format!("cline_hook_script:{hook_name}"),
+                    scripts_installed,
+                    if scripts_installed {
+                        format!("Cline {hook_name} hook scripts are installed")
+                    } else {
+                        format!("Cline {hook_name} hook scripts are missing")
+                    },
+                ));
+            }
+        }
+        HookClient::Copilot | HookClient::Antigravity => {
+            let parsed = content
+                .as_deref()
+                .and_then(|content| serde_json::from_str::<serde_json::Value>(content).ok());
+            checks.push(enforce_check(
+                format!("{}_hooks_json", hook_client_name(client)),
+                parsed.is_some(),
+                if parsed.is_some() {
+                    format!("{} hook file is valid JSON", hook_client_display(client))
+                } else {
+                    format!(
+                        "{} hook file is missing or invalid JSON",
+                        hook_client_display(client)
+                    )
+                },
+            ));
+            for (event, _) in client_hook_events(client) {
+                let installed = parsed
+                    .as_ref()
+                    .and_then(|value| value.get("hooks"))
+                    .and_then(|hooks| hooks.get(*event))
+                    .and_then(serde_json::Value::as_array)
+                    .is_some_and(|entries| !entries.is_empty());
+                checks.push(enforce_check(
+                    format!("{}_hook_event:{event}", hook_client_name(client)),
+                    installed,
+                    if installed {
+                        format!("{} {event} hook is installed", hook_client_display(client))
+                    } else {
+                        format!("{} {event} hook is missing", hook_client_display(client))
+                    },
+                ));
+            }
+        }
+    }
+
+    let command_text = if matches!(client, HookClient::Cline) {
+        let mut text = content.clone().unwrap_or_default();
+        for hook_name in CLIENT_HOOK_COMMAND_NAMES {
+            for windows in [true, false] {
+                if let Ok(script) =
+                    fs::read_to_string(cline_hook_script_path(root, hook_name, windows))
+                {
+                    text.push('\n');
+                    text.push_str(&script);
+                }
+            }
+        }
+        text
+    } else {
+        content.clone().unwrap_or_default()
+    };
+    checks.push(enforce_check(
+        format!("{}_hook_commands", hook_client_name(client)),
+        command_text.contains(hook_client_command_prefix(client)),
+        format!(
+            "{} hooks point at CallSieve hook handlers",
+            hook_client_display(client)
+        ),
+    ));
+    checks.push(enforce_check(
+        format!("{}_hook_strict", hook_client_name(client)),
+        !strict || command_text.contains("--strict"),
+        if strict {
+            format!(
+                "{} hooks are installed in strict mode",
+                hook_client_display(client)
+            )
+        } else {
+            format!("{} strict hooks are optional", hook_client_display(client))
+        },
+    ));
+    checks.push(enforce_check(
+        format!("{}_hook_trace_dir", hook_client_name(client)),
+        trace_dir.is_dir(),
+        if trace_dir.is_dir() {
+            format!(
+                "{} hook trace directory exists",
+                hook_client_display(client)
+            )
+        } else {
+            format!(
+                "{} hook trace directory is missing",
+                hook_client_display(client)
+            )
+        },
+    ));
+    checks.push(check_with_status(
+        format!("{}_hook_trust", hook_client_name(client)),
+        "warn",
+        hook_client_trust_instruction(client),
+    ));
+
+    ClientHooksDoctorOutput {
+        command: format!("{}-hooks doctor", hook_client_name(client)),
+        status: status_from_checks(&checks),
+        root: root_label(root),
+        client: hook_client_name(client).to_string(),
+        strict,
+        hooks_file: repo_relative_display(root, &hooks_path),
+        trace_dir: repo_relative_display(root, &trace_dir),
+        checks,
+        trust_instruction: hook_client_trust_instruction(client).to_string(),
+    }
+}
+
+fn client_hooks_uninstall(root: &Path, client: HookClient) -> Result<ClientHooksUninstallOutput> {
+    let mut files = Vec::new();
+    let hooks_path = client_hooks_path(root, client);
+    if hooks_path.is_file() {
+        fs::remove_file(&hooks_path)
+            .with_context(|| format!("failed to remove {}", hooks_path.display()))?;
+        files.push(repo_relative_display(root, &hooks_path));
+    }
+    if matches!(client, HookClient::Cline) {
+        for hook_name in CLIENT_HOOK_COMMAND_NAMES {
+            for windows in [true, false] {
+                let path = cline_hook_script_path(root, hook_name, windows);
+                if path.is_file() {
+                    fs::remove_file(&path)
+                        .with_context(|| format!("failed to remove {}", path.display()))?;
+                    files.push(repo_relative_display(root, &path));
+                }
+            }
+        }
+    }
+    files.sort();
+    files.dedup();
+    Ok(ClientHooksUninstallOutput {
+        command: format!("{}-hooks uninstall", hook_client_name(client)),
+        status: "pass".to_string(),
+        root: root_label(root),
+        client: hook_client_name(client).to_string(),
+        files,
+    })
+}
+
+fn codex_hook_user_prompt_submit(
+    root: &Path,
+    strict: bool,
+    limit: usize,
+    snippets_per_file: usize,
+) -> Result<serde_json::Value> {
+    let input = read_codex_hook_input()?;
+    let prompt = hook_string_field(&input, &["prompt"]).unwrap_or_default();
+    let session_id = hook_session_id(&input);
+    let turn_id = hook_turn_id(&input);
+    let mut state = load_codex_hook_state(root, &session_id);
+    state.turn_id = turn_id;
+    state.strict = strict;
+    state.last_prompt_hash = hook_hash(&prompt);
+    state.updated_at = now_unix_seconds();
+
+    let maybe_index = store::json_store::load_index(root).ok();
+    let status = query::index_status(root, maybe_index.as_ref());
+    let fresh = serde_json::to_value(&status)?
+        .get("fresh")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+
+    let additional_context = if fresh {
+        let (index, index_load_ms) = load_index_timed(root)?;
+        let mut context =
+            query::build_context(root, &index, &prompt, limit, snippets_per_file, true)?;
+        context.add_index_load_time(index_load_ms);
+        let context_value = serde_json::to_value(&context)?;
+        let files = context_read_first_files(&context_value);
+        let tokens = serde_json::to_string(&context_value)
+            .map(|json| json.len().div_ceil(4))
+            .unwrap_or_default();
+        state.context_seen = true;
+        state.selected_files = files.clone();
+        append_codex_hook_trace_event(
+            root,
+            &state,
+            &prompt,
+            serde_json::json!({
+                "timestamp": now_unix_seconds(),
+                "command": first_required_context_command(root, &prompt),
+                "files_read": files,
+                "context_selected_files": state.selected_files.clone(),
+                "tokens": tokens,
+                "classification": "callsieve_context",
+                "phase": "callsieve",
+                "hook_event": "UserPromptSubmit"
+            }),
+        )?;
+        format!(
+            "CallSieve hook context injected. Read these files first; broad search is blocked until CallSieve context is established.\n\n{}",
+            context_markdown(&context_value, "grep_only_if_context_is_insufficient")
+        )
+    } else {
+        state.context_seen = false;
+        format!(
+            "CallSieve index is missing or stale for {}. Before broad search or repeated file reads, run `callsieve index {}` or `callsieve agent-context {} {:?}`.",
+            root.display(),
+            root.display(),
+            root.display(),
+            prompt
+        )
+    };
+
+    save_codex_hook_state(root, &state)?;
+    Ok(serde_json::json!({
+        "suppressOutput": true,
+        "hookSpecificOutput": {
+            "hookEventName": "UserPromptSubmit",
+            "additionalContext": additional_context
+        }
+    }))
+}
+
+fn codex_hook_pre_tool_use(root: &Path, strict: bool) -> Result<serde_json::Value> {
+    let input = read_codex_hook_input()?;
+    let session_id = hook_session_id(&input);
+    let task = hook_string_field(&input, &["prompt", "task"]).unwrap_or_default();
+    let mut state = load_codex_hook_state(root, &session_id);
+    state.strict = strict;
+    let command = hook_tool_command(&input);
+
+    if is_callsieve_context_command_local(&command) {
+        state.context_seen = true;
+        append_codex_hook_trace_event(
+            root,
+            &state,
+            &task,
+            codex_hook_trace_event(&input, &command, false),
+        )?;
+        save_codex_hook_state(root, &state)?;
+        return Ok(codex_hook_permission_response(
+            "PreToolUse",
+            "allow",
+            "CallSieve context is allowed.",
+        ));
+    }
+
+    if codex_hook_should_deny(&state, strict, &command) {
+        state.violation_seen = true;
+        append_codex_hook_trace_event(
+            root,
+            &state,
+            &task,
+            codex_hook_trace_event(&input, &command, true),
+        )?;
+        save_codex_hook_state(root, &state)?;
+        return Ok(codex_hook_permission_response(
+            "PreToolUse",
+            "deny",
+            &codex_hook_denial_reason(&command, strict),
+        ));
+    }
+
+    save_codex_hook_state(root, &state)?;
+    Ok(codex_hook_permission_response(
+        "PreToolUse",
+        "allow",
+        "Tool use allowed by CallSieve hook policy.",
+    ))
+}
+
+fn codex_hook_post_tool_use(root: &Path, strict: bool) -> Result<serde_json::Value> {
+    let input = read_codex_hook_input()?;
+    let session_id = hook_session_id(&input);
+    let task = hook_string_field(&input, &["prompt", "task"]).unwrap_or_default();
+    let mut state = load_codex_hook_state(root, &session_id);
+    state.strict = strict;
+    let command = hook_tool_command(&input);
+    if is_callsieve_context_command_local(&command) {
+        state.context_seen = true;
+    }
+    append_codex_hook_trace_event(
+        root,
+        &state,
+        &task,
+        codex_hook_trace_event(&input, &command, false),
+    )?;
+    save_codex_hook_state(root, &state)?;
+    Ok(serde_json::json!({
+        "suppressOutput": true,
+        "hookSpecificOutput": {
+            "hookEventName": "PostToolUse"
+        }
+    }))
+}
+
+fn codex_hook_permission_request(root: &Path, strict: bool) -> Result<serde_json::Value> {
+    let input = read_codex_hook_input()?;
+    let session_id = hook_session_id(&input);
+    let task = hook_string_field(&input, &["prompt", "task"]).unwrap_or_default();
+    let mut state = load_codex_hook_state(root, &session_id);
+    state.strict = strict;
+    let command = hook_tool_command(&input);
+    if codex_hook_should_deny(&state, strict, &command) {
+        state.violation_seen = true;
+        append_codex_hook_trace_event(
+            root,
+            &state,
+            &task,
+            codex_hook_trace_event(&input, &command, true),
+        )?;
+        save_codex_hook_state(root, &state)?;
+        return Ok(codex_hook_permission_response(
+            "PermissionRequest",
+            "deny",
+            &codex_hook_denial_reason(&command, strict),
+        ));
+    }
+    save_codex_hook_state(root, &state)?;
+    Ok(serde_json::json!({
+        "suppressOutput": true,
+        "hookSpecificOutput": {
+            "hookEventName": "PermissionRequest"
+        }
+    }))
+}
+
+fn codex_hook_stop(root: &Path, strict: bool) -> Result<serde_json::Value> {
+    let input = read_codex_hook_input()?;
+    let session_id = hook_session_id(&input);
+    let mut state = load_codex_hook_state(root, &session_id);
+    state.strict = strict;
+    let stop_hook_active = hook_bool_field(&input, &["stop_hook_active", "stopHookActive"]);
+    if strict && state.violation_seen && !state.stop_blocked && !stop_hook_active {
+        state.stop_blocked = true;
+        state.updated_at = now_unix_seconds();
+        save_codex_hook_state(root, &state)?;
+        return Ok(serde_json::json!({
+            "decision": "block",
+            "reason": "CallSieve blocked broad search or file reads before context. Continue from the injected CallSieve read-first context before broad search."
+        }));
+    }
+    save_codex_hook_state(root, &state)?;
+    Ok(serde_json::json!({
+        "suppressOutput": true,
+        "hookSpecificOutput": {
+            "hookEventName": "Stop"
+        }
+    }))
+}
+
+fn claude_hook_user_prompt_submit(
+    root: &Path,
+    strict: bool,
+    limit: usize,
+    snippets_per_file: usize,
+) -> Result<serde_json::Value> {
+    let input = read_claude_hook_input()?;
+    let prompt =
+        hook_string_field(&input, &["prompt", "user_prompt", "userPrompt"]).unwrap_or_default();
+    let session_id = hook_session_id(&input);
+    let turn_id = hook_turn_id(&input);
+    let mut state = load_claude_hook_state(root, &session_id);
+    state.turn_id = turn_id;
+    state.strict = strict;
+    state.last_prompt_hash = hook_hash(&prompt);
+    state.updated_at = now_unix_seconds();
+
+    let maybe_index = store::json_store::load_index(root).ok();
+    let status = query::index_status(root, maybe_index.as_ref());
+    let fresh = serde_json::to_value(&status)?
+        .get("fresh")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+
+    let additional_context = if fresh {
+        let (index, index_load_ms) = load_index_timed(root)?;
+        let mut context =
+            query::build_context(root, &index, &prompt, limit, snippets_per_file, true)?;
+        context.add_index_load_time(index_load_ms);
+        let context_value = serde_json::to_value(&context)?;
+        let files = context_read_first_files(&context_value);
+        let tokens = serde_json::to_string(&context_value)
+            .map(|json| json.len().div_ceil(4))
+            .unwrap_or_default();
+        state.context_seen = true;
+        state.selected_files = files.clone();
+        append_claude_hook_trace_event(
+            root,
+            &state,
+            &prompt,
+            serde_json::json!({
+                "timestamp": now_unix_seconds(),
+                "command": first_required_context_command(root, &prompt),
+                "files_read": files,
+                "context_selected_files": state.selected_files.clone(),
+                "tokens": tokens,
+                "classification": "callsieve_context",
+                "phase": "callsieve",
+                "hook_event": "UserPromptSubmit"
+            }),
+        )?;
+        format!(
+            "CallSieve Claude hook context injected. Read these files first; broad search is blocked until CallSieve context is established.\n\n{}",
+            context_markdown(&context_value, "grep_only_if_context_is_insufficient")
+        )
+    } else {
+        state.context_seen = false;
+        format!(
+            "CallSieve index is missing or stale for {}. Before broad search or repeated file reads, run `callsieve index {}` or `callsieve agent-context {} {:?}`.",
+            root.display(),
+            root.display(),
+            root.display(),
+            prompt
+        )
+    };
+
+    save_claude_hook_state(root, &state)?;
+    Ok(serde_json::json!({
+        "suppressOutput": true,
+        "hookSpecificOutput": {
+            "hookEventName": "UserPromptSubmit",
+            "additionalContext": additional_context
+        }
+    }))
+}
+
+fn claude_hook_pre_tool_use(root: &Path, strict: bool) -> Result<serde_json::Value> {
+    let input = read_claude_hook_input()?;
+    let session_id = hook_session_id(&input);
+    let task = hook_string_field(&input, &["prompt", "task", "user_prompt", "userPrompt"])
+        .unwrap_or_default();
+    let mut state = load_claude_hook_state(root, &session_id);
+    state.strict = strict;
+    let command = hook_tool_command(&input);
+
+    if is_callsieve_context_command_local(&command) {
+        state.context_seen = true;
+        append_claude_hook_trace_event(
+            root,
+            &state,
+            &task,
+            codex_hook_trace_event(&input, &command, false),
+        )?;
+        save_claude_hook_state(root, &state)?;
+        return Ok(codex_hook_permission_response(
+            "PreToolUse",
+            "allow",
+            "CallSieve context is allowed.",
+        ));
+    }
+
+    if codex_hook_should_deny(&state, strict, &command) {
+        state.violation_seen = true;
+        append_claude_hook_trace_event(
+            root,
+            &state,
+            &task,
+            codex_hook_trace_event(&input, &command, true),
+        )?;
+        save_claude_hook_state(root, &state)?;
+        return Ok(codex_hook_permission_response(
+            "PreToolUse",
+            "deny",
+            &codex_hook_denial_reason(&command, strict),
+        ));
+    }
+
+    save_claude_hook_state(root, &state)?;
+    Ok(codex_hook_permission_response(
+        "PreToolUse",
+        "allow",
+        "Tool use allowed by CallSieve hook policy.",
+    ))
+}
+
+fn claude_hook_post_tool_use(root: &Path, strict: bool) -> Result<serde_json::Value> {
+    let input = read_claude_hook_input()?;
+    let session_id = hook_session_id(&input);
+    let task = hook_string_field(&input, &["prompt", "task", "user_prompt", "userPrompt"])
+        .unwrap_or_default();
+    let mut state = load_claude_hook_state(root, &session_id);
+    state.strict = strict;
+    let command = hook_tool_command(&input);
+    if is_callsieve_context_command_local(&command) {
+        state.context_seen = true;
+    }
+    append_claude_hook_trace_event(
+        root,
+        &state,
+        &task,
+        codex_hook_trace_event(&input, &command, false),
+    )?;
+    save_claude_hook_state(root, &state)?;
+    Ok(serde_json::json!({
+        "suppressOutput": true,
+        "hookSpecificOutput": {
+            "hookEventName": "PostToolUse"
+        }
+    }))
+}
+
+fn claude_hook_permission_request(root: &Path, strict: bool) -> Result<serde_json::Value> {
+    let input = read_claude_hook_input()?;
+    let session_id = hook_session_id(&input);
+    let task = hook_string_field(&input, &["prompt", "task", "user_prompt", "userPrompt"])
+        .unwrap_or_default();
+    let mut state = load_claude_hook_state(root, &session_id);
+    state.strict = strict;
+    let command = hook_tool_command(&input);
+    if codex_hook_should_deny(&state, strict, &command) {
+        state.violation_seen = true;
+        append_claude_hook_trace_event(
+            root,
+            &state,
+            &task,
+            codex_hook_trace_event(&input, &command, true),
+        )?;
+        save_claude_hook_state(root, &state)?;
+        return Ok(claude_hook_permission_request_response(
+            "deny",
+            &codex_hook_denial_reason(&command, strict),
+        ));
+    }
+    save_claude_hook_state(root, &state)?;
+    Ok(serde_json::json!({
+        "suppressOutput": true,
+        "hookSpecificOutput": {
+            "hookEventName": "PermissionRequest"
+        }
+    }))
+}
+
+fn claude_hook_stop(root: &Path, strict: bool) -> Result<serde_json::Value> {
+    let input = read_claude_hook_input()?;
+    let session_id = hook_session_id(&input);
+    let mut state = load_claude_hook_state(root, &session_id);
+    state.strict = strict;
+    let stop_hook_active = hook_bool_field(&input, &["stop_hook_active", "stopHookActive"]);
+    if strict && state.violation_seen && !state.stop_blocked && !stop_hook_active {
+        state.stop_blocked = true;
+        state.updated_at = now_unix_seconds();
+        save_claude_hook_state(root, &state)?;
+        return Ok(serde_json::json!({
+            "decision": "block",
+            "reason": "CallSieve blocked broad search or file reads before context. Continue from the injected CallSieve read-first context before broad search."
+        }));
+    }
+    save_claude_hook_state(root, &state)?;
+    Ok(serde_json::json!({
+        "suppressOutput": true,
+        "hookSpecificOutput": {
+            "hookEventName": "Stop"
+        }
+    }))
+}
+
+fn claude_hook_permission_request_response(decision: &str, reason: &str) -> serde_json::Value {
+    serde_json::json!({
+        "suppressOutput": true,
+        "hookSpecificOutput": {
+            "hookEventName": "PermissionRequest",
+            "decision": {
+                "behavior": decision,
+                "message": reason
+            }
+        }
+    })
+}
+
+fn client_hook_user_prompt_submit(
+    root: &Path,
+    client: HookClient,
+    strict: bool,
+    limit: usize,
+    snippets_per_file: usize,
+) -> Result<serde_json::Value> {
+    let input = read_hook_input(hook_client_display(client))?;
+    let prompt = hook_string_field(
+        &input,
+        &["prompt", "user_prompt", "userPrompt", "message", "task"],
+    )
+    .unwrap_or_default();
+    let session_id = hook_session_id(&input);
+    let turn_id = hook_turn_id(&input);
+    let mut state = load_client_hook_state(root, client, &session_id);
+    state.turn_id = turn_id;
+    state.strict = strict;
+    state.last_prompt_hash = hook_hash(&prompt);
+    state.updated_at = now_unix_seconds();
+
+    let maybe_index = store::json_store::load_index(root).ok();
+    let status = query::index_status(root, maybe_index.as_ref());
+    let fresh = serde_json::to_value(&status)?
+        .get("fresh")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+
+    let additional_context = if fresh {
+        let (index, index_load_ms) = load_index_timed(root)?;
+        let mut context =
+            query::build_context(root, &index, &prompt, limit, snippets_per_file, true)?;
+        context.add_index_load_time(index_load_ms);
+        let context_value = serde_json::to_value(&context)?;
+        let files = context_read_first_files(&context_value);
+        let tokens = serde_json::to_string(&context_value)
+            .map(|json| json.len().div_ceil(4))
+            .unwrap_or_default();
+        state.context_seen = true;
+        state.selected_files = files.clone();
+        append_client_hook_trace_event(
+            root,
+            client,
+            &state,
+            &prompt,
+            serde_json::json!({
+                "timestamp": now_unix_seconds(),
+                "command": first_required_context_command(root, &prompt),
+                "files_read": files,
+                "context_selected_files": state.selected_files.clone(),
+                "tokens": tokens,
+                "classification": "callsieve_context",
+                "phase": "callsieve",
+                "hook_event": "UserPromptSubmit"
+            }),
+        )?;
+        format!(
+            "CallSieve {} hook context injected. Read these files first; broad search is blocked until CallSieve context is established.\n\n{}",
+            hook_client_display(client),
+            context_markdown(&context_value, "grep_only_if_context_is_insufficient")
+        )
+    } else {
+        state.context_seen = false;
+        format!(
+            "CallSieve index is missing or stale for {}. Before broad search or repeated file reads, run `callsieve index {}` or `callsieve agent-context {} {:?}`.",
+            root.display(),
+            root.display(),
+            root.display(),
+            prompt
+        )
+    };
+
+    save_client_hook_state(root, client, &state)?;
+    Ok(serde_json::json!({
+        "suppressOutput": true,
+        "hookSpecificOutput": {
+            "hookEventName": "UserPromptSubmit",
+            "additionalContext": additional_context
+        }
+    }))
+}
+
+fn client_hook_pre_tool_use(
+    root: &Path,
+    client: HookClient,
+    strict: bool,
+) -> Result<serde_json::Value> {
+    let input = read_hook_input(hook_client_display(client))?;
+    let session_id = hook_session_id(&input);
+    let task = hook_string_field(
+        &input,
+        &["prompt", "task", "user_prompt", "userPrompt", "message"],
+    )
+    .unwrap_or_default();
+    let mut state = load_client_hook_state(root, client, &session_id);
+    state.strict = strict;
+    let command = hook_tool_command(&input);
+
+    if is_callsieve_context_command_local(&command) {
+        state.context_seen = true;
+        append_client_hook_trace_event(
+            root,
+            client,
+            &state,
+            &task,
+            codex_hook_trace_event(&input, &command, false),
+        )?;
+        save_client_hook_state(root, client, &state)?;
+        return Ok(codex_hook_permission_response(
+            "PreToolUse",
+            "allow",
+            "CallSieve context is allowed.",
+        ));
+    }
+
+    if codex_hook_should_deny(&state, strict, &command) {
+        state.violation_seen = true;
+        append_client_hook_trace_event(
+            root,
+            client,
+            &state,
+            &task,
+            codex_hook_trace_event(&input, &command, true),
+        )?;
+        save_client_hook_state(root, client, &state)?;
+        return Ok(codex_hook_permission_response(
+            "PreToolUse",
+            "deny",
+            &codex_hook_denial_reason(&command, strict),
+        ));
+    }
+
+    save_client_hook_state(root, client, &state)?;
+    Ok(codex_hook_permission_response(
+        "PreToolUse",
+        "allow",
+        "Tool use allowed by CallSieve hook policy.",
+    ))
+}
+
+fn client_hook_post_tool_use(
+    root: &Path,
+    client: HookClient,
+    strict: bool,
+) -> Result<serde_json::Value> {
+    let input = read_hook_input(hook_client_display(client))?;
+    let session_id = hook_session_id(&input);
+    let task = hook_string_field(
+        &input,
+        &["prompt", "task", "user_prompt", "userPrompt", "message"],
+    )
+    .unwrap_or_default();
+    let mut state = load_client_hook_state(root, client, &session_id);
+    state.strict = strict;
+    let command = hook_tool_command(&input);
+    if is_callsieve_context_command_local(&command) {
+        state.context_seen = true;
+    }
+    append_client_hook_trace_event(
+        root,
+        client,
+        &state,
+        &task,
+        codex_hook_trace_event(&input, &command, false),
+    )?;
+    save_client_hook_state(root, client, &state)?;
+    Ok(serde_json::json!({
+        "suppressOutput": true,
+        "hookSpecificOutput": {
+            "hookEventName": "PostToolUse"
+        }
+    }))
+}
+
+fn client_hook_permission_request(
+    root: &Path,
+    client: HookClient,
+    strict: bool,
+) -> Result<serde_json::Value> {
+    let input = read_hook_input(hook_client_display(client))?;
+    let session_id = hook_session_id(&input);
+    let task = hook_string_field(
+        &input,
+        &["prompt", "task", "user_prompt", "userPrompt", "message"],
+    )
+    .unwrap_or_default();
+    let mut state = load_client_hook_state(root, client, &session_id);
+    state.strict = strict;
+    let command = hook_tool_command(&input);
+    if codex_hook_should_deny(&state, strict, &command) {
+        state.violation_seen = true;
+        append_client_hook_trace_event(
+            root,
+            client,
+            &state,
+            &task,
+            codex_hook_trace_event(&input, &command, true),
+        )?;
+        save_client_hook_state(root, client, &state)?;
+        return Ok(codex_hook_permission_response(
+            "PermissionRequest",
+            "deny",
+            &codex_hook_denial_reason(&command, strict),
+        ));
+    }
+    save_client_hook_state(root, client, &state)?;
+    Ok(serde_json::json!({
+        "suppressOutput": true,
+        "hookSpecificOutput": {
+            "hookEventName": "PermissionRequest"
+        }
+    }))
+}
+
+fn client_hook_stop(root: &Path, client: HookClient, strict: bool) -> Result<serde_json::Value> {
+    let input = read_hook_input(hook_client_display(client))?;
+    let session_id = hook_session_id(&input);
+    let mut state = load_client_hook_state(root, client, &session_id);
+    state.strict = strict;
+    let stop_hook_active = hook_bool_field(&input, &["stop_hook_active", "stopHookActive"]);
+    if strict && state.violation_seen && !state.stop_blocked && !stop_hook_active {
+        state.stop_blocked = true;
+        state.updated_at = now_unix_seconds();
+        save_client_hook_state(root, client, &state)?;
+        return Ok(serde_json::json!({
+            "decision": "block",
+            "reason": "CallSieve blocked broad search or file reads before context. Continue from the injected CallSieve read-first context before broad search."
+        }));
+    }
+    save_client_hook_state(root, client, &state)?;
+    Ok(serde_json::json!({
+        "suppressOutput": true,
+        "hookSpecificOutput": {
+            "hookEventName": "Stop"
+        }
+    }))
+}
+
 fn install_hook(
     root: &Path,
     client: AgentClient,
@@ -7543,11 +10263,86 @@ fn install_hook(
     force: bool,
     lsp: bool,
 ) -> Result<HookInstallOutput> {
-    let index = build_index_output(root, lsp)?;
     let setup = setup_agent(client, root, force)?;
     let first_required_command = setup.first_required_command.clone();
     let shim = install_shim(root, force, strict)?;
-    let launchers = write_hook_launchers(root, &first_required_command, force)?;
+    let mut launchers = write_hook_launchers(root, &first_required_command, force)?;
+    if matches!(client, AgentClient::Codex) {
+        launchers.extend(write_codex_launchers(root, &first_required_command, force)?);
+    }
+    let codex_hook_files = if matches!(client, AgentClient::Codex) {
+        Some(write_codex_hooks_files(root, strict, force, 6, 1)?)
+    } else {
+        None
+    };
+    let claude_hook_files = if matches!(client, AgentClient::Claude) {
+        Some(write_claude_hooks_files(root, strict, force, 6, 1)?)
+    } else {
+        None
+    };
+    let client_hook_kind = hook_client_for_agent(client);
+    let client_hook_files = if let Some(hook_client) = client_hook_kind {
+        Some(write_client_hooks_files(
+            root,
+            hook_client,
+            strict,
+            force,
+            6,
+            1,
+        )?)
+    } else {
+        None
+    };
+
+    let index = build_index_output(root, lsp)?;
+
+    let codex_hooks = codex_hook_files.map(|(hooks_file, trace_dir, files)| {
+        CodexHooksInstallOutput {
+            command: "codex-hooks install",
+            status: "pass".to_string(),
+            root: root_label(root),
+            strict,
+            hooks_file,
+            trace_dir,
+            files,
+            index: index.clone(),
+            first_required_command: first_required_command.clone(),
+            trust_instruction: "Review and trust project hooks in Codex with /hooks.",
+            policy: "Codex lifecycle hooks inject CallSieve context and block broad search before context.",
+        }
+    });
+    let claude_hooks = claude_hook_files.map(|(hooks_file, trace_dir, files)| {
+        ClaudeHooksInstallOutput {
+            command: "claude-hooks install",
+            status: "pass".to_string(),
+            root: root_label(root),
+            strict,
+            hooks_file,
+            trace_dir,
+            files,
+            index: index.clone(),
+            first_required_command: first_required_command.clone(),
+            trust_instruction: "Review and trust project hooks in Claude Code with /hooks.",
+            policy: "Claude Code lifecycle hooks inject CallSieve context and block broad search before context.",
+        }
+    });
+    let client_hooks = client_hook_files.map(|(hooks_file, trace_dir, files)| {
+        let hook_client = client_hook_kind.expect("client hook kind should exist");
+        ClientHooksInstallOutput {
+            command: format!("{}-hooks install", hook_client_name(hook_client)),
+            status: "pass".to_string(),
+            root: root_label(root),
+            client: hook_client_name(hook_client).to_string(),
+            strict,
+            hooks_file,
+            trace_dir,
+            files,
+            index: index.clone(),
+            first_required_command: first_required_command.clone(),
+            trust_instruction: hook_client_trust_instruction(hook_client).to_string(),
+            policy: hook_client_policy(hook_client).to_string(),
+        }
+    });
 
     Ok(HookInstallOutput {
         command: "hook install",
@@ -7559,9 +10354,13 @@ fn install_hook(
         setup,
         path_instruction: shim.path_instruction.clone(),
         shim,
+        codex_hooks,
+        claude_hooks,
+        client_hooks,
         launchers,
         first_required_command,
         policy: "repo-local hook only; launchers prepend .callsieve/bin for that process and do not mutate global PATH",
+        warnings: agent_client_warnings_for_root(client, root),
     })
 }
 
@@ -7601,11 +10400,29 @@ fn hook_doctor(root: &Path) -> HookDoctorOutput {
     }
     .to_string();
 
+    let client_hooks = [
+        HookClient::Copilot,
+        HookClient::OpenCode,
+        HookClient::Antigravity,
+        HookClient::Cline,
+    ]
+    .into_iter()
+    .filter(|client| client_hooks_path(root, *client).is_file())
+    .map(|client| client_hooks_doctor(root, client, false))
+    .collect();
+
     HookDoctorOutput {
         command: "hook doctor",
         status,
         root: root_label(root),
         checks,
+        codex_hooks: codex_hooks_path(root)
+            .is_file()
+            .then(|| codex_hooks_doctor(root, false)),
+        claude_hooks: claude_hooks_path(root)
+            .is_file()
+            .then(|| claude_hooks_doctor(root, false)),
+        client_hooks,
         path_instruction: shim.path_instruction.clone(),
         shim,
     }
@@ -7620,8 +10437,1268 @@ fn uninstall_hook(root: &Path) -> Result<ShimOutput> {
             output.files.push(path.display().to_string());
         }
     }
+    for path in codex_launcher_paths(root) {
+        if path.is_file() {
+            fs::remove_file(&path)
+                .with_context(|| format!("failed to remove {}", path.display()))?;
+            output.files.push(path.display().to_string());
+        }
+    }
+    let codex = codex_hooks_uninstall(root)?;
+    output.files.extend(codex.files);
+    let claude = claude_hooks_uninstall(root)?;
+    output.files.extend(claude.files);
+    for hook_client in [
+        HookClient::Copilot,
+        HookClient::OpenCode,
+        HookClient::Antigravity,
+        HookClient::Cline,
+    ] {
+        let removed = client_hooks_uninstall(root, hook_client)?;
+        output.files.extend(removed.files);
+    }
     output.command = "hook uninstall";
     Ok(output)
+}
+
+const CODEX_HOOK_EVENTS: &[&str] = &[
+    "UserPromptSubmit",
+    "PreToolUse",
+    "PostToolUse",
+    "PermissionRequest",
+    "Stop",
+];
+
+const CODEX_HOOK_COMMAND_NAMES: &[&str] = &[
+    "user-prompt-submit",
+    "pre-tool-use",
+    "post-tool-use",
+    "permission-request",
+    "stop",
+];
+
+const CLAUDE_HOOK_EVENTS: &[&str] = &[
+    "UserPromptSubmit",
+    "PreToolUse",
+    "PostToolUse",
+    "PermissionRequest",
+    "Stop",
+];
+
+const CLAUDE_HOOK_COMMAND_NAMES: &[&str] = &[
+    "user-prompt-submit",
+    "pre-tool-use",
+    "post-tool-use",
+    "permission-request",
+    "stop",
+];
+
+const CLIENT_HOOK_COMMAND_NAMES: &[&str] = &[
+    "user-prompt-submit",
+    "pre-tool-use",
+    "post-tool-use",
+    "permission-request",
+    "stop",
+];
+
+const COPILOT_HOOK_EVENTS: &[(&str, &str)] = &[
+    ("UserPromptSubmit", "user-prompt-submit"),
+    ("PreToolUse", "pre-tool-use"),
+    ("PostToolUse", "post-tool-use"),
+    ("PermissionRequest", "permission-request"),
+    ("Stop", "stop"),
+    ("SessionStart", "post-tool-use"),
+];
+
+const ANTIGRAVITY_HOOK_EVENTS: &[(&str, &str)] = &[
+    ("PreInvocation", "user-prompt-submit"),
+    ("PreToolUse", "pre-tool-use"),
+    ("PostToolUse", "post-tool-use"),
+    ("Stop", "stop"),
+];
+
+fn codex_hooks_path(root: &Path) -> PathBuf {
+    root.join(".codex/hooks.json")
+}
+
+fn claude_hooks_path(root: &Path) -> PathBuf {
+    root.join(".claude/settings.local.json")
+}
+
+fn codex_hook_dir(root: &Path) -> PathBuf {
+    callsieve_dir(root).join("codex-hooks")
+}
+
+fn claude_hook_dir(root: &Path) -> PathBuf {
+    callsieve_dir(root).join("claude-hooks")
+}
+
+fn codex_hook_state_path(root: &Path, session_id: &str) -> PathBuf {
+    codex_hook_dir(root).join(format!("{}.state.json", safe_pilot_label(session_id)))
+}
+
+fn claude_hook_state_path(root: &Path, session_id: &str) -> PathBuf {
+    claude_hook_dir(root).join(format!("{}.state.json", safe_pilot_label(session_id)))
+}
+
+fn codex_hook_trace_path(root: &Path, session_id: &str) -> PathBuf {
+    codex_hook_dir(root).join(format!("{}.trace.json", safe_pilot_label(session_id)))
+}
+
+fn claude_hook_trace_path(root: &Path, session_id: &str) -> PathBuf {
+    claude_hook_dir(root).join(format!("{}.trace.json", safe_pilot_label(session_id)))
+}
+
+fn client_hooks_path(root: &Path, client: HookClient) -> PathBuf {
+    match client {
+        HookClient::Copilot => root.join(".github/hooks/callsieve.json"),
+        HookClient::OpenCode => root.join(".opencode/plugins/callsieve.js"),
+        HookClient::Antigravity => root.join(".agents/hooks.json"),
+        HookClient::Cline => root.join(".cline/hooks/callsieve.json"),
+    }
+}
+
+fn client_hook_dir(root: &Path, client: HookClient) -> PathBuf {
+    callsieve_dir(root).join(format!("{}-hooks", hook_client_name(client)))
+}
+
+fn client_hook_state_path(root: &Path, client: HookClient, session_id: &str) -> PathBuf {
+    client_hook_dir(root, client).join(format!("{}.state.json", safe_pilot_label(session_id)))
+}
+
+fn client_hook_trace_path(root: &Path, client: HookClient, session_id: &str) -> PathBuf {
+    client_hook_dir(root, client).join(format!("{}.trace.json", safe_pilot_label(session_id)))
+}
+
+fn cline_hook_script_path(root: &Path, hook_name: &str, windows: bool) -> PathBuf {
+    let extension = if windows { "ps1" } else { "sh" };
+    root.join(format!(".cline/hooks/callsieve-{hook_name}.{extension}"))
+}
+
+fn hook_client_name(client: HookClient) -> &'static str {
+    match client {
+        HookClient::Copilot => "copilot",
+        HookClient::OpenCode => "opencode",
+        HookClient::Antigravity => "antigravity",
+        HookClient::Cline => "cline",
+    }
+}
+
+fn hook_client_display(client: HookClient) -> &'static str {
+    match client {
+        HookClient::Copilot => "GitHub Copilot",
+        HookClient::OpenCode => "OpenCode",
+        HookClient::Antigravity => "Antigravity CLI",
+        HookClient::Cline => "Cline",
+    }
+}
+
+fn hook_client_command_prefix(client: HookClient) -> &'static str {
+    match client {
+        HookClient::Copilot => "copilot-hook",
+        HookClient::OpenCode => "opencode-hook",
+        HookClient::Antigravity => "antigravity-hook",
+        HookClient::Cline => "cline-hook",
+    }
+}
+
+fn hook_client_agent(client: HookClient) -> AgentClient {
+    match client {
+        HookClient::Copilot => AgentClient::Copilot,
+        HookClient::OpenCode => AgentClient::OpenCode,
+        HookClient::Antigravity => AgentClient::Antigravity,
+        HookClient::Cline => AgentClient::Cline,
+    }
+}
+
+fn hook_client_for_agent(client: AgentClient) -> Option<HookClient> {
+    match client {
+        AgentClient::Copilot => Some(HookClient::Copilot),
+        AgentClient::OpenCode => Some(HookClient::OpenCode),
+        AgentClient::Antigravity => Some(HookClient::Antigravity),
+        AgentClient::Cline => Some(HookClient::Cline),
+        _ => None,
+    }
+}
+
+fn hook_client_policy(client: HookClient) -> &'static str {
+    match client {
+        HookClient::Copilot => {
+            "GitHub Copilot local hooks inject CallSieve context and block broad search before context. Cloud agents are template-only unless CallSieve is installed in the sandbox."
+        }
+        HookClient::OpenCode => {
+            "OpenCode plugin hooks inject CallSieve context and block broad grep, glob, read, and shell search before context."
+        }
+        HookClient::Antigravity => {
+            "Antigravity CLI hooks inject CallSieve context and block broad search before context."
+        }
+        HookClient::Cline => {
+            "Cline lifecycle hooks inject CallSieve context and block broad search before context."
+        }
+    }
+}
+
+fn hook_client_trust_instruction(client: HookClient) -> &'static str {
+    match client {
+        HookClient::Copilot => {
+            "Review and trust local GitHub Copilot project hooks before relying on enforcement."
+        }
+        HookClient::OpenCode => {
+            "Review the generated OpenCode plugin before relying on enforcement."
+        }
+        HookClient::Antigravity => {
+            "Review and trust local Antigravity project hooks before relying on enforcement."
+        }
+        HookClient::Cline => {
+            "Review and trust local Cline hook scripts before relying on enforcement."
+        }
+    }
+}
+
+fn hook_client_trace_source(client: HookClient) -> &'static str {
+    match client {
+        HookClient::Copilot => "github_copilot_lifecycle_hooks",
+        HookClient::OpenCode => "opencode_plugin_hooks",
+        HookClient::Antigravity => "antigravity_cli_lifecycle_hooks",
+        HookClient::Cline => "cline_lifecycle_hooks",
+    }
+}
+
+fn client_hook_events(client: HookClient) -> &'static [(&'static str, &'static str)] {
+    match client {
+        HookClient::Copilot => COPILOT_HOOK_EVENTS,
+        HookClient::Antigravity => ANTIGRAVITY_HOOK_EVENTS,
+        HookClient::OpenCode | HookClient::Cline => &[],
+    }
+}
+
+fn codex_hooks_json(
+    root: &Path,
+    strict: bool,
+    limit: usize,
+    snippets_per_file: usize,
+) -> serde_json::Value {
+    serde_json::json!({
+        "hooks": {
+            "UserPromptSubmit": [
+                codex_hook_entry(codex_hook_command_config(root, "user-prompt-submit", strict, Some((limit, snippets_per_file))))
+            ],
+            "PreToolUse": [
+                codex_hook_entry(codex_hook_command_config(root, "pre-tool-use", strict, None))
+            ],
+            "PostToolUse": [
+                codex_hook_entry(codex_hook_command_config(root, "post-tool-use", strict, None))
+            ],
+            "PermissionRequest": [
+                codex_hook_entry(codex_hook_command_config(root, "permission-request", strict, None))
+            ],
+            "Stop": [
+                codex_hook_entry(codex_hook_command_config(root, "stop", strict, None))
+            ]
+        }
+    })
+}
+
+fn claude_hooks_json(
+    root: &Path,
+    strict: bool,
+    limit: usize,
+    snippets_per_file: usize,
+    force: bool,
+) -> Result<serde_json::Value> {
+    let hooks_path = claude_hooks_path(root);
+    let mut value = if hooks_path.is_file() {
+        let content = fs::read_to_string(&hooks_path)
+            .with_context(|| format!("failed to read {}", hooks_path.display()))?;
+        match serde_json::from_str::<serde_json::Value>(&content) {
+            Ok(value) if value.is_object() => value,
+            Ok(_) if force => serde_json::json!({}),
+            Ok(_) => anyhow::bail!("{} must contain a JSON object", hooks_path.display()),
+            Err(error) if force => {
+                tracing::warn!(
+                    path = %hooks_path.display(),
+                    error = %error,
+                    "replacing invalid Claude Code local settings because --force was used"
+                );
+                serde_json::json!({})
+            }
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("failed to parse {}", hooks_path.display()));
+            }
+        }
+    } else {
+        serde_json::json!({})
+    };
+
+    remove_claude_hook_entries(&mut value);
+    upsert_claude_hook_entry(
+        &mut value,
+        "UserPromptSubmit",
+        None,
+        claude_hook_command_config(
+            root,
+            "user-prompt-submit",
+            strict,
+            Some((limit, snippets_per_file)),
+        ),
+    )?;
+    for (event, hook_name) in [
+        ("PreToolUse", "pre-tool-use"),
+        ("PostToolUse", "post-tool-use"),
+        ("PermissionRequest", "permission-request"),
+    ] {
+        upsert_claude_hook_entry(
+            &mut value,
+            event,
+            Some("Bash|Read|Grep|Glob"),
+            claude_hook_command_config(root, hook_name, strict, None),
+        )?;
+    }
+    upsert_claude_hook_entry(
+        &mut value,
+        "Stop",
+        None,
+        claude_hook_command_config(root, "stop", strict, None),
+    )?;
+    Ok(value)
+}
+
+fn client_hooks_json(
+    root: &Path,
+    client: HookClient,
+    strict: bool,
+    limit: usize,
+    snippets_per_file: usize,
+) -> serde_json::Value {
+    let mut hooks = serde_json::Map::new();
+    for (event, hook_name) in client_hook_events(client) {
+        hooks.insert(
+            (*event).to_string(),
+            serde_json::json!([client_hook_entry(client_hook_command_config(
+                root,
+                client,
+                hook_name,
+                strict,
+                context_options(hook_name, limit, snippets_per_file),
+            ))]),
+        );
+    }
+    serde_json::json!({
+        "version": 1,
+        "client": hook_client_name(client),
+        "hooks": hooks
+    })
+}
+
+fn opencode_callsieve_plugin(
+    root: &Path,
+    strict: bool,
+    limit: usize,
+    snippets_per_file: usize,
+) -> String {
+    let command = serde_json::to_string(&callsieve_executable_display()).unwrap_or_default();
+    let root = serde_json::to_string(&root.display().to_string()).unwrap_or_default();
+    let strict = if strict { "true" } else { "false" };
+    format!(
+        "const {{ spawnSync }} = require('node:child_process');\n\
+const callsieveCommand = {command};\n\
+const repoRoot = {root};\n\
+const strictMode = {strict};\n\
+\n\
+function argsFor(hookName) {{\n\
+  const args = ['opencode-hook', hookName, repoRoot];\n\
+  if (strictMode) args.push('--strict');\n\
+  if (hookName === 'user-prompt-submit') args.push('--limit', '{limit}', '--snippets-per-file', '{snippets_per_file}');\n\
+  return args;\n\
+}}\n\
+\n\
+function runCallsieve(hookName, payload) {{\n\
+  const result = spawnSync(callsieveCommand, argsFor(hookName), {{ input: JSON.stringify(payload || {{}}), encoding: 'utf8' }});\n\
+  if (result.status !== 0) return {{ hookSpecificOutput: {{ permissionDecision: 'deny', permissionDecisionReason: result.stderr || 'CallSieve hook failed' }} }};\n\
+  try {{ return JSON.parse(result.stdout || '{{}}'); }} catch (_) {{ return {{}}; }}\n\
+}}\n\
+\n\
+module.exports = async function callsievePlugin() {{\n\
+  return {{\n\
+    name: 'callsieve',\n\
+    'session.start': async (session) => runCallsieve('user-prompt-submit', session),\n\
+    'tool.execute.before': async (tool) => {{\n\
+      const output = runCallsieve('pre-tool-use', tool);\n\
+      const hook = output.hookSpecificOutput || {{}};\n\
+      if (hook.permissionDecision === 'deny') return {{ error: hook.permissionDecisionReason || 'CallSieve denied pre-context tool use' }};\n\
+      return tool;\n\
+    }},\n\
+    'tool.execute.after': async (tool) => runCallsieve('post-tool-use', tool),\n\
+    'session.end': async (session) => runCallsieve('stop', session),\n\
+  }};\n\
+}};\n"
+    )
+}
+
+fn cline_hooks_manifest(
+    root: &Path,
+    strict: bool,
+    limit: usize,
+    snippets_per_file: usize,
+) -> String {
+    let mut hooks = serde_json::Map::new();
+    for hook_name in CLIENT_HOOK_COMMAND_NAMES {
+        hooks.insert(
+            (*hook_name).to_string(),
+            serde_json::json!({
+                "windows": repo_relative_display(root, &cline_hook_script_path(root, hook_name, true)),
+                "unix": repo_relative_display(root, &cline_hook_script_path(root, hook_name, false)),
+                "strict": strict,
+                "limit": if *hook_name == "user-prompt-submit" { Some(limit) } else { None },
+                "snippets_per_file": if *hook_name == "user-prompt-submit" { Some(snippets_per_file) } else { None }
+            }),
+        );
+    }
+    serde_json::to_string_pretty(&serde_json::json!({
+        "version": 1,
+        "client": "cline",
+        "hooks": hooks
+    }))
+    .unwrap_or_else(|_| "{}".to_string())
+}
+
+fn cline_hook_script_ps1(
+    root: &Path,
+    hook_name: &str,
+    strict: bool,
+    context_options: Option<(usize, usize)>,
+) -> String {
+    format!(
+        "$inputText = [Console]::In.ReadToEnd()\n\
+if ([string]::IsNullOrWhiteSpace($inputText)) {{ $inputText = '{{}}' }}\n\
+$inputText | {}\n",
+        client_hook_command_line(
+            root,
+            HookClient::Cline,
+            hook_name,
+            strict,
+            context_options,
+            true
+        )
+    )
+}
+
+fn cline_hook_script_sh(
+    root: &Path,
+    hook_name: &str,
+    strict: bool,
+    context_options: Option<(usize, usize)>,
+) -> String {
+    format!(
+        "#!/usr/bin/env sh\nexec {}\n",
+        client_hook_command_line(
+            root,
+            HookClient::Cline,
+            hook_name,
+            strict,
+            context_options,
+            false
+        )
+    )
+}
+
+fn context_options(
+    hook_name: &str,
+    limit: usize,
+    snippets_per_file: usize,
+) -> Option<(usize, usize)> {
+    (hook_name == "user-prompt-submit").then_some((limit, snippets_per_file))
+}
+
+fn codex_hook_entry(command: serde_json::Value) -> serde_json::Value {
+    serde_json::json!({
+        "hooks": [command]
+    })
+}
+
+fn client_hook_entry(command: serde_json::Value) -> serde_json::Value {
+    serde_json::json!({
+        "hooks": [command]
+    })
+}
+
+fn claude_hook_entry(matcher: Option<&str>, command: serde_json::Value) -> serde_json::Value {
+    let mut entry = serde_json::json!({
+        "hooks": [command]
+    });
+    if let Some(matcher) = matcher {
+        entry
+            .as_object_mut()
+            .expect("Claude hook entry must be an object")
+            .insert("matcher".to_string(), serde_json::json!(matcher));
+    }
+    entry
+}
+
+fn upsert_claude_hook_entry(
+    value: &mut serde_json::Value,
+    event: &str,
+    matcher: Option<&str>,
+    command: serde_json::Value,
+) -> Result<()> {
+    let object = value
+        .as_object_mut()
+        .context("Claude Code settings root must be a JSON object")?;
+    let hooks = object
+        .entry("hooks")
+        .or_insert_with(|| serde_json::json!({}));
+    if !hooks.is_object() {
+        *hooks = serde_json::json!({});
+    }
+    let hooks = hooks
+        .as_object_mut()
+        .context("Claude Code hooks root must be a JSON object")?;
+    let entries = hooks.entry(event).or_insert_with(|| serde_json::json!([]));
+    if !entries.is_array() {
+        *entries = serde_json::json!([]);
+    }
+    entries
+        .as_array_mut()
+        .context("Claude Code hook event must be an array")?
+        .push(claude_hook_entry(matcher, command));
+    Ok(())
+}
+
+fn remove_claude_hook_entries(value: &mut serde_json::Value) {
+    let Some(hooks) = value
+        .get_mut("hooks")
+        .and_then(serde_json::Value::as_object_mut)
+    else {
+        return;
+    };
+
+    for event in CLAUDE_HOOK_EVENTS {
+        let Some(entries) = hooks
+            .get_mut(*event)
+            .and_then(serde_json::Value::as_array_mut)
+        else {
+            continue;
+        };
+        entries.retain_mut(|entry| {
+            let Some(handlers) = entry
+                .get_mut("hooks")
+                .and_then(serde_json::Value::as_array_mut)
+            else {
+                return true;
+            };
+            handlers.retain(|handler| !is_claude_callsieve_handler(handler));
+            !handlers.is_empty()
+        });
+    }
+    hooks.retain(|_, event_hooks| {
+        event_hooks
+            .as_array()
+            .is_none_or(|entries| !entries.is_empty())
+    });
+}
+
+fn is_claude_callsieve_handler(handler: &serde_json::Value) -> bool {
+    let command_is_callsieve = handler
+        .get("command")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|command| command.contains("callsieve"));
+    let args_include_hook = handler
+        .get("args")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|args| {
+            args.iter()
+                .filter_map(serde_json::Value::as_str)
+                .any(|arg| arg == "claude-hook")
+        });
+    command_is_callsieve && args_include_hook
+}
+
+fn codex_hook_command_config(
+    root: &Path,
+    hook_name: &str,
+    strict: bool,
+    context_options: Option<(usize, usize)>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "type": "command",
+        "command": codex_hook_command_line(root, hook_name, strict, context_options, false),
+        "commandWindows": codex_hook_command_line(root, hook_name, strict, context_options, true)
+    })
+}
+
+fn claude_hook_command_config(
+    root: &Path,
+    hook_name: &str,
+    strict: bool,
+    context_options: Option<(usize, usize)>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "type": "command",
+        "command": callsieve_executable_display(),
+        "args": claude_hook_command_args(root, hook_name, strict, context_options),
+        "timeout": if hook_name == "user-prompt-submit" { 30 } else { 60 },
+        "statusMessage": "CallSieve context policy"
+    })
+}
+
+fn claude_hook_command_args(
+    root: &Path,
+    hook_name: &str,
+    strict: bool,
+    context_options: Option<(usize, usize)>,
+) -> Vec<String> {
+    let mut args = vec![
+        "claude-hook".to_string(),
+        hook_name.to_string(),
+        root.display().to_string(),
+    ];
+    if strict {
+        args.push("--strict".to_string());
+    }
+    if let Some((limit, snippets_per_file)) = context_options {
+        args.push("--limit".to_string());
+        args.push(limit.to_string());
+        args.push("--snippets-per-file".to_string());
+        args.push(snippets_per_file.to_string());
+    }
+    args
+}
+
+fn client_hook_command_config(
+    root: &Path,
+    client: HookClient,
+    hook_name: &str,
+    strict: bool,
+    context_options: Option<(usize, usize)>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "type": "command",
+        "command": client_hook_command_line(root, client, hook_name, strict, context_options, false),
+        "commandWindows": client_hook_command_line(root, client, hook_name, strict, context_options, true)
+    })
+}
+
+fn client_hook_command_args(
+    root: &Path,
+    client: HookClient,
+    hook_name: &str,
+    strict: bool,
+    context_options: Option<(usize, usize)>,
+) -> Vec<String> {
+    let mut args = vec![
+        hook_client_command_prefix(client).to_string(),
+        hook_name.to_string(),
+        root.display().to_string(),
+    ];
+    if strict {
+        args.push("--strict".to_string());
+    }
+    if let Some((limit, snippets_per_file)) = context_options {
+        args.push("--limit".to_string());
+        args.push(limit.to_string());
+        args.push("--snippets-per-file".to_string());
+        args.push(snippets_per_file.to_string());
+    }
+    args
+}
+
+fn client_hook_command_line(
+    root: &Path,
+    client: HookClient,
+    hook_name: &str,
+    strict: bool,
+    context_options: Option<(usize, usize)>,
+    windows: bool,
+) -> String {
+    let args = client_hook_command_args(root, client, hook_name, strict, context_options);
+    let executable = callsieve_executable_display();
+    if windows {
+        let mut parts = vec![windows_cmd_arg(&executable)];
+        parts.extend(args.iter().map(|arg| windows_cmd_arg(arg)));
+        parts.join(" ")
+    } else {
+        let mut parts = vec![sh_cmd_arg(&executable)];
+        parts.extend(args.iter().map(|arg| sh_cmd_arg(arg)));
+        parts.join(" ")
+    }
+}
+
+fn codex_hook_command_line(
+    root: &Path,
+    hook_name: &str,
+    strict: bool,
+    context_options: Option<(usize, usize)>,
+    windows: bool,
+) -> String {
+    let mut args = vec![
+        "codex-hook".to_string(),
+        hook_name.to_string(),
+        root.display().to_string(),
+    ];
+    if strict {
+        args.push("--strict".to_string());
+    }
+    if let Some((limit, snippets_per_file)) = context_options {
+        args.push("--limit".to_string());
+        args.push(limit.to_string());
+        args.push("--snippets-per-file".to_string());
+        args.push(snippets_per_file.to_string());
+    }
+
+    let executable = callsieve_executable_display();
+    if windows {
+        let mut parts = vec![windows_cmd_arg(&executable)];
+        parts.extend(args.iter().map(|arg| windows_cmd_arg(arg)));
+        parts.join(" ")
+    } else {
+        let mut parts = vec![sh_cmd_arg(&executable)];
+        parts.extend(args.iter().map(|arg| sh_cmd_arg(arg)));
+        parts.join(" ")
+    }
+}
+
+fn windows_cmd_arg(value: &str) -> String {
+    format!("\"{}\"", value.replace('"', "\\\""))
+}
+
+fn sh_cmd_arg(value: &str) -> String {
+    format!("'{}'", sh_single_quote(value))
+}
+
+fn read_hook_input(client: &str) -> Result<serde_json::Value> {
+    let mut input = String::new();
+    std::io::stdin().read_to_string(&mut input)?;
+    if input.trim().is_empty() {
+        return Ok(serde_json::json!({}));
+    }
+    serde_json::from_str(&input)
+        .with_context(|| format!("failed to parse {client} hook input JSON"))
+}
+
+fn read_codex_hook_input() -> Result<serde_json::Value> {
+    read_hook_input("Codex")
+}
+
+fn read_claude_hook_input() -> Result<serde_json::Value> {
+    read_hook_input("Claude Code")
+}
+
+fn hook_session_id(input: &serde_json::Value) -> String {
+    hook_string_field(input, &["session_id", "sessionId"])
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "local-hook-session".to_string())
+}
+
+fn hook_turn_id(input: &serde_json::Value) -> String {
+    hook_string_field(input, &["turn_id", "turnId"])
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| format!("turn-{}", now_unix_seconds()))
+}
+
+fn hook_tool_name(input: &serde_json::Value) -> String {
+    hook_string_field(input, &["tool_name", "toolName", "tool"])
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn hook_tool_command(input: &serde_json::Value) -> String {
+    let tool_name = hook_tool_name(input);
+    let tool_input = input
+        .get("tool_input")
+        .or_else(|| input.get("toolInput"))
+        .or_else(|| input.get("input"));
+    if let Some(command) = tool_input
+        .and_then(|value| value.get("command"))
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| {
+            tool_input
+                .and_then(|value| value.get("cmd"))
+                .and_then(serde_json::Value::as_str)
+        })
+        .or_else(|| input.get("command").and_then(serde_json::Value::as_str))
+    {
+        return command.to_string();
+    }
+    if let Some(tool_input) = tool_input {
+        let lower_tool = tool_name.to_ascii_lowercase();
+        if (matches!(lower_tool.as_str(), "read" | "read_file" | "view_file")
+            || lower_tool.ends_with("__read"))
+            && let Some(path) =
+                hook_json_string_field(tool_input, &["file_path", "filePath", "path"])
+        {
+            return format!("{tool_name} {path}");
+        }
+        if matches!(
+            lower_tool.as_str(),
+            "grep" | "grep_search" | "find_by_name" | "codebase_search"
+        ) || lower_tool.ends_with("__grep")
+        {
+            let mut parts = Vec::new();
+            for field in ["pattern", "path", "glob"] {
+                if let Some(value) = hook_json_string_field(tool_input, &[field]) {
+                    parts.push(value);
+                }
+            }
+            if !parts.is_empty() {
+                return format!("{tool_name} {}", parts.join(" "));
+            }
+        }
+        if lower_tool == "glob" || lower_tool.ends_with("__glob") {
+            let mut parts = Vec::new();
+            for field in ["pattern", "path"] {
+                if let Some(value) = hook_json_string_field(tool_input, &[field]) {
+                    parts.push(value);
+                }
+            }
+            if !parts.is_empty() {
+                return format!("{tool_name} {}", parts.join(" "));
+            }
+        }
+    }
+    if tool_name.to_ascii_lowercase().contains("callsieve_context") {
+        return "callsieve_context".to_string();
+    }
+    if let Some(value) = tool_input.and_then(serde_json::Value::as_str) {
+        return format!("{tool_name} {value}");
+    }
+    if let Some(value) = tool_input {
+        return format!("{tool_name} {value}");
+    }
+    tool_name
+}
+
+fn hook_string_field(input: &serde_json::Value, fields: &[&str]) -> Option<String> {
+    fields
+        .iter()
+        .find_map(|field| input.get(*field).and_then(serde_json::Value::as_str))
+        .map(str::to_string)
+}
+
+fn hook_json_string_field(input: &serde_json::Value, fields: &[&str]) -> Option<String> {
+    fields
+        .iter()
+        .find_map(|field| input.get(*field).and_then(serde_json::Value::as_str))
+        .map(str::to_string)
+}
+
+fn hook_bool_field(input: &serde_json::Value, fields: &[&str]) -> bool {
+    fields
+        .iter()
+        .find_map(|field| input.get(*field).and_then(serde_json::Value::as_bool))
+        .unwrap_or(false)
+}
+
+fn load_codex_hook_state(root: &Path, session_id: &str) -> CodexHookState {
+    fs::read(codex_hook_state_path(root, session_id))
+        .ok()
+        .and_then(|data| serde_json::from_slice(&data).ok())
+        .unwrap_or_else(|| CodexHookState {
+            version: 1,
+            session_id: session_id.to_string(),
+            root: root_label(root),
+            ..CodexHookState::default()
+        })
+}
+
+fn save_codex_hook_state(root: &Path, state: &CodexHookState) -> Result<()> {
+    let dir = codex_hook_dir(root);
+    fs::create_dir_all(&dir).with_context(|| format!("failed to create {}", dir.display()))?;
+    fs::write(
+        codex_hook_state_path(root, &state.session_id),
+        serde_json::to_vec_pretty(state)?,
+    )
+    .with_context(|| format!("failed to write Codex hook state for {}", root.display()))
+}
+
+fn load_claude_hook_state(root: &Path, session_id: &str) -> CodexHookState {
+    fs::read(claude_hook_state_path(root, session_id))
+        .ok()
+        .and_then(|data| serde_json::from_slice(&data).ok())
+        .unwrap_or_else(|| CodexHookState {
+            version: 1,
+            session_id: session_id.to_string(),
+            root: root_label(root),
+            ..CodexHookState::default()
+        })
+}
+
+fn save_claude_hook_state(root: &Path, state: &CodexHookState) -> Result<()> {
+    let dir = claude_hook_dir(root);
+    fs::create_dir_all(&dir).with_context(|| format!("failed to create {}", dir.display()))?;
+    fs::write(
+        claude_hook_state_path(root, &state.session_id),
+        serde_json::to_vec_pretty(state)?,
+    )
+    .with_context(|| {
+        format!(
+            "failed to write Claude Code hook state for {}",
+            root.display()
+        )
+    })
+}
+
+fn load_client_hook_state(root: &Path, client: HookClient, session_id: &str) -> CodexHookState {
+    fs::read(client_hook_state_path(root, client, session_id))
+        .ok()
+        .and_then(|data| serde_json::from_slice(&data).ok())
+        .unwrap_or_else(|| CodexHookState {
+            version: 1,
+            session_id: session_id.to_string(),
+            root: root_label(root),
+            ..CodexHookState::default()
+        })
+}
+
+fn save_client_hook_state(root: &Path, client: HookClient, state: &CodexHookState) -> Result<()> {
+    let dir = client_hook_dir(root, client);
+    fs::create_dir_all(&dir).with_context(|| format!("failed to create {}", dir.display()))?;
+    fs::write(
+        client_hook_state_path(root, client, &state.session_id),
+        serde_json::to_vec_pretty(state)?,
+    )
+    .with_context(|| {
+        format!(
+            "failed to write {} hook state for {}",
+            hook_client_display(client),
+            root.display()
+        )
+    })
+}
+
+fn append_codex_hook_trace_event(
+    root: &Path,
+    state: &CodexHookState,
+    task: &str,
+    event: serde_json::Value,
+) -> Result<String> {
+    let path = codex_hook_trace_path(root, &state.session_id);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    let mut value = if path.is_file() {
+        read_trace_value(&path)?
+    } else {
+        codex_hook_trace_template(root, state, task)
+    };
+    value
+        .as_object_mut()
+        .context("Codex hook trace root must be a JSON object")?
+        .insert("task".to_string(), serde_json::json!(task));
+    let events = value
+        .as_object_mut()
+        .context("Codex hook trace root must be a JSON object")?
+        .entry("events")
+        .or_insert_with(|| serde_json::json!([]))
+        .as_array_mut()
+        .context("Codex hook trace events must be an array")?;
+    events.push(event);
+    normalize_session_trace(&mut value)?;
+    fs::write(&path, serde_json::to_vec_pretty(&value)?)
+        .with_context(|| format!("failed to write {}", path.display()))?;
+    Ok(path.display().to_string())
+}
+
+fn append_claude_hook_trace_event(
+    root: &Path,
+    state: &CodexHookState,
+    task: &str,
+    event: serde_json::Value,
+) -> Result<String> {
+    let path = claude_hook_trace_path(root, &state.session_id);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    let mut value = if path.is_file() {
+        read_trace_value(&path)?
+    } else {
+        claude_hook_trace_template(root, state, task)
+    };
+    value
+        .as_object_mut()
+        .context("Claude Code hook trace root must be a JSON object")?
+        .insert("task".to_string(), serde_json::json!(task));
+    let events = value
+        .as_object_mut()
+        .context("Claude Code hook trace root must be a JSON object")?
+        .entry("events")
+        .or_insert_with(|| serde_json::json!([]))
+        .as_array_mut()
+        .context("Claude Code hook trace events must be an array")?;
+    events.push(event);
+    normalize_session_trace(&mut value)?;
+    fs::write(&path, serde_json::to_vec_pretty(&value)?)
+        .with_context(|| format!("failed to write {}", path.display()))?;
+    Ok(path.display().to_string())
+}
+
+fn append_client_hook_trace_event(
+    root: &Path,
+    client: HookClient,
+    state: &CodexHookState,
+    task: &str,
+    event: serde_json::Value,
+) -> Result<String> {
+    let path = client_hook_trace_path(root, client, &state.session_id);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    let mut value = if path.is_file() {
+        read_trace_value(&path)?
+    } else {
+        client_hook_trace_template(root, client, state, task)
+    };
+    value
+        .as_object_mut()
+        .context("client hook trace root must be a JSON object")?
+        .insert("task".to_string(), serde_json::json!(task));
+    let events = value
+        .as_object_mut()
+        .context("client hook trace root must be a JSON object")?
+        .entry("events")
+        .or_insert_with(|| serde_json::json!([]))
+        .as_array_mut()
+        .context("client hook trace events must be an array")?;
+    events.push(event);
+    normalize_session_trace(&mut value)?;
+    fs::write(&path, serde_json::to_vec_pretty(&value)?)
+        .with_context(|| format!("failed to write {}", path.display()))?;
+    Ok(path.display().to_string())
+}
+
+fn codex_hook_trace_template(root: &Path, state: &CodexHookState, task: &str) -> serde_json::Value {
+    serde_json::json!({
+        "metadata": {
+            "collection": "codex_hook_trace",
+            "client": "codex",
+            "repo": root_label(root),
+            "session_id": state.session_id.clone(),
+            "strict": state.strict,
+            "started_at": now_unix_seconds(),
+            "updated_at": now_unix_seconds()
+        },
+        "task": task,
+        "expected_files": [],
+        "critical_files": [],
+        "baseline": empty_session_metrics(),
+        "callsieve": empty_session_metrics(),
+        "session": {
+            "baseline": empty_session_metrics(),
+            "callsieve": empty_session_metrics()
+        },
+        "events": [],
+        "misses": [],
+        "policy": {
+            "context_first": true,
+            "strict_trace_check": state.strict,
+            "source": "codex_lifecycle_hooks"
+        }
+    })
+}
+
+fn claude_hook_trace_template(
+    root: &Path,
+    state: &CodexHookState,
+    task: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "metadata": {
+            "collection": "claude_hook_trace",
+            "client": "claude",
+            "repo": root_label(root),
+            "session_id": state.session_id.clone(),
+            "strict": state.strict,
+            "started_at": now_unix_seconds(),
+            "updated_at": now_unix_seconds()
+        },
+        "task": task,
+        "expected_files": [],
+        "critical_files": [],
+        "baseline": empty_session_metrics(),
+        "callsieve": empty_session_metrics(),
+        "session": {
+            "baseline": empty_session_metrics(),
+            "callsieve": empty_session_metrics()
+        },
+        "events": [],
+        "misses": [],
+        "policy": {
+            "context_first": true,
+            "strict_trace_check": state.strict,
+            "source": "claude_code_lifecycle_hooks"
+        }
+    })
+}
+
+fn client_hook_trace_template(
+    root: &Path,
+    client: HookClient,
+    state: &CodexHookState,
+    task: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "metadata": {
+            "collection": format!("{}_hook_trace", hook_client_name(client)),
+            "client": hook_client_name(client),
+            "repo": root_label(root),
+            "session_id": state.session_id.clone(),
+            "strict": state.strict,
+            "started_at": now_unix_seconds(),
+            "updated_at": now_unix_seconds()
+        },
+        "task": task,
+        "expected_files": [],
+        "critical_files": [],
+        "baseline": empty_session_metrics(),
+        "callsieve": empty_session_metrics(),
+        "session": {
+            "baseline": empty_session_metrics(),
+            "callsieve": empty_session_metrics()
+        },
+        "events": [],
+        "misses": [],
+        "policy": {
+            "context_first": true,
+            "strict_trace_check": state.strict,
+            "source": hook_client_trace_source(client)
+        }
+    })
+}
+
+fn codex_hook_trace_event(
+    input: &serde_json::Value,
+    command: &str,
+    policy_violation: bool,
+) -> serde_json::Value {
+    serde_json::json!({
+        "timestamp": now_unix_seconds(),
+        "command": command,
+        "files_read": codex_hook_files_read(command),
+        "tokens": 0,
+        "classification": classify_session_command(command),
+        "phase": "callsieve",
+        "hook_event": hook_string_field(input, &["hook_event_name", "hookEventName"]).unwrap_or_default(),
+        "tool_name": hook_tool_name(input),
+        "policy_violation": policy_violation
+    })
+}
+
+fn codex_hook_files_read(command: &str) -> Vec<String> {
+    if !is_file_read_command_local(command) {
+        return Vec::new();
+    }
+    command
+        .split_whitespace()
+        .filter(|part| {
+            let lower = part.to_ascii_lowercase();
+            !matches!(
+                lower.as_str(),
+                "cat"
+                    | "less"
+                    | "more"
+                    | "head"
+                    | "tail"
+                    | "sed"
+                    | "nl"
+                    | "bat"
+                    | "type"
+                    | "read"
+                    | "get-content"
+                    | "gc"
+            ) && !lower.starts_with('-')
+        })
+        .map(|part| part.trim_matches('"').trim_matches('\'').to_string())
+        .filter(|part| !part.is_empty())
+        .collect()
+}
+
+fn codex_hook_should_deny(state: &CodexHookState, strict: bool, command: &str) -> bool {
+    if state.context_seen || command.trim().is_empty() {
+        return false;
+    }
+    if codex_hook_command_allowed_without_context(command) {
+        return false;
+    }
+    is_broad_search_command_local(command)
+        || (strict
+            && is_file_read_command_local(command)
+            && !codex_hook_allowed_pre_context_read(command))
+}
+
+fn codex_hook_command_allowed_without_context(command: &str) -> bool {
+    let lower = command.trim().to_ascii_lowercase();
+    let first = lower.split_whitespace().next().unwrap_or_default();
+    first == "callsieve"
+        || lower.starts_with("git status")
+        || first == "cargo"
+        || first == "rust-analyzer"
+        || first == "pwd"
+        || first == "date"
+        || first == "echo"
+}
+
+fn codex_hook_allowed_pre_context_read(command: &str) -> bool {
+    let normalized = command.replace('\\', "/").to_ascii_lowercase();
+    normalized.contains("agents.md")
+        || normalized.contains("claude.md")
+        || normalized.contains(".mcp.json")
+        || normalized.contains(".codex/callsieve.md")
+        || normalized.contains(".codex/hooks.json")
+        || normalized.contains(".codex/config.toml")
+        || normalized.contains(".claude/settings.local.json")
+        || normalized.contains(".claude/settings.json")
+        || normalized.contains(".github/copilot-instructions.md")
+        || normalized.contains(".github/agents/callsieve-context.agent.md")
+        || normalized.contains(".github/copilot-mcp.json")
+        || normalized.contains(".github/hooks/callsieve.json")
+        || normalized.contains("opencode.json")
+        || normalized.contains(".opencode/callsieve.md")
+        || normalized.contains(".opencode/plugins/callsieve.js")
+        || normalized.contains(".agents/mcp_config.json")
+        || normalized.contains(".agents/hooks.json")
+        || normalized.contains(".agents/skills/callsieve-context.md")
+        || normalized.contains(".agents/rules/callsieve.md")
+        || normalized.contains(".cursor/mcp.json")
+        || normalized.contains(".cursor/rules/callsieve.mdc")
+        || normalized.contains(".cline/mcp.json")
+        || normalized.contains(".cline/hooks/")
+        || normalized.contains(".cline/rules/callsieve.md")
+        || normalized.contains(".clinerules/callsieve.md")
+        || normalized.contains(".roo/mcp.json")
+        || normalized.contains(".roo/rules/callsieve.md")
+        || normalized.contains(".roo/rules-code/callsieve.md")
+        || normalized.contains(".roomodes")
+}
+
+fn codex_hook_permission_response(event: &str, decision: &str, reason: &str) -> serde_json::Value {
+    serde_json::json!({
+        "suppressOutput": true,
+        "hookSpecificOutput": {
+            "hookEventName": event,
+            "permissionDecision": decision,
+            "permissionDecisionReason": reason
+        }
+    })
+}
+
+fn codex_hook_denial_reason(command: &str, strict: bool) -> String {
+    if strict && is_file_read_command_local(command) && !is_broad_search_command_local(command) {
+        "CallSieve strict mode blocks file reads before context. Use the injected CallSieve context or run callsieve agent-context first.".to_string()
+    } else {
+        "CallSieve blocks broad repository search before context. Use the injected CallSieve context or run callsieve agent-context first.".to_string()
+    }
+}
+
+fn hook_hash(value: &str) -> String {
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in value.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("{hash:016x}")
 }
 
 fn write_hook_launchers(
@@ -7905,9 +11982,61 @@ fn enforce_setup(
             ));
         }
     }
+    if matches!(client, AgentClient::Codex) && strict {
+        let codex_hooks = codex_hooks_doctor(root, true);
+        checks.push(enforce_check(
+            "codex_hooks",
+            codex_hooks.status == "pass",
+            if codex_hooks.status == "pass" {
+                "Codex lifecycle hooks are installed"
+            } else {
+                "strict Codex enforcement requires lifecycle hooks"
+            },
+        ));
+    }
+    if matches!(client, AgentClient::Claude) && strict {
+        let claude_hooks = claude_hooks_doctor(root, true);
+        checks.push(enforce_check(
+            "claude_hooks",
+            claude_hooks.status == "pass",
+            if claude_hooks.status == "pass" {
+                "Claude Code lifecycle hooks are installed"
+            } else {
+                "strict Claude Code enforcement requires lifecycle hooks"
+            },
+        ));
+    }
+    if let Some(hook_client) = hook_client_for_agent(client)
+        && strict
+    {
+        let hooks = client_hooks_doctor(root, hook_client, true);
+        checks.push(enforce_check(
+            format!("{}_hooks", hook_client_name(hook_client)),
+            hooks.status == "pass",
+            if hooks.status == "pass" {
+                format!("{} hooks are installed", hook_client_display(hook_client))
+            } else {
+                format!(
+                    "strict {} enforcement requires hooks",
+                    hook_client_display(hook_client)
+                )
+            },
+        ));
+    }
 
     let shim = shim_doctor(root);
     let shim_files = shim_files_installed(root);
+    if strict && !matches!(client, AgentClient::Generic) {
+        checks.push(enforce_check(
+            "shim_files",
+            shim_files,
+            if shim_files {
+                "strict mode shim files are installed"
+            } else {
+                "strict mode requires project-local rg/grep shims"
+            },
+        ));
+    }
     checks.push(EnforceCheck {
         check: "shim_doctor".to_string(),
         status: if shim.status == "pass" || (require_shim && shim_files) {
@@ -8013,6 +12142,7 @@ fn enforce_check(
 fn agent_files(client: AgentClient, root: &Path) -> Vec<(PathBuf, String)> {
     let first_required_command = format!("callsieve agent-context {} \"<task>\"", root.display());
     let policy = agent_policy_text(client, &first_required_command);
+    let portable_policy = portable_agent_policy_text(client);
     let callsieve_command = callsieve_executable_display();
     match client {
         AgentClient::Codex => vec![
@@ -8042,6 +12172,51 @@ fn agent_files(client: AgentClient, root: &Path) -> Vec<(PathBuf, String)> {
             ),
             (root.join("CLAUDE.md"), policy.clone()),
         ],
+        AgentClient::Copilot => vec![
+            (
+                root.join(".github/copilot-mcp.json"),
+                serde_json::to_string_pretty(&mcp_config_json(&callsieve_command))
+                    .unwrap_or_else(|_| "{}".to_string()),
+            ),
+            (
+                root.join(".github/copilot-instructions.md"),
+                format!(
+                    "{policy}\nLocal Copilot CLI can run the local CallSieve binary. Cloud agent use is template-only unless CallSieve is installed inside that sandbox.\n"
+                ),
+            ),
+            (
+                root.join(".github/agents/callsieve-context.agent.md"),
+                format!(
+                    "---\nname: callsieve-context\ndescription: Use CallSieve context before broad repository search.\n---\n\n{policy}\n"
+                ),
+            ),
+        ],
+        AgentClient::OpenCode => vec![
+            (
+                root.join("opencode.json"),
+                opencode_project_json(root, &callsieve_command),
+            ),
+            (
+                root.join(".opencode/CALLSIEVE.md"),
+                format!(
+                    "{policy}\nThe `.opencode/plugins/callsieve.js` plugin enforces this before broad `grep`, `glob`, `read`, and shell search tools when installed.\n"
+                ),
+            ),
+        ],
+        AgentClient::Antigravity => vec![
+            (
+                root.join(".agents/mcp_config.json"),
+                serde_json::to_string_pretty(&mcp_config_json(&callsieve_command))
+                    .unwrap_or_else(|_| "{}".to_string()),
+            ),
+            (
+                root.join(".agents/skills/callsieve-context.md"),
+                format!(
+                    "# CallSieve Context\n\n{policy}\nKeep `GEMINI.md` and `AGENTS.md` compatibility by treating this skill as the local context-first rule.\n"
+                ),
+            ),
+            (root.join(".agents/rules/callsieve.md"), policy.clone()),
+        ],
         AgentClient::Cursor => vec![
             (
                 root.join(".cursor/mcp.json"),
@@ -8057,6 +12232,97 @@ fn agent_files(client: AgentClient, root: &Path) -> Vec<(PathBuf, String)> {
                 .unwrap_or_else(|_| "{}".to_string()),
             ),
             (root.join(".cursor/rules/callsieve.mdc"), policy.clone()),
+        ],
+        AgentClient::Vscode => vec![
+            (
+                root.join(".vscode/mcp.json"),
+                vscode_mcp_json(root, &callsieve_command),
+            ),
+            (
+                root.join(".github/copilot-instructions.md"),
+                format!(
+                    "{portable_policy}\nVS Code uses `.vscode/mcp.json` with a workspace `servers.callsieve` stdio MCP server. Keep this project-local; do not mutate user-level VS Code MCP configuration automatically.\n"
+                ),
+            ),
+        ],
+        AgentClient::Windsurf => vec![
+            (
+                root.join(".callsieve/integrations/windsurf-mcp.json"),
+                serde_json::to_string_pretty(&mcp_config_json(&callsieve_command))
+                    .unwrap_or_else(|_| "{}".to_string()),
+            ),
+            (
+                root.join(".windsurf/rules/callsieve.md"),
+                format!(
+                    "{portable_policy}\nWindsurf MCP configuration is user-scoped today, so CallSieve writes this repo-local MCP template instead of changing global Windsurf config.\n"
+                ),
+            ),
+        ],
+        AgentClient::Continue => vec![
+            (
+                root.join(".continue/mcpServers/callsieve.yaml"),
+                continue_mcp_yaml(&callsieve_command),
+            ),
+            (
+                root.join(".continue/rules/callsieve.md"),
+                portable_policy.clone(),
+            ),
+        ],
+        AgentClient::Zed => {
+            if zed_project_settings_mergeable(root) {
+                vec![(
+                    root.join(".zed/settings.json"),
+                    zed_settings_json(root, &callsieve_command),
+                )]
+            } else {
+                vec![(
+                    root.join(".callsieve/integrations/zed-settings.json"),
+                    zed_settings_template_json(&callsieve_command),
+                )]
+            }
+        }
+        AgentClient::Junie => vec![
+            (
+                root.join(".junie/mcp/mcp.json"),
+                junie_mcp_json(root, &callsieve_command),
+            ),
+            (root.join(".junie/guidelines.md"), portable_policy.clone()),
+        ],
+        AgentClient::JetBrains => vec![(
+            root.join(".callsieve/integrations/jetbrains-mcp.json"),
+            jetbrains_mcp_template_json(&callsieve_command),
+        )],
+        AgentClient::Amp => vec![
+            (
+                root.join(".agents/skills/callsieve-context/SKILL.md"),
+                amp_skill_markdown(&portable_policy),
+            ),
+            (
+                root.join(".agents/skills/callsieve-context/mcp.json"),
+                serde_json::to_string_pretty(&mcp_config_json(&callsieve_command))
+                    .unwrap_or_else(|_| "{}".to_string()),
+            ),
+        ],
+        AgentClient::Goose => vec![
+            (
+                root.join(".callsieve/integrations/goose-config.yaml"),
+                goose_config_yaml(&callsieve_command),
+            ),
+            (
+                root.join(".callsieve/integrations/goose-deeplink.txt"),
+                goose_deeplink_text(&callsieve_command),
+            ),
+        ],
+        AgentClient::Warp => vec![
+            (
+                root.join(".callsieve/integrations/warp-mcp.json"),
+                serde_json::to_string_pretty(&warp_mcp_json(&callsieve_command))
+                    .unwrap_or_else(|_| "{}".to_string()),
+            ),
+            (
+                root.join(".callsieve/integrations/warp-agent.yaml"),
+                warp_agent_yaml(&callsieve_command),
+            ),
         ],
         AgentClient::Cline => vec![
             (
@@ -8074,9 +12340,10 @@ fn agent_files(client: AgentClient, root: &Path) -> Vec<(PathBuf, String)> {
                 }))
                 .unwrap_or_else(|_| "{}".to_string()),
             ),
+            (root.join(".cline/rules/callsieve.md"), policy.clone()),
             (root.join(".clinerules/callsieve.md"), policy.clone()),
         ],
-        AgentClient::Roo => vec![
+        AgentClient::Zoo | AgentClient::Roo => vec![
             (
                 root.join(".roo/mcp.json"),
                 serde_json::to_string_pretty(&serde_json::json!({
@@ -8092,6 +12359,7 @@ fn agent_files(client: AgentClient, root: &Path) -> Vec<(PathBuf, String)> {
                 .unwrap_or_else(|_| "{}".to_string()),
             ),
             (root.join(".roo/rules/callsieve.md"), policy.clone()),
+            (root.join(".roo/rules-code/callsieve.md"), policy.clone()),
         ],
         AgentClient::Generic => vec![
             (
@@ -8122,11 +12390,46 @@ fn agent_policy_text(client: AgentClient, first_required_command: &str) -> Strin
         AgentClient::Claude => {
             "Use the project MCP server from `.mcp.json` and prefer `callsieve_context` when tools are available."
         }
+        AgentClient::Copilot => {
+            "Use local Copilot CLI MCP plus Copilot instructions before repository search; cloud agents need CallSieve installed in the sandbox."
+        }
+        AgentClient::OpenCode => {
+            "Use the OpenCode MCP config and CallSieve plugin before `grep`, `glob`, `read`, or shell search tools."
+        }
+        AgentClient::Antigravity => {
+            "Use `.agents/mcp_config.json`, the CallSieve skill, and Antigravity hooks before repository search."
+        }
         AgentClient::Cursor => {
             "Use the Cursor MCP config and this rule file before repository search."
         }
+        AgentClient::Vscode => {
+            "Use VS Code workspace MCP from `.vscode/mcp.json` plus Copilot instructions before repository search."
+        }
+        AgentClient::Windsurf => {
+            "Use the Windsurf rule and repo-local MCP template; copy the template into user-scoped Windsurf MCP settings only after reviewing the local command path."
+        }
+        AgentClient::Continue => "Use the Continue MCP block and rule before repository search.",
+        AgentClient::Zed => {
+            "Use Zed `context_servers.callsieve` from project settings or the generated fallback template before repository search."
+        }
+        AgentClient::Junie => {
+            "Use Junie project MCP config and guidelines before repository search."
+        }
+        AgentClient::JetBrains => {
+            "JetBrains AI Assistant setup is documentation-only here; use the generated MCP template manually, or use `--client junie` for Junie."
+        }
+        AgentClient::Amp => "Use the Amp skill and bundled MCP config before repository search.",
+        AgentClient::Goose => {
+            "Use the generated Goose extension template before repository search; CallSieve does not mutate user Goose config automatically."
+        }
+        AgentClient::Warp => {
+            "Use the generated Warp local MCP and cloud-agent templates before repository search. Cloud agents need a runtime that can execute the local `callsieve` binary."
+        }
         AgentClient::Cline => "Use the Cline MCP server and this rule before search tools.",
-        AgentClient::Roo => "Use the Roo MCP server and this rule before search tools.",
+        AgentClient::Zoo => "Use the Zoo MCP server and `.roo` rule files before search tools.",
+        AgentClient::Roo => {
+            "Use the Zoo-compatible `.roo` MCP server and rules before search tools."
+        }
         AgentClient::Generic => "Use `callsieve mcp` for MCP clients when available.",
     };
 
@@ -8140,11 +12443,329 @@ fn agent_policy_text(client: AgentClient, first_required_command: &str) -> Strin
     )
 }
 
+fn portable_agent_policy_text(client: AgentClient) -> String {
+    let client_name = agent_client_name(client);
+    format!(
+        "CallSieve policy for {client_name}:\n\
+1. Before broad grep, rg, repository-wide search, or repeated file reads, call the CallSieve MCP `callsieve_context` tool when it is available.\n\
+2. If MCP tools are unavailable, run `callsieve agent-context <repo> \"<task>\"` from this workspace.\n\
+3. Read the returned `read_first` files first.\n\
+4. Grep only if the context packet is insufficient, and record why it was insufficient in task notes or trace.\n"
+    )
+}
+
+fn agent_client_warnings(client: AgentClient) -> Vec<String> {
+    let mut warnings = Vec::new();
+    if matches!(client, AgentClient::Roo) {
+        warnings.push(
+            "`roo` is deprecated as a CallSieve client value; generated files are Zoo-compatible `.roo/*` files. Prefer `--client zoo` for new setup."
+                .to_string(),
+        );
+    }
+    if matches!(client, AgentClient::JetBrains) {
+        warnings.push(
+            "JetBrains AI Assistant setup is docs/template only; use `--client junie` for Junie project MCP and guidelines."
+                .to_string(),
+        );
+    }
+    if matches!(client, AgentClient::Warp) {
+        warnings.push(
+            "Warp cloud-agent MCP is template-only unless the Warp/Oz execution environment can run the local `callsieve` binary."
+                .to_string(),
+        );
+    }
+    warnings
+}
+
+fn agent_client_warnings_for_root(client: AgentClient, root: &Path) -> Vec<String> {
+    let mut warnings = agent_client_warnings(client);
+    if matches!(client, AgentClient::Zed) && !zed_project_settings_mergeable(root) {
+        warnings.push(
+            "Existing `.zed/settings.json` is not mergeable JSON; CallSieve writes `.callsieve/integrations/zed-settings.json` as a template instead of overwriting it."
+                .to_string(),
+        );
+    }
+    warnings
+}
+
+fn read_json_object_or_empty(path: &Path) -> serde_json::Value {
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|content| serde_json::from_str::<serde_json::Value>(&content).ok())
+        .filter(serde_json::Value::is_object)
+        .unwrap_or_else(|| serde_json::json!({}))
+}
+
+fn nested_object<'a>(
+    value: &'a mut serde_json::Value,
+    key: &str,
+) -> &'a mut serde_json::Map<String, serde_json::Value> {
+    let object = value
+        .as_object_mut()
+        .expect("template root should be a JSON object");
+    let entry = object
+        .entry(key.to_string())
+        .or_insert_with(|| serde_json::json!({}));
+    if !entry.is_object() {
+        *entry = serde_json::json!({});
+    }
+    entry
+        .as_object_mut()
+        .expect("template field should be a JSON object")
+}
+
+fn vscode_mcp_json(root: &Path, callsieve_command: &str) -> String {
+    let path = root.join(".vscode/mcp.json");
+    let mut value = read_json_object_or_empty(&path);
+    nested_object(&mut value, "servers").insert(
+        "callsieve".to_string(),
+        serde_json::json!({
+            "type": "stdio",
+            "command": callsieve_command,
+            "args": ["mcp"],
+            "env": {}
+        }),
+    );
+    serde_json::to_string_pretty(&value).unwrap_or_else(|_| "{}".to_string())
+}
+
+fn zed_project_settings_mergeable(root: &Path) -> bool {
+    let path = root.join(".zed/settings.json");
+    if !path.exists() {
+        return true;
+    }
+    fs::read_to_string(&path)
+        .ok()
+        .and_then(|content| serde_json::from_str::<serde_json::Value>(&content).ok())
+        .is_some_and(|value| value.is_object())
+}
+
+fn zed_settings_json(root: &Path, callsieve_command: &str) -> String {
+    let path = root.join(".zed/settings.json");
+    let mut value = read_json_object_or_empty(&path);
+    nested_object(&mut value, "context_servers").insert(
+        "callsieve".to_string(),
+        serde_json::json!({
+            "command": callsieve_command,
+            "args": ["mcp"],
+            "env": {}
+        }),
+    );
+    serde_json::to_string_pretty(&value).unwrap_or_else(|_| "{}".to_string())
+}
+
+fn zed_settings_template_json(callsieve_command: &str) -> String {
+    serde_json::to_string_pretty(&serde_json::json!({
+        "context_servers": {
+            "callsieve": {
+                "command": callsieve_command,
+                "args": ["mcp"],
+                "env": {}
+            }
+        }
+    }))
+    .unwrap_or_else(|_| "{}".to_string())
+}
+
+fn junie_mcp_json(root: &Path, callsieve_command: &str) -> String {
+    let path = root.join(".junie/mcp/mcp.json");
+    let mut value = read_json_object_or_empty(&path);
+    nested_object(&mut value, "mcpServers").insert(
+        "callsieve".to_string(),
+        serde_json::json!({
+            "command": callsieve_command,
+            "args": ["mcp"],
+            "env": {}
+        }),
+    );
+    serde_json::to_string_pretty(&value).unwrap_or_else(|_| "{}".to_string())
+}
+
+fn jetbrains_mcp_template_json(callsieve_command: &str) -> String {
+    serde_json::to_string_pretty(&serde_json::json!({
+        "mcpServers": {
+            "callsieve": {
+                "command": callsieve_command,
+                "args": ["mcp"],
+                "env": {}
+            }
+        },
+        "notes": [
+            "JetBrains AI Assistant MCP setup is manual/template-only here.",
+            "Use `callsieve agent-setup <repo> --client junie` for Junie project MCP support."
+        ]
+    }))
+    .unwrap_or_else(|_| "{}".to_string())
+}
+
+fn warp_mcp_json(callsieve_command: &str) -> serde_json::Value {
+    serde_json::json!({
+        "callsieve": {
+            "command": callsieve_command,
+            "args": ["mcp"],
+            "env": {}
+        }
+    })
+}
+
+fn yaml_double_quoted(value: &str) -> String {
+    let mut escaped = String::new();
+    for character in value.chars() {
+        match character {
+            '\\' => escaped.push_str("\\\\"),
+            '"' => escaped.push_str("\\\""),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            character => escaped.push(character),
+        }
+    }
+    format!("\"{escaped}\"")
+}
+
+fn continue_mcp_yaml(callsieve_command: &str) -> String {
+    format!(
+        "name: CallSieve\nversion: {}\nschema: v1\nmcpServers:\n  - name: CallSieve\n    type: stdio\n    command: {}\n    args:\n      - \"mcp\"\n    env: {{}}\n",
+        env!("CARGO_PKG_VERSION"),
+        yaml_double_quoted(callsieve_command)
+    )
+}
+
+fn goose_config_yaml(callsieve_command: &str) -> String {
+    format!(
+        "extensions:\n  callsieve:\n    name: callsieve\n    type: stdio\n    enabled: true\n    command: {}\n    args:\n      - \"mcp\"\n    env: {{}}\n",
+        yaml_double_quoted(callsieve_command)
+    )
+}
+
+fn goose_deeplink_text(callsieve_command: &str) -> String {
+    format!(
+        "CallSieve Goose extension template\n\nCommand: {callsieve_command}\nArgs: mcp\n\nUse `.callsieve/integrations/goose-config.yaml` as the reviewed local template. CallSieve does not mutate user Goose config automatically.\n"
+    )
+}
+
+fn warp_agent_yaml(callsieve_command: &str) -> String {
+    format!(
+        "name: callsieve-local-agent\nsystem_prompt: \"Use CallSieve context before broad repository search or repeated file reads.\"\nmcp_servers:\n  callsieve:\n    command: {}\n    args:\n      - \"mcp\"\n    env: {{}}\n# Cloud agents need an environment where this local callsieve binary is installed and runnable.\n",
+        yaml_double_quoted(callsieve_command)
+    )
+}
+
+fn amp_skill_markdown(policy: &str) -> String {
+    format!(
+        "# CallSieve Context\n\nUse this skill when working in this repository with Amp.\n\n{policy}\nThe bundled `mcp.json` starts `callsieve mcp` as a local stdio MCP server. Do not use broad repository search until the CallSieve context packet is insufficient.\n"
+    )
+}
+
+fn opencode_project_json(root: &Path, callsieve_command: &str) -> String {
+    let path = root.join("opencode.json");
+    let mut value = fs::read_to_string(&path)
+        .ok()
+        .and_then(|content| serde_json::from_str::<serde_json::Value>(&content).ok())
+        .filter(serde_json::Value::is_object)
+        .unwrap_or_else(|| serde_json::json!({}));
+
+    let object = value
+        .as_object_mut()
+        .expect("opencode config should be a JSON object");
+    let mcp = object.entry("mcp").or_insert_with(|| serde_json::json!({}));
+    if !mcp.is_object() {
+        *mcp = serde_json::json!({});
+    }
+    if let Some(mcp_object) = mcp.as_object_mut() {
+        mcp_object.insert(
+            "callsieve".to_string(),
+            serde_json::json!({
+                "type": "local",
+                "command": [callsieve_command, "mcp"],
+                "enabled": true
+            }),
+        );
+    }
+
+    let instruction_path = ".opencode/CALLSIEVE.md";
+    match object.get_mut("instructions") {
+        Some(instructions) if instructions.is_array() => {
+            if let Some(array) = instructions.as_array_mut()
+                && !array.iter().any(|value| value == instruction_path)
+            {
+                array.push(serde_json::json!(instruction_path));
+            }
+        }
+        Some(instructions) if instructions.is_string() => {
+            let existing = instructions
+                .as_str()
+                .filter(|value| !value.trim().is_empty())
+                .map(|value| serde_json::json!(value));
+            let mut array = existing.into_iter().collect::<Vec<_>>();
+            if !array.iter().any(|value| value == instruction_path) {
+                array.push(serde_json::json!(instruction_path));
+            }
+            *instructions = serde_json::json!(array);
+        }
+        _ => {
+            object.insert(
+                "instructions".to_string(),
+                serde_json::json!([instruction_path]),
+            );
+        }
+    }
+
+    serde_json::to_string_pretty(&value).unwrap_or_else(|_| "{}".to_string())
+}
+
+fn zoo_roomodes_json() -> String {
+    serde_json::to_string_pretty(&serde_json::json!({
+        "customModes": [
+            {
+                "slug": "callsieve-code",
+                "name": "CallSieve Code",
+                "role": "Use CallSieve context before broad repository search.",
+                "groups": ["read", "edit", "browser", "command", "mcp"],
+                "customInstructions": "Call callsieve_context or run callsieve agent-context before broad grep, repository-wide search, or repeated file reads."
+            }
+        ]
+    }))
+    .unwrap_or_else(|_| "{}".to_string())
+}
+
 fn callsieve_executable_display() -> String {
+    if let Some(path) = stable_callsieve_executable() {
+        return path.display().to_string();
+    }
+
     env::current_exe()
         .unwrap_or_else(|_| PathBuf::from("callsieve"))
         .display()
         .to_string()
+}
+
+fn stable_callsieve_executable() -> Option<PathBuf> {
+    if let Some(path) = env::var_os("CALLSIEVE_MCP_COMMAND").map(PathBuf::from)
+        && path.is_file()
+    {
+        return Some(path);
+    }
+
+    let binary_name = if cfg!(windows) {
+        "callsieve.exe"
+    } else {
+        "callsieve"
+    };
+
+    if let Some(path) = env::var_os("CARGO_HOME")
+        .map(PathBuf::from)
+        .map(|home| home.join("bin").join(binary_name))
+        .filter(|path| path.is_file())
+    {
+        return Some(path);
+    }
+
+    let home_var = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+    env::var_os(home_var)
+        .map(PathBuf::from)
+        .map(|home| home.join(".cargo").join("bin").join(binary_name))
+        .filter(|path| path.is_file())
 }
 
 fn toml_basic_string(value: &str) -> String {
@@ -8166,8 +12787,21 @@ fn agent_client_name(client: AgentClient) -> &'static str {
     match client {
         AgentClient::Codex => "codex",
         AgentClient::Claude => "claude",
+        AgentClient::Copilot => "copilot",
+        AgentClient::OpenCode => "opencode",
+        AgentClient::Antigravity => "antigravity",
         AgentClient::Cursor => "cursor",
+        AgentClient::Vscode => "vscode",
+        AgentClient::Windsurf => "windsurf",
+        AgentClient::Continue => "continue",
+        AgentClient::Zed => "zed",
+        AgentClient::Junie => "junie",
+        AgentClient::JetBrains => "jetbrains",
+        AgentClient::Amp => "amp",
+        AgentClient::Goose => "goose",
+        AgentClient::Warp => "warp",
         AgentClient::Cline => "cline",
+        AgentClient::Zoo => "zoo",
         AgentClient::Roo => "roo",
         AgentClient::Generic => "generic",
     }
@@ -8918,6 +13552,23 @@ fn write_executable_file(path: &Path, content: &str) -> Result<()> {
     Ok(())
 }
 
+fn set_executable(path: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        let mut permissions = fs::metadata(path)
+            .with_context(|| format!("failed to stat {}", path.display()))?
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(path, permissions)
+            .with_context(|| format!("failed to chmod {}", path.display()))?;
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
+    Ok(())
+}
+
 fn resolve_command_excluding_shim(command: &str, shim_bin: &Path) -> Option<String> {
     let paths = env::var_os("PATH")?;
     let names = command_candidate_names(command);
@@ -9391,6 +14042,22 @@ mod tests {
             "24",
         ])
         .unwrap();
+        Cli::try_parse_from([
+            "callsieve",
+            "pilot-collect-lm-studio",
+            "benchmarks/evidence/pilot.json",
+            "--model",
+            "qwen3-coder-next",
+            "--base-url",
+            "http://127.0.0.1:1234/v1",
+            "--limit",
+            "10",
+            "--context-limit",
+            "24",
+            "--max-tokens",
+            "256",
+        ])
+        .unwrap();
         Cli::try_parse_from(["callsieve", "pilot-qa", "benchmarks/evidence/pilot.json"]).unwrap();
         Cli::try_parse_from([
             "callsieve",
@@ -9420,6 +14087,9 @@ mod tests {
         Cli::try_parse_from(["callsieve", "mcp"]).unwrap();
         Cli::try_parse_from(["callsieve", "mcp-config", ".", "--format", "json"]).unwrap();
         Cli::try_parse_from(["callsieve", "mcp-config", ".", "--format", "toml"]).unwrap();
+        Cli::try_parse_from(["callsieve", "mcp-registry-manifest"]).unwrap();
+        Cli::try_parse_from(["callsieve", "mcp-registry-manifest", "--out", "server.json"])
+            .unwrap();
         Cli::try_parse_from(["callsieve", "status", "."]).unwrap();
         Cli::try_parse_from(["callsieve", "daemon", ".", "--once"]).unwrap();
         Cli::try_parse_from(["callsieve", "daemon", ".", "--background", "--lsp"]).unwrap();
@@ -9428,6 +14098,41 @@ mod tests {
         Cli::try_parse_from(["callsieve", "watch", "."]).unwrap();
         Cli::try_parse_from(["callsieve", "watch", ".", "--lsp"]).unwrap();
         Cli::try_parse_from(["callsieve", "agent-setup", ".", "--client", "codex"]).unwrap();
+        for client in [
+            "copilot",
+            "opencode",
+            "antigravity",
+            "cursor",
+            "vscode",
+            "windsurf",
+            "continue",
+            "zed",
+            "junie",
+            "jetbrains",
+            "amp",
+            "goose",
+            "warp",
+            "cline",
+            "zoo",
+            "roo",
+        ] {
+            Cli::try_parse_from(["callsieve", "agent-setup", ".", "--client", client]).unwrap();
+            Cli::try_parse_from(["callsieve", "doctor", ".", "--client", client, "--strict"])
+                .unwrap();
+            Cli::try_parse_from(["callsieve", "enforce", ".", "--client", client, "--strict"])
+                .unwrap();
+            Cli::try_parse_from([
+                "callsieve",
+                "hook",
+                "install",
+                ".",
+                "--client",
+                client,
+                "--strict",
+                "--force",
+            ])
+            .unwrap();
+        }
         Cli::try_parse_from([
             "callsieve",
             "bootstrap",
@@ -9452,6 +14157,7 @@ mod tests {
         .unwrap();
         Cli::try_parse_from(["callsieve", "setup-agent", "codex", "."]).unwrap();
         Cli::try_parse_from(["callsieve", "setup-agent", "roo", "."]).unwrap();
+        Cli::try_parse_from(["callsieve", "setup-agent", "vscode", "."]).unwrap();
         Cli::try_parse_from([
             "callsieve",
             "codex-bootstrap",
@@ -9460,6 +14166,101 @@ mod tests {
             "gpt-5-codex",
         ])
         .unwrap();
+        Cli::try_parse_from(["callsieve", "codex-hooks", "install", ".", "--strict"]).unwrap();
+        Cli::try_parse_from(["callsieve", "codex-hooks", "doctor", ".", "--strict"]).unwrap();
+        Cli::try_parse_from(["callsieve", "codex-hooks", "uninstall", "."]).unwrap();
+        Cli::try_parse_from([
+            "callsieve",
+            "codex-hook",
+            "user-prompt-submit",
+            ".",
+            "--strict",
+            "--limit",
+            "6",
+            "--snippets-per-file",
+            "1",
+        ])
+        .unwrap();
+        Cli::try_parse_from(["callsieve", "codex-hook", "pre-tool-use", ".", "--strict"]).unwrap();
+        Cli::try_parse_from(["callsieve", "codex-hook", "post-tool-use", ".", "--strict"]).unwrap();
+        Cli::try_parse_from([
+            "callsieve",
+            "codex-hook",
+            "permission-request",
+            ".",
+            "--strict",
+        ])
+        .unwrap();
+        Cli::try_parse_from(["callsieve", "codex-hook", "stop", ".", "--strict"]).unwrap();
+        Cli::try_parse_from(["callsieve", "claude-hooks", "install", ".", "--strict"]).unwrap();
+        Cli::try_parse_from(["callsieve", "claude-hooks", "doctor", ".", "--strict"]).unwrap();
+        Cli::try_parse_from(["callsieve", "claude-hooks", "uninstall", "."]).unwrap();
+        Cli::try_parse_from([
+            "callsieve",
+            "claude-hook",
+            "user-prompt-submit",
+            ".",
+            "--strict",
+            "--limit",
+            "6",
+            "--snippets-per-file",
+            "1",
+        ])
+        .unwrap();
+        Cli::try_parse_from(["callsieve", "claude-hook", "pre-tool-use", ".", "--strict"]).unwrap();
+        Cli::try_parse_from(["callsieve", "claude-hook", "post-tool-use", ".", "--strict"])
+            .unwrap();
+        Cli::try_parse_from([
+            "callsieve",
+            "claude-hook",
+            "permission-request",
+            ".",
+            "--strict",
+        ])
+        .unwrap();
+        Cli::try_parse_from(["callsieve", "claude-hook", "stop", ".", "--strict"]).unwrap();
+        for hooks_command in [
+            "copilot-hooks",
+            "opencode-hooks",
+            "antigravity-hooks",
+            "cline-hooks",
+        ] {
+            Cli::try_parse_from(["callsieve", hooks_command, "install", ".", "--strict"]).unwrap();
+            Cli::try_parse_from(["callsieve", hooks_command, "doctor", ".", "--strict"]).unwrap();
+            Cli::try_parse_from(["callsieve", hooks_command, "uninstall", "."]).unwrap();
+        }
+        for hook_command in [
+            "copilot-hook",
+            "opencode-hook",
+            "antigravity-hook",
+            "cline-hook",
+        ] {
+            Cli::try_parse_from([
+                "callsieve",
+                hook_command,
+                "user-prompt-submit",
+                ".",
+                "--strict",
+                "--limit",
+                "6",
+                "--snippets-per-file",
+                "1",
+            ])
+            .unwrap();
+            Cli::try_parse_from(["callsieve", hook_command, "pre-tool-use", ".", "--strict"])
+                .unwrap();
+            Cli::try_parse_from(["callsieve", hook_command, "post-tool-use", ".", "--strict"])
+                .unwrap();
+            Cli::try_parse_from([
+                "callsieve",
+                hook_command,
+                "permission-request",
+                ".",
+                "--strict",
+            ])
+            .unwrap();
+            Cli::try_parse_from(["callsieve", hook_command, "stop", ".", "--strict"]).unwrap();
+        }
         Cli::try_parse_from([
             "callsieve",
             "editor-hook",
@@ -9550,5 +14351,34 @@ eval duration:        235ms\n";
         let (prompt, eval) = parse_ollama_verbose_counts(&clean).unwrap();
         assert_eq!(prompt, 44);
         assert_eq!(eval, 21);
+    }
+
+    #[test]
+    fn parses_lm_studio_chat_endpoint() {
+        let endpoint = openai_chat_endpoint("http://127.0.0.1:1234/v1").unwrap();
+        assert_eq!(endpoint.host, "127.0.0.1");
+        assert_eq!(endpoint.port, 1234);
+        assert_eq!(endpoint.path, "/v1/chat/completions");
+
+        let endpoint = openai_chat_endpoint("http://localhost:1234/v1/chat/completions").unwrap();
+        assert_eq!(endpoint.host, "localhost");
+        assert_eq!(endpoint.port, 1234);
+        assert_eq!(endpoint.path, "/v1/chat/completions");
+    }
+
+    #[test]
+    fn parses_http_response_body() {
+        let response = b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 12\r\n\r\n{\"ok\":true}";
+        let (status, body) = parse_http_response(response).unwrap();
+        assert_eq!(status, 200);
+        assert_eq!(body, "{\"ok\":true}");
+    }
+
+    #[test]
+    fn decodes_chunked_http_response_body() {
+        let response = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n7\r\n{\"ok\":t\r\n4\r\nrue}\r\n0\r\n\r\n";
+        let (status, body) = parse_http_response(response).unwrap();
+        assert_eq!(status, 200);
+        assert_eq!(body, "{\"ok\":true}");
     }
 }

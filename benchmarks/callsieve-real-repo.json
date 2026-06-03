@@ -7,6 +7,10 @@
         "src/query/mod.rs",
         "src/query/ranker.rs",
         "tests/cli.rs"
+      ],
+      "critical_files": [
+        "src/query/mod.rs",
+        "src/query/ranker.rs"
       ]
     },
     {
@@ -18,6 +22,11 @@
         "src/query/mod.rs",
         "tests/cli.rs",
         "docs/MCP.md"
+      ],
+      "critical_files": [
+        "src/mcp.rs",
+        "src/cli.rs",
+        "docs/MCP.md"
       ]
     },
     {
@@ -28,6 +37,10 @@
         "src/indexer/symbols.rs",
         "src/indexer/mod.rs",
         "Cargo.toml"
+      ],
+      "critical_files": [
+        "src/indexer/tree_sitter_symbols.rs",
+        "Cargo.toml"
       ]
     },
     {
@@ -37,6 +50,10 @@
         "src/query/mod.rs",
         "tests/cli.rs",
         "README.md",
+        "benchmarks/callsieve-real-repo.json"
+      ],
+      "critical_files": [
+        "src/query/mod.rs",
         "benchmarks/callsieve-real-repo.json"
       ]
     }

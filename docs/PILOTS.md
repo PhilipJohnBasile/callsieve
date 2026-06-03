@@ -21,7 +21,7 @@ The MIT license allows commercial use of the code. It does not by itself provide
 A paid pilot should sell the outcome, not access to the source code:
 
 - install CallSieve locally on selected repositories
-- configure Codex, Claude, Cursor, Cline, Roo, or a generic MCP client
+- configure Codex, Claude Code, GitHub Copilot, OpenCode, Antigravity CLI, Cursor, VS Code, Windsurf, Continue, Zed, Junie, JetBrains AI Assistant, Amp, Goose, Warp, Cline, Zoo Code, the deprecated Roo alias, or a generic MCP client
 - establish the first-command policy: `callsieve agent-context <repo> "<task>"`
 - record paired baseline and CallSieve-assisted sessions
 - measure grep commands, file reads, selected files, critical misses, and token counts

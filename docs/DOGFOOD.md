@@ -1,6 +1,6 @@
 # Dogfood Runbook
 
-Use this runbook when CallSieve is tested by CallSieve, Codex, Claude, Gemini, Kimi, Cursor, Cline, Roo, or another AI CLI.
+Use this runbook when CallSieve is tested by CallSieve, Codex, Claude Code, GitHub Copilot, OpenCode, Antigravity CLI, Cursor, VS Code, Windsurf, Continue, Zed, Junie, JetBrains AI Assistant, Amp, Goose, Warp, Cline, Zoo Code, the deprecated Roo alias, or another stdio MCP tool.
 
 ## Goal
 
@@ -11,6 +11,7 @@ callsieve agent-context <repo> "<task>" --limit 8 --snippets-per-file 2
 ```
 
 For MCP clients, the equivalent first tool is `callsieve_context`.
+For MCP Registry discoverability checks, generate the local descriptor with `callsieve mcp-registry-manifest --out server.json`; this does not publish or contact the network.
 
 ## Cold Start
 

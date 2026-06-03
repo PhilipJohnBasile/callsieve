@@ -38,12 +38,12 @@ Use `cargo run -- index . --lsp` when benchmark evidence should include local LS
 CallSieve evidence is intentionally split into three tiers:
 
 - Rehearsal evidence: deterministic retrieval fixtures, local perf reports, external benchmark reports, platform-neutral `context_payload_reduction`, and `trace-replay` controlled traces. This tier is repeatable and useful for engineering confidence, but it is not observed Codex proof.
-- Supplemental evidence: Ollama or other local-model collection through `pilot-collect-ollama`. This can test task wording, expected files, prompt shape, and CallSieve navigation, but it stays outside the 50-session Codex claim manifest.
+- Supplemental evidence: Ollama or other local-model collection through `pilot-collect-ollama` or `pilot-collect-lm-studio`. This can test task wording, expected files, prompt shape, and CallSieve navigation, but it stays outside the 50-session Codex claim manifest.
 - Claim-counted evidence: real paired Codex developer sessions recorded through `pilot-run` or `session-*`, with baseline and CallSieve phases, real transcript context token counts, files read from the transcript, strict trace policy, and zero critical misses.
 
 `proof-report` is a claim-proof command. Run it only after `pilot-qa` passes for the claim-counted manifest. Controlled replay and supplemental Ollama runs can support the report narrative, but they must remain separate from observed session counts.
 
-For cross-agent comparison, use `context_payload_reduction`. It is a platform-neutral proxy that estimates the repo context payload CallSieve avoids versus deterministic grep/read replay. It applies across Codex, Claude, Gemini, Kimi, Cursor, Cline, Roo, and local agents because it does not depend on vendor transcript telemetry. It is not observed whole-session token savings.
+For cross-agent comparison, use `context_payload_reduction`. It is a platform-neutral proxy that estimates the repo context payload CallSieve avoids versus deterministic grep/read replay. It applies across Codex, Claude Code, GitHub Copilot, OpenCode, Antigravity CLI, Cursor, VS Code, Windsurf, Continue, Zed, Junie, JetBrains AI Assistant, Amp, Goose, Warp, Cline, Zoo Code, the deprecated Roo alias, generic stdio MCP tools, and local agents because it does not depend on vendor transcript telemetry. It is not observed whole-session token savings.
 
 Latest local run on this repository:
 
@@ -139,7 +139,7 @@ cargo run -- trace-replay <repo> <suite.json> <trace.json> --limit 20
 
 `trace-replay` writes the same `tasks[].session.baseline/callsieve` JSON shape accepted by `trace-summary`, `benchmark-report`, `pilot-report`, and `proof-report`. It is tagged as `metadata.collection = "controlled_replay"` and is not human telemetry. It deterministically simulates the baseline as task-term grep plus full reads of every matched indexed file, then counts CallSieve as the serialized context packet plus full reads of the selected `read_first` files.
 
-For real observed sessions, use `session-start`, `session-event`, and `session-finish`. These traces are tagged as `metadata.collection = "observed_session"` and store ordered `events[]` with command classification, phase, files read, and optional token counts. Baseline events contribute comparison metrics; CallSieve-phase events are used for strict before-grep policy checks. Codex, ChatGPT, and local-agent/Ollama runs can be recorded, but claim-counted runs must satisfy the same paired trace schema and transcript-token accounting.
+For real observed sessions, use `session-start`, `session-event`, and `session-finish`. These traces are tagged as `metadata.collection = "observed_session"` and store ordered `events[]` with command classification, phase, files read, and optional token counts. Baseline events contribute comparison metrics; CallSieve-phase events are used for strict before-grep policy checks. Codex, ChatGPT, MCP/rules/template clients, and local-agent/Ollama runs can be recorded, but claim-counted runs must satisfy the same paired trace schema and transcript-token accounting.
 
 Audit before-grep policy with:
 
@@ -262,7 +262,7 @@ Use `pilot-report` when you need one local JSON artifact for a pilot: benchmark 
 
 Use `proof-report` for the top-level claim artifact. It keeps observed sessions, controlled replay sessions, external repo coverage, and observed token reduction separate. Controlled replay traces are never counted as observed evidence, and traces tagged as observed but containing controlled replay markers fail the report.
 
-Use `enterprise-proof-report` only for the broad-claim protocol. It gates the claim on 1,000 paired observed sessions, Codex/Claude/Cursor coverage, 50 repos, 10 Microsoft-scale OSS proxies, per-session savings ratios, strict trace-policy compliance, transcript token accounting, and paid-pilot PMF evidence. See [ENTERPRISE_PROOF.md](ENTERPRISE_PROOF.md).
+Use `enterprise-proof-report` only for the broad-claim protocol. It gates the claim on 1,000 paired observed sessions, manifest-configured client coverage, 50 repos, 10 Microsoft-scale OSS proxies, per-session savings ratios, strict trace-policy compliance, transcript token accounting, and paid-pilot PMF evidence. The current example manifest requires Codex, Claude, and Cursor coverage; update the manifest gates when proving a broader client set such as VS Code, Windsurf, Continue, Zed, Junie, JetBrains AI Assistant, Amp, Goose, or Warp. See [ENTERPRISE_PROOF.md](ENTERPRISE_PROOF.md).
 
 ```bash
 cargo run -- index . --lsp
@@ -344,9 +344,9 @@ For the stricter 100-session follow-on target, start from `benchmarks/evidence/1
 - `maximum_trace_violations`: `0`
 - `require_fresh_index`, `require_lsp_where_available`, `require_codex_bootstrap`, and `require_transcript_token_accounting`: `true`
 
-## Ollama Supplemental Pilot
+## Local-Model Supplemental Pilot
 
-For the 50-session observed Codex milestone, use local or cloud-backed Ollama models only as rehearsal for task wording, expected files, prompt shape, and CallSieve retrieval. Do not mix Ollama traces into `benchmarks/evidence/observed-codex-oss-50.local.json` or the generated Codex proof manifest. The local manifest `benchmarks/evidence/observed-generic-ollama-100.local.json` is ignored by git and is intended for separate supplemental workflows: 120 pre-registered tasks, target 100 paired sessions, 6 external fixture repos, and transcript token accounting.
+For the 50-session observed Codex milestone, use local or cloud-backed local models only as rehearsal for task wording, expected files, prompt shape, and CallSieve retrieval. Do not mix local-model traces into `benchmarks/evidence/observed-codex-oss-50.local.json` or the generated Codex proof manifest. The local manifest `benchmarks/evidence/observed-generic-ollama-100.local.json` is ignored by git and is intended for separate supplemental workflows: 120 pre-registered tasks, target 100 paired sessions, 6 external fixture repos, and transcript token accounting.
 
 For this tiering model:
 
@@ -362,7 +362,16 @@ cargo run -- pilot-collect-ollama benchmarks/evidence/observed-generic-ollama-10
 cargo run -- pilot-qa benchmarks/evidence/observed-generic-ollama-100.local.json
 ```
 
-Use only models confirmed by `ollama list`; supplemental runs stay separate from the Codex observed manifest.
+For LM Studio, confirm the local server and loaded model first. The `lms` CLI ships with LM Studio, so this is a local preflight:
+
+```bash
+lms server status
+lms ps
+cargo run -- pilot-collect-lm-studio benchmarks/evidence/observed-generic-ollama-100.local.json --model qwen3-coder-next --base-url http://127.0.0.1:1234/v1 --limit 10 --context-limit 24
+cargo run -- pilot-qa benchmarks/evidence/observed-generic-ollama-100.local.json
+```
+
+Use only models confirmed by `ollama list` or `lms ps`; supplemental runs stay separate from the Codex observed manifest.
 
 For each task, record the baseline first, then the CallSieve-assisted phase:
 
@@ -372,13 +381,14 @@ cargo run --quiet -- agent-context <repo> "<task>"
 cargo run --quiet -- pilot-run benchmarks/evidence/observed-generic-ollama-100.local.json --task-id <task-id> --mode callsieve --command "callsieve agent-context <repo> \"<task>\"" --files-read <file> --tokens <n>
 ```
 
-For local qwen collection, the harness can run the paired Ollama workflow directly:
+For local qwen collection, the harness can run a paired Ollama or LM Studio workflow directly:
 
 ```bash
 cargo run --quiet -- pilot-collect-ollama benchmarks/evidence/observed-generic-ollama-100.local.json --model qwen2.5-coder:7b --limit 10 --context-limit 24
+cargo run --quiet -- pilot-collect-lm-studio benchmarks/evidence/observed-generic-ollama-100.local.json --model qwen3-coder-next --base-url http://127.0.0.1:1234/v1 --limit 10 --context-limit 24
 ```
 
-`pilot-collect-ollama` records baseline first and CallSieve second through `pilot-run`, audits the files supplied to each phase, writes raw `baseline-ollama-transcript.local.json` and `callsieve-ollama-transcript.local.json` artifacts under each task directory, and uses Ollama verbose `prompt eval count` as the transcript context token count. Treat these sessions as rehearsal for the Codex 50-session milestone, even when the local QA gates pass.
+`pilot-collect-ollama` and `pilot-collect-lm-studio` record baseline first and CallSieve second through `pilot-run`, audit the files supplied to each phase, and write raw local transcript artifacts under each task directory. Ollama uses verbose `prompt eval count`; LM Studio uses OpenAI-compatible `usage.prompt_tokens`. Treat these sessions as rehearsal for the Codex 50-session milestone, even when the local QA gates pass.
 
 Run QA after every 10 paired tasks:
 

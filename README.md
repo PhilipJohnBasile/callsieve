@@ -20,7 +20,7 @@ Keep broad claims gated. Use `context_payload_reduction` for estimated prompt-pa
 
 ## Current State
 
-CallSieve is now an open-source local Rust CLI with a JSON index, deterministic retrieval, optional LSP reference enrichment, MCP tools, context-first guardrails, daemon/watch freshness support, agent adoption automation, benchmark reports, observed-session traces, and gated proof reports. The product is still local-first and CLI-first, but it has moved beyond the original bootstrap into an agent-context and evidence collection layer.
+CallSieve is now an open-source local Rust CLI with a JSON index, deterministic retrieval, optional LSP reference enrichment, lifecycle hooks for Codex, Claude Code, GitHub Copilot, OpenCode, Antigravity CLI, and Cline, MCP/rule/template setup for Cursor, VS Code, Windsurf, Continue, Zed, Junie, JetBrains AI Assistant, Amp, Goose, Warp, and Zoo Code, context-first guardrails, daemon/watch freshness support, benchmark reports, observed-session traces, and gated proof reports.
 
 For human installation and client setup, see [docs/INSTALL.md](docs/INSTALL.md). For AI CLI and wrapper behavior, see [docs/AGENT_CLI.md](docs/AGENT_CLI.md). For observed whole-session proof collection, see [docs/OBSERVED_SESSIONS.md](docs/OBSERVED_SESSIONS.md). For dogfooding and less-grep measurement, see [docs/DOGFOOD.md](docs/DOGFOOD.md). For paid pilot packaging, see [docs/PILOTS.md](docs/PILOTS.md).
 
@@ -37,9 +37,11 @@ cargo install --git https://github.com/PhilipJohnBasile/callsieve
 callsieve demo /path/to/repo --task "find where login is handled"
 callsieve hook install /path/to/repo --client generic --strict --force
 callsieve hook doctor /path/to/repo
+callsieve codex-hooks install /path/to/repo --strict --force
+callsieve claude-hooks install /path/to/repo --strict --force
 ```
 
-`demo` proves the retrieval loop without configuring an agent. `hook install` creates repo-local launchers and search shims under `.callsieve/` so testers can start an agent with CallSieve-first guardrails without changing global PATH or shell profiles.
+`demo` proves the retrieval loop without configuring an agent. `hook install` creates repo-local launchers and search shims under `.callsieve/` so testers can start an agent with CallSieve-first guardrails without changing global PATH or shell profiles. Hook-capable clients also get local project hooks or plugins that inject CallSieve context and block pre-context broad search after they are trusted.
 
 ## Current CLI Surface
 
@@ -69,6 +71,7 @@ callsieve pilot-task add <manifest.json> <repo> "<task>" [--id <id>] [--expected
 callsieve pilot-task reject <manifest.json> --task-id <id> --reason <reason>
 callsieve pilot-run <manifest.json> --task-id <id> --mode baseline|callsieve --command <cmd> [--files-read <path>...] --tokens <n>
 callsieve pilot-collect-ollama <manifest.json> [--model qwen2.5-coder:7b] [--limit <n>] [--context-limit <n>]
+callsieve pilot-collect-lm-studio <manifest.json> [--model qwen3-coder-next] [--base-url http://127.0.0.1:1234/v1] [--limit <n>] [--context-limit <n>]
 callsieve pilot-qa <manifest.json>
 callsieve pilot-finalize <manifest.json> --out <proof.json>
 callsieve pilot-report <manifest.json> [--limit <n>] [--snippets-per-file <n>] [--no-snippets]
@@ -79,24 +82,34 @@ callsieve evidence-pack <manifest.json> [--anonymize]
 callsieve policy-check <trace.json> [--strict]
 callsieve mcp
 callsieve mcp-config <path> [--format json|toml]
+callsieve mcp-registry-manifest [--out <server.json>]
 callsieve status <path>
 callsieve daemon <path> [--background] [--foreground] [--once] [--lsp]
 callsieve daemon-status <path>
 callsieve daemon-stop <path>
 callsieve watch <path> [--debounce-ms <n>] [--foreground] [--lsp]
-callsieve agent-setup <path> --client <codex|claude|cursor|cline|roo|generic> [--force]
-callsieve setup-agent <codex|claude|cursor|cline|roo|generic> <path> [--force]
-callsieve bootstrap <path> --client <codex|claude|cursor|cline|roo|generic> [--strict] [--force] [--lsp]
-callsieve doctor <path> --client <codex|claude|cursor|cline|roo|generic> [--fix] [--strict]
+callsieve agent-setup <path> --client <codex|claude|copilot|opencode|antigravity|cursor|vscode|windsurf|continue|zed|junie|jetbrains|amp|goose|warp|cline|zoo|roo|generic> [--force]
+callsieve setup-agent <codex|claude|copilot|opencode|antigravity|cursor|vscode|windsurf|continue|zed|junie|jetbrains|amp|goose|warp|cline|zoo|roo|generic> <path> [--force]
+callsieve bootstrap <path> --client <codex|claude|copilot|opencode|antigravity|cursor|vscode|windsurf|continue|zed|junie|jetbrains|amp|goose|warp|cline|zoo|roo|generic> [--strict] [--force] [--lsp]
+callsieve doctor <path> --client <codex|claude|copilot|opencode|antigravity|cursor|vscode|windsurf|continue|zed|junie|jetbrains|amp|goose|warp|cline|zoo|roo|generic> [--fix] [--strict]
 callsieve codex-bootstrap <path> --model <name> [--force]
+callsieve codex-hooks install <path> [--strict] [--force] [--limit <n>] [--snippets-per-file <n>] [--lsp]
+callsieve codex-hooks doctor <path> [--strict]
+callsieve codex-hooks uninstall <path>
+callsieve claude-hooks install <path> [--strict] [--force] [--limit <n>] [--snippets-per-file <n>] [--lsp]
+callsieve claude-hooks doctor <path> [--strict]
+callsieve claude-hooks uninstall <path>
+callsieve copilot-hooks|opencode-hooks|antigravity-hooks|cline-hooks install <path> [--strict] [--force] [--limit <n>] [--snippets-per-file <n>] [--lsp]
+callsieve copilot-hooks|opencode-hooks|antigravity-hooks|cline-hooks doctor <path> [--strict]
+callsieve copilot-hooks|opencode-hooks|antigravity-hooks|cline-hooks uninstall <path>
 callsieve editor-hook <path> --editor <vscode|cursor|generic> [--force]
-callsieve hook install <path> --client <codex|claude|cursor|cline|roo|generic> [--strict] [--force] [--lsp]
+callsieve hook install <path> --client <codex|claude|copilot|opencode|antigravity|cursor|vscode|windsurf|continue|zed|junie|jetbrains|amp|goose|warp|cline|zoo|roo|generic> [--strict] [--force] [--lsp]
 callsieve hook doctor <path>
 callsieve hook uninstall <path>
 callsieve guard <path> "<task>" [--trace-out <trace.json>]
-callsieve begin <path> "<task>" --client <codex|claude|cursor|cline|roo|generic> [--trace-out <trace.json>]
+callsieve begin <path> "<task>" --client <codex|claude|copilot|opencode|antigravity|cursor|vscode|windsurf|continue|zed|junie|jetbrains|amp|goose|warp|cline|zoo|roo|generic> [--trace-out <trace.json>]
 callsieve codex-session <path> "<task>" --trace-out <trace.json> [--model <name>] [--expected-file <path>]
-callsieve enforce <path> --client <codex|claude|cursor|cline|roo|generic> [--trace <trace.json>] [--strict] [--require-shim]
+callsieve enforce <path> --client <codex|claude|copilot|opencode|antigravity|cursor|vscode|windsurf|continue|zed|junie|jetbrains|amp|goose|warp|cline|zoo|roo|generic> [--trace <trace.json>] [--strict] [--require-shim]
 callsieve shim install <path> [--force] [--strict]
 callsieve shim doctor <path>
 callsieve shim uninstall <path>
@@ -137,6 +150,7 @@ cargo run -- record-codex-observed-session --manifest benchmarks/evidence/pilot.
 cargo run -- record-observed-session --manifest benchmarks/evidence/pilot.local.json --client claude --model claude-opus-4-8 --task-id auth-expiry --mode callsieve --command "claude -p \"change login token expiry behavior\" --output-format json" --usage-json .callsieve/observed/auth-expiry-callsieve.json --files-read src/auth/session.ts
 cargo run -- collect-claude-observed-session --manifest benchmarks/evidence/observed-claude-oss-50.local.json --task-id ripgrep-ignore-walk-claude-r01 --mode callsieve --context-limit 4 --snippets-per-file 0 --max-budget-usd 0.50
 cargo run -- pilot-collect-ollama benchmarks/evidence/observed-generic-ollama-100.local.json --model qwen2.5-coder:7b --limit 10 --context-limit 24
+cargo run -- pilot-collect-lm-studio benchmarks/evidence/observed-generic-ollama-100.local.json --model qwen3-coder-next --base-url http://127.0.0.1:1234/v1 --limit 10 --context-limit 24
 cargo run -- pilot-qa benchmarks/evidence/pilot.local.json
 cargo run -- pilot-finalize benchmarks/evidence/pilot.local.json --out benchmarks/evidence/proof.local.json
 cargo run -- pilot-report benchmarks/pilot-manifest.example.json
@@ -147,6 +161,7 @@ cargo run -- evidence-pack benchmarks/pilot-manifest.example.json --anonymize
 cargo run -- policy-check benchmarks/session-trace.example.json --strict
 cargo run -- mcp
 cargo run -- mcp-config . --format json
+cargo run -- mcp-registry-manifest --out server.json
 cargo run -- status .
 cargo run -- daemon . --once
 cargo run -- daemon-status .
@@ -157,6 +172,10 @@ cargo run -- bootstrap . --client generic --strict --force
 cargo run -- doctor . --client generic --strict
 cargo run -- doctor . --client generic --fix --strict
 cargo run -- codex-bootstrap . --model gpt-5-codex --force
+cargo run -- codex-hooks install . --strict --force
+cargo run -- codex-hooks doctor . --strict
+cargo run -- hook install . --client claude --strict --force --lsp
+cargo run -- claude-hooks doctor . --strict
 cargo run -- editor-hook . --editor cursor --force
 cargo run -- hook install . --client generic --strict --force --lsp
 cargo run -- hook doctor .
@@ -212,8 +231,9 @@ The Rust rehearsal command is self-healing for local-safe issues. `--preflight` 
 - keeps a small local task-memory hint cache for repeated task families
 - clears local task memory with `memory-clear` for cold-run testing
 - runs a `demo` command that indexes, returns read-first files, and reports context payload reduction
+- installs lifecycle hooks or plugins for Codex, Claude Code, GitHub Copilot, OpenCode, Antigravity CLI, and Cline
 - exposes a minimal MCP stdio server so agents can call CallSieve before grep
-- prints portable JSON/TOML MCP configs for generic AI CLIs with `mcp-config`
+- prints portable JSON/TOML MCP configs for generic AI CLIs with `mcp-config` and a local-first MCP Registry `server.json` descriptor with `mcp-registry-manifest`
 - reports platform-neutral `context_payload_reduction` versus a naive grep/read loop
 - evaluates retrieval recall against expected and critical file fixtures with `eval-retrieval`
 - reports local p50/p95 context latency with `perf-report`
@@ -233,8 +253,8 @@ The Rust rehearsal command is self-healing for local-safe issues. `--preflight` 
 - starts lightweight task sessions with `begin`, returning context and optionally writing a trace stub for strict audits
 - guards context-first sessions and can write trace stubs for policy audits
 - starts controlled Codex/ChatGPT context-first replay traces with model tags
-- bootstraps project-local Codex launchers, resolved MCP config, rules, and grep shims without global PATH/profile mutation
-- generates project-local editor hooks for VS Code, Cursor, and generic editors
+- bootstraps project-local hooks, resolved MCP config, rules, and grep shims without global PATH/profile mutation
+- generates project-local MCP configs, rules, and editor hook templates for supported agents without mutating global user config
 - installs repo-local agent launchers with `hook install` so shims and daemon startup stay process-local
 - audits agent setup, traces, index freshness, and optional shim state with `enforce`
 - installs an opt-in local `callsieve` launcher plus `rg`/`grep` shims for PATH-level interception
@@ -383,13 +403,13 @@ The Rust rehearsal command is self-healing for local-safe issues. `--preflight` 
 }
 ```
 
-`benchmark-suite` reports expected-file recall, aggregate `context_payload_reduction`, legacy estimated token-savings fields, and optional observed session savings when real agent trace numbers are supplied. `context_payload_reduction` is the platform-neutral proxy for Codex, Claude, Gemini, Kimi, Cursor, Cline, Roo, and local agents. It estimates only the prompt context payload CallSieve controls, not whole-session transcript tokens.
+`benchmark-suite` reports expected-file recall, aggregate `context_payload_reduction`, legacy estimated token-savings fields, and optional observed session savings when real agent trace numbers are supplied. `context_payload_reduction` is the platform-neutral proxy for Codex, Claude Code, GitHub Copilot, OpenCode, Antigravity CLI, Cursor, VS Code, Windsurf, Continue, Zed, Junie, JetBrains AI Assistant, Amp, Goose, Warp, Cline, Zoo Code, the deprecated Roo alias, generic stdio MCP tools, and local agents. It estimates only the prompt context payload CallSieve controls, not whole-session transcript tokens.
 
 `eval-retrieval` runs the same task fixture shape against the actual `agent-context` selection path and reports recall@k, critical recall, selected tokens, and failure reasons. It exits nonzero when a critical file is missed. `perf-report` runs fixed local tasks and reports p50/p95 latency for index load plus context generation.
 
 `trace-replay` generates deterministic baseline versus CallSieve trace JSON from a suite. It is tagged with `metadata.collection = "controlled_replay"` and is useful before real observed session evidence exists.
 
-Use `session-start`, `session-event`, and `session-finish` for real observed agent sessions across Codex, Claude, Cursor, and local agents. These traces are tagged with `metadata.collection = "observed_session"` and keep ordered events with command classification, files read, optional token counts, and phase (`baseline` or `callsieve`).
+Use `session-start`, `session-event`, and `session-finish` for real observed agent sessions across hook-capable and MCP-capable clients, including Codex, Claude Code, GitHub Copilot, OpenCode, Antigravity CLI, Cursor, VS Code, Windsurf, Continue, Zed, Junie, JetBrains AI Assistant, Amp, Goose, Warp, Cline, Zoo Code, and local agents. These traces are tagged with `metadata.collection = "observed_session"` and keep ordered events with command classification, files read, optional token counts, and phase (`baseline` or `callsieve`).
 
 See [docs/BENCHMARKS.md](docs/BENCHMARKS.md) for the real-repo benchmark pack, session trace format, replay traces, and miss analysis fields.
 
@@ -468,7 +488,7 @@ Use `benchmark-doctor` before a report to catch missing repos, missing indexes, 
 
 `proof-report` is the top-level claim artifact. It exposes planned tasks, rejected-session audit count, observed sessions, transcript-token provenance, controlled replay sessions, external repo coverage, observed token reduction, controlled replay ratio, freshness, daemon, bootstrap, and LSP status in one JSON object. Controlled replay is never counted as observed evidence.
 
-`enterprise-proof-report` is the broad-claim artifact. It is opt-in and fails unless the manifest meets the enterprise gates: 1,000 paired observed sessions, 50 repos, 10 Microsoft-scale OSS proxies, Codex/Claude/Cursor coverage, 5 languages, 10 task categories, 90% positive per-session savings, 75% of sessions above 30% savings, zero critical misses, zero strict trace violations, zero controlled replay, full transcript token accounting, and paid-pilot PMF evidence. See [docs/ENTERPRISE_PROOF.md](docs/ENTERPRISE_PROOF.md) and [benchmarks/evidence/enterprise-proof-manifest.example.json](benchmarks/evidence/enterprise-proof-manifest.example.json).
+`enterprise-proof-report` is the broad-claim artifact. It is opt-in and fails unless the manifest meets the enterprise gates: 1,000 paired observed sessions, 50 repos, 10 Microsoft-scale OSS proxies, manifest-configured client coverage, 5 languages, 10 task categories, 90% positive per-session savings, 75% of sessions above 30% savings, zero critical misses, zero strict trace violations, zero controlled replay, full transcript token accounting, and paid-pilot PMF evidence. See [docs/ENTERPRISE_PROOF.md](docs/ENTERPRISE_PROOF.md) and [benchmarks/evidence/enterprise-proof-manifest.example.json](benchmarks/evidence/enterprise-proof-manifest.example.json).
 
 Evidence is separated into three tiers:
 
@@ -509,7 +529,7 @@ cargo run -- begin . "change login token expiry behavior" --client generic --tra
 cargo run -- trace-check .callsieve/session-trace.json --strict
 ```
 
-Use `agent-setup` when you only need local MCP config plus a short CallSieve-first policy file for Codex, Claude, Cursor, Cline, Roo, or generic MCP clients:
+Use `agent-setup` when you only need local MCP config plus a short CallSieve-first policy file for Codex, Claude, Copilot, OpenCode, Antigravity, Cursor, VS Code, Windsurf, Continue, Zed, Junie, JetBrains AI Assistant, Amp, Goose, Warp, Cline, Zoo, Roo alias, or generic MCP clients:
 
 ```bash
 cargo run -- agent-setup . --client codex --force
@@ -517,7 +537,7 @@ cargo run -- agent-setup . --client codex --force
 
 For coding tasks, the policy is: call `callsieve_context` before broad grep, `rg`, repository-wide search, or repeated file reads. Read `read_first` files first; grep only if the context packet is insufficient.
 
-Use `hook install` when you want the easiest repo-local agent entrypoint. It builds the index, writes client setup, installs strict shims, and creates `.callsieve/agent-launch.ps1` plus `.callsieve/agent-launch.sh`. Those launchers start the daemon, prepend `.callsieve/bin` only for that launched process, and then run the agent command you pass them.
+Use `hook install` when you want the easiest repo-local agent entrypoint. It builds the index, writes client setup, installs strict shims, and creates `.callsieve/agent-launch.ps1` plus `.callsieve/agent-launch.sh`. For hook-capable clients, it also writes local project hooks or plugins. Cursor, VS Code, Windsurf, Continue, Zed, Junie, JetBrains AI Assistant, Amp, Goose, Warp, and Zoo use MCP/rules/templates plus shims only.
 
 ```bash
 cargo run -- hook install . --client generic --strict --force --lsp
@@ -530,6 +550,39 @@ Hook setup does not mutate global shell profiles or user PATH. Remove the repo-l
 cargo run -- hook uninstall .
 ```
 
+For Codex, lifecycle hooks are the primary enforcement path:
+
+```bash
+cargo run -- codex-hooks install . --strict --force
+cargo run -- codex-hooks doctor . --strict
+```
+
+The generated `.codex/hooks.json` runs local `callsieve codex-hook ...` handlers. `UserPromptSubmit` injects compact CallSieve context, `PreToolUse` blocks broad search before context, `PostToolUse` records trace events, `PermissionRequest` denies escalated pre-context search, and `Stop` can ask Codex to continue after a strict violation. Review and trust project hooks in Codex with `/hooks`.
+
+For Claude Code, `hook install --client claude` gives all three local layers: hooks, shims, and MCP:
+
+```bash
+cargo run -- hook install . --client claude --strict --force --lsp
+cargo run -- claude-hooks doctor . --strict
+cargo run -- enforce . --client claude --strict
+```
+
+This writes `.mcp.json`, `CLAUDE.md`, `.claude/settings.local.json`, `.callsieve/agent-launch.ps1`, `.callsieve/agent-launch.sh`, and `.callsieve/bin/*`. The Claude Code hooks run local `callsieve claude-hook ...` handlers, inject context at `UserPromptSubmit`, block `Bash`, `Read`, `Grep`, and `Glob` before context in strict mode, and record `.callsieve/claude-hooks/*.trace.json`. Review and trust project hooks in Claude Code with `/hooks`.
+
+For GitHub Copilot, OpenCode, Antigravity CLI, and Cline, use the same lifecycle pattern:
+
+```bash
+cargo run -- hook install . --client copilot --strict --force --lsp
+cargo run -- copilot-hooks doctor . --strict
+cargo run -- hook install . --client opencode --strict --force --lsp
+cargo run -- hook install . --client antigravity --strict --force --lsp
+cargo run -- hook install . --client cline --strict --force --lsp
+```
+
+Copilot writes `.github/copilot-instructions.md`, `.github/agents/callsieve-context.agent.md`, `.github/copilot-mcp.json`, and `.github/hooks/callsieve.json`. OpenCode writes `opencode.json`, `.opencode/CALLSIEVE.md`, and `.opencode/plugins/callsieve.js`. Antigravity writes `.agents/mcp_config.json`, `.agents/hooks.json`, `.agents/skills/callsieve-context.md`, and `.agents/rules/callsieve.md`. Cline writes `.cline/mcp.json`, `.cline/rules/callsieve.md`, `.clinerules/callsieve.md`, and `.cline/hooks/*`. Copilot cloud agents are template-only unless the local `callsieve` binary is installed inside the sandbox.
+
+For VS Code, Windsurf, Continue, Zed, Junie, JetBrains AI Assistant, Amp, Goose, and Warp, CallSieve writes MCP/rule/skill/setup templates only. Strict mode requires those generated files, a fresh index, daemon state, and local shims, but it does not require lifecycle hooks. Global or user config files are not mutated automatically. Warp cloud-agent templates work only when the Warp/Oz runtime can execute the local `callsieve` binary.
+
 Use `guard` to start a context-first task and write a trace stub, then use strict `trace-check` to audit actual sessions:
 
 ```bash
@@ -539,7 +592,7 @@ cargo run -- policy-check .callsieve/session-trace.json --strict
 cargo run -- enforce . --client codex --trace .callsieve/session-trace.json --strict
 ```
 
-`policy-check` exits nonzero when a trace violates the context-first rule, so it can be used in CI. `enforce` checks generated agent files, index freshness, optional trace policy, and shim state. Missing shims are a warning unless `--require-shim` is set.
+`policy-check` exits nonzero when a trace violates the context-first rule, so it can be used in CI. `enforce` checks generated agent files, index freshness, optional trace policy, hook surfaces where supported, and shim state. In strict mode, first-class named clients require local shim files; generic clients can still opt into failing on missing shims with `--require-shim`.
 
 For Codex/ChatGPT controlled replay, use `codex-session` instead of a generic guard. It writes a trace with `client: codex-chatgpt`, a model label, a deterministic grep/read baseline, and a CallSieve-first assisted side:
 
@@ -565,7 +618,7 @@ Use `codex-bootstrap` for Codex-first project setup without mutating global shel
 cargo run -- codex-bootstrap . --model gpt-5-codex --force
 ```
 
-It writes `.codex/config.toml`, `.codex/CALLSIEVE.md`, `.callsieve/bin` launchers/shims, and `.callsieve/codex-launch.ps1` / `.callsieve/codex-launch.sh`. The MCP config points at the resolved CallSieve executable instead of relying on a global PATH entry. The launchers start `callsieve daemon --background --lsp`, prepend `.callsieve/bin` only for that launched process, and print the first required `callsieve agent-context` command.
+It writes `.codex/config.toml`, `.codex/CALLSIEVE.md`, `.codex/hooks.json`, `.callsieve/bin` launchers/shims, and `.callsieve/codex-launch.ps1` / `.callsieve/codex-launch.sh`. The MCP config points at the resolved CallSieve executable instead of relying on a global PATH entry. The lifecycle hooks inject context and block broad search before context. The launchers start `callsieve daemon --background --lsp`, prepend `.callsieve/bin` only for that launched process, and print the first required `callsieve agent-context` command.
 
 This repo includes `benchmarks/codex-chatgpt-manifest.example.json` as the Codex pilot manifest fixture. Copy it to an ignored `.local.json` path before recording local runs.
 
@@ -643,13 +696,13 @@ If a server is missing or fails, CallSieve keeps the tree-sitter and heuristic g
 
 `callsieve_context` self-heals a missing or stale `.callsieve/index.json` by rebuilding the local index before returning context. MCP responses include freshness and timing metadata. The MCP server does not install shims, mutate client config, start the daemon, or send code to a remote service.
 
-Use `callsieve mcp-config <repo> --format json` or `--format toml` for Gemini CLI, Kimi CLI, or any AI CLI that supports stdio MCP but does not have a dedicated CallSieve setup command.
+Use `callsieve mcp-config <repo> --format json` or `--format toml` for any AI CLI that supports stdio MCP but does not have a dedicated CallSieve setup command. Use `callsieve mcp-registry-manifest --out server.json` to generate a local-first MCP Registry descriptor for `callsieve mcp`; it never contacts the network or publishes automatically.
 
-See [docs/INSTALL.md](docs/INSTALL.md) for human install and client setup, [docs/AGENT_CLI.md](docs/AGENT_CLI.md) for AI CLI behavior, and [docs/MCP.md](docs/MCP.md) for Codex, Claude Code, Claude Desktop, Cursor, Cline, and Roo MCP examples.
+See [docs/INSTALL.md](docs/INSTALL.md) for human install and client setup, [docs/AGENT_CLI.md](docs/AGENT_CLI.md) for AI CLI behavior, and [docs/MCP.md](docs/MCP.md) for MCP examples across supported clients.
 
 ## Feedback FAQ
 
-**Does it need to be MCP?** No. MCP is one integration path. The same retrieval path is available through `callsieve agent-context`, JSON output, Markdown output, and repo-local hooks.
+**Does it need to be MCP?** No. MCP is one integration path. The same retrieval path is available through `callsieve agent-context`, JSON output, Markdown output, lifecycle hooks or plugins where clients support them, and repo-local shims.
 
 **Why not just Markdown or CSV?** Markdown is now available for direct reading, and JSON remains the default because agents and tooling need nested fields for files, symbols, snippets, tests, scores, and trace policy. CSV loses too much structure for this workflow.
 

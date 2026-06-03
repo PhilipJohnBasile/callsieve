@@ -6,7 +6,24 @@
 /.callsieve/
 **/.callsieve/
 /.codex/config.toml
+/.codex/hooks.json
+/.claude/settings.local.json
 /.mcp.json
+/.github/copilot-mcp.json
+/.github/hooks/callsieve.json
+/opencode.json
+/.opencode/plugins/callsieve.js
+/.agents/mcp_config.json
+/.agents/hooks.json
+/.cursor/mcp.json
+/.vscode/mcp.json
+/.continue/mcpServers/callsieve.yaml
+/.zed/settings.json
+/.junie/mcp/mcp.json
+/.agents/skills/callsieve-context/mcp.json
+/.cline/mcp.json
+/.cline/hooks/
+/.roo/mcp.json
 
 # Local benchmark fixture clones
 /benchmarks/github-*/

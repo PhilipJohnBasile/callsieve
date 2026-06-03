@@ -56,6 +56,7 @@ jobs:
           mkdir -p "dist/${asset}"
           cp "target/${{ matrix.target }}/release/callsieve" "dist/${asset}/"
           cp README.md "dist/${asset}/"
+          cp CHANGELOG.md "dist/${asset}/"
           cp docs/INSTALL.md "dist/${asset}/"
           cp docs/AGENT_CLI.md "dist/${asset}/"
           tar -C dist -czf "${asset}.tar.gz" "${asset}"
@@ -69,6 +70,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path "dist\$asset" | Out-Null
           Copy-Item "target\${{ matrix.target }}\release\callsieve.exe" "dist\$asset\"
           Copy-Item "README.md" "dist\$asset\"
+          Copy-Item "CHANGELOG.md" "dist\$asset\"
           Copy-Item "docs\INSTALL.md" "dist\$asset\"
           Copy-Item "docs\AGENT_CLI.md" "dist\$asset\"
           Compress-Archive -Path "dist\$asset\*" -DestinationPath "$asset.zip" -Force
