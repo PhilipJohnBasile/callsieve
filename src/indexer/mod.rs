@@ -22,7 +22,7 @@ use crate::store::{
 
 use self::language::Language;
 
-pub const SCHEMA_VERSION: u32 = 6;
+pub const SCHEMA_VERSION: u32 = 7;
 
 #[derive(Debug, Clone)]
 pub struct IndexOptions {
@@ -231,7 +231,7 @@ fn module_path(path: &Path) -> String {
 }
 
 fn is_test_file(path: &str) -> bool {
-    let lower = path.to_ascii_lowercase();
+    let lower = path.replace('\\', "/").to_ascii_lowercase();
     // Match both nested (`src/tests/`) and top-level (`tests/`) test dirs; paths
     // are repo-relative with no leading slash, so a `/tests/` check alone misses
     // the common top-level `tests/` and `__tests__/` convention.
@@ -707,7 +707,9 @@ mod tests {
     #[test]
     fn top_level_and_nested_test_dirs_are_detected() {
         assert!(is_test_file("tests/cli.rs"));
+        assert!(is_test_file(r"tests\cli.rs"));
         assert!(is_test_file("src/tests/helpers.rs"));
+        assert!(is_test_file(r"src\tests\helpers.rs"));
         assert!(is_test_file("__tests__/app.tsx"));
         assert!(is_test_file("src/auth/session.test.ts"));
         assert!(is_test_file("src/auth/session_test.rs"));

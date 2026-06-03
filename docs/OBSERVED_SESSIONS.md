@@ -23,6 +23,7 @@ A claim-counted session must have:
 - one CallSieve phase using `callsieve agent-context`, MCP `callsieve_context`, `begin`, `guard`, or hook launcher context first
 - transcript context token counts copied from the real agent transcript, platform UI, or audited Claude Code JSON usage output
 - files actually read by the agent, copied from the transcript or tool log
+- for CallSieve phases, files selected into the compact context packet recorded as `context_selected_files` when the agent can answer from context without whole-file reads
 - exact command or tool summary for each phase
 - `metadata.collection = "observed_session"`
 - `token_accounting.source = "transcript_context_tokens"`
@@ -111,7 +112,7 @@ callsieve hook install <repo> --client codex --strict --force --lsp
 
 4. Let the agent solve the task.
 5. Record the exact transcript context token count from the platform.
-6. Record every file the agent actually read.
+6. Record every file the agent actually read, and record CallSieve-selected context files separately if the agent did not need whole-file reads.
 7. Record the command/tool summary that best represents the phase.
 
 Record the observed phases with the helper:
@@ -150,11 +151,11 @@ callsieve collect-claude-observed-session \
   --task-id <task-id> \
   --mode callsieve \
   --context-limit 4 \
-  --snippets-per-file 0 \
+  --snippets-per-file 1 \
   --max-budget-usd 2.00
 ```
 
-The collector is preferred when available because it spawns Claude Code directly, saves `.callsieve/observed-<task-id>-<mode>.ndjson`, extracts `Read` tool calls, and records the phase. The default CallSieve phase uses a compact 4-file, zero-snippet context packet so the proof measures file selection instead of stuffing the transcript with code snippets before Claude reads files.
+The collector is preferred when available because it spawns Claude Code directly, saves `.callsieve/observed-<task-id>-<mode>.ndjson`, extracts `Read` tool calls, records `context_selected_files` from the CallSieve packet, and records the phase. The default CallSieve phase uses a compact 4-file, one-snippet context packet so the proof can measure whether selected context avoids whole-file reads.
 
 Manual equivalent:
 
@@ -180,7 +181,8 @@ callsieve record-observed-session \
   --task-id <task-id> \
   --mode callsieve \
   --command "callsieve agent-context <repo> \"<task>\" && claude -p --input-format text <CallSieve prompt on stdin> --output-format stream-json --verbose" \
-  --usage-json .callsieve/observed/<task-id>-callsieve.ndjson
+  --usage-json .callsieve/observed/<task-id>-callsieve.ndjson \
+  --context-selected-file <file selected by CallSieve>
 ```
 
 Run QA after each pair:
@@ -237,6 +239,7 @@ callsieve_transcript_context_tokens:
 callsieve_usage_json:
 callsieve_command_summary:
 callsieve_files_read:
+callsieve_context_selected_files:
 
 critical_files_found:
 critical_files_missed:

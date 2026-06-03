@@ -451,6 +451,14 @@ pub enum Command {
         #[arg(long = "files-read", alias = "files_read")]
         files_read: Vec<String>,
 
+        #[arg(
+            long = "context-selected-file",
+            alias = "context_selected_file",
+            alias = "context-selected-files",
+            alias = "context_selected_files"
+        )]
+        context_selected_files: Vec<String>,
+
         #[arg(long = "dry-run")]
         dry_run: bool,
     },
@@ -482,7 +490,7 @@ pub enum Command {
         #[arg(long = "context-limit", default_value_t = 4)]
         context_limit: usize,
 
-        #[arg(long = "snippets-per-file", default_value_t = 0)]
+        #[arg(long = "snippets-per-file", default_value_t = 1)]
         snippets_per_file: usize,
 
         #[arg(long = "allowed-tool")]
@@ -515,6 +523,14 @@ pub enum Command {
 
         #[arg(long = "files-read", alias = "files_read")]
         files_read: Vec<String>,
+
+        #[arg(
+            long = "context-selected-file",
+            alias = "context_selected_file",
+            alias = "context-selected-files",
+            alias = "context_selected_files"
+        )]
+        context_selected_files: Vec<String>,
 
         #[arg(long = "dry-run")]
         dry_run: bool,
@@ -550,6 +566,14 @@ pub enum Command {
 
         #[arg(long = "files-read")]
         files_read: Vec<String>,
+
+        #[arg(
+            long = "context-selected-file",
+            alias = "context_selected_file",
+            alias = "context-selected-files",
+            alias = "context_selected_files"
+        )]
+        context_selected_files: Vec<String>,
 
         #[arg(long)]
         tokens: usize,
@@ -1393,6 +1417,8 @@ struct RecordObservedSessionOutput {
     task_id: String,
     mode: PilotSessionMode,
     files_read: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    context_selected_files: Vec<String>,
     tokens: usize,
     token_accounting_source: &'static str,
     token_input_source: String,
@@ -1421,6 +1447,7 @@ struct CollectClaudeObservedSessionOutput {
     snippets_per_file: usize,
     allowed_tools: Vec<String>,
     prompt_tokens_estimate: usize,
+    context_selected_files: Vec<String>,
     claude_command: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     record: Option<RecordObservedSessionOutput>,
@@ -1649,6 +1676,8 @@ struct OllamaTranscriptArtifact {
     model: String,
     command: String,
     files_read: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    context_selected_files: Vec<String>,
     prompt: String,
     response: String,
     token_accounting: OllamaTokenAccounting,
@@ -1672,6 +1701,7 @@ struct OllamaRun {
 struct PilotPromptPlan {
     command: String,
     files_read: Vec<String>,
+    context_selected_files: Vec<String>,
     prompt: String,
 }
 
@@ -2268,6 +2298,7 @@ pub fn run() -> Result<()> {
             tokens,
             usage_json,
             files_read,
+            context_selected_files,
             dry_run,
         } => {
             let output = record_observed_session(
@@ -2281,6 +2312,7 @@ pub fn run() -> Result<()> {
                 tokens,
                 usage_json.as_deref(),
                 files_read,
+                context_selected_files,
                 dry_run,
             )?;
             output::json::print(&output)?;
@@ -2318,6 +2350,7 @@ pub fn run() -> Result<()> {
             event_command,
             tokens,
             files_read,
+            context_selected_files,
             dry_run,
         } => {
             let output = record_codex_observed_session(
@@ -2327,6 +2360,7 @@ pub fn run() -> Result<()> {
                 &event_command,
                 tokens,
                 files_read,
+                context_selected_files,
                 dry_run,
             )?;
             output::json::print(&output)?;
@@ -2387,6 +2421,7 @@ pub fn run() -> Result<()> {
             mode,
             event_command,
             files_read,
+            context_selected_files,
             tokens,
         } => {
             let output = pilot_run(
@@ -2395,6 +2430,7 @@ pub fn run() -> Result<()> {
                 mode,
                 &event_command,
                 files_read,
+                context_selected_files,
                 tokens,
             )?;
             output::json::print(&output)?;
@@ -4172,6 +4208,7 @@ fn observed_codex_oss_50_rows() -> Result<Vec<ObservedCodexTaskRow>> {
     Ok(rows)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn record_codex_observed_session(
     manifest: &Path,
     task_id: &str,
@@ -4179,6 +4216,7 @@ fn record_codex_observed_session(
     event_command: &str,
     tokens: usize,
     files_read: Vec<String>,
+    context_selected_files: Vec<String>,
     dry_run: bool,
 ) -> Result<RecordObservedSessionOutput> {
     record_observed_session(
@@ -4192,6 +4230,7 @@ fn record_codex_observed_session(
         Some(tokens),
         None,
         files_read,
+        context_selected_files,
         dry_run,
     )
 }
@@ -4234,7 +4273,9 @@ fn collect_claude_observed_session(
         ))
     });
     let allowed_tools = normalize_claude_allowed_tools(allowed_tools);
-    let prompt = claude_observed_prompt(repo, &task, mode, context_limit, snippets_per_file)?;
+    let prompt_plan =
+        claude_observed_prompt_plan(repo, &task, mode, context_limit, snippets_per_file)?;
+    let prompt = prompt_plan.prompt.clone();
     let prompt_tokens_estimate = prompt.len().div_ceil(4);
     let command_summary = claude_observed_command_summary(
         repo,
@@ -4312,6 +4353,7 @@ fn collect_claude_observed_session(
             None,
             Some(&artifact),
             Vec::new(),
+            prompt_plan.context_selected_files.clone(),
             false,
         )?)
     };
@@ -4330,6 +4372,7 @@ fn collect_claude_observed_session(
         snippets_per_file,
         allowed_tools,
         prompt_tokens_estimate,
+        context_selected_files: prompt_plan.context_selected_files,
         claude_command: command_summary,
         record,
     })
@@ -4355,34 +4398,32 @@ fn normalize_claude_allowed_tools(allowed_tools: Vec<String>) -> Vec<String> {
     tools
 }
 
-fn claude_observed_prompt(
+fn claude_observed_prompt_plan(
     repo: &Path,
     task: &PilotHarnessTask,
     mode: PilotSessionMode,
     context_limit: usize,
     snippets_per_file: usize,
-) -> Result<String> {
+) -> Result<PilotPromptPlan> {
     match mode {
-        PilotSessionMode::Baseline => Ok(format!(
-            "Observed baseline measurement. Do not use CallSieve, callsieve MCP tools, or callsieve commands. Do not edit files. Use only normal code search and file reading. Task: {}\n\nUse Glob, Grep, and Read to inspect the repo. You must Read every file you rely on before answering. Return the files you would change and a concise summary of why.",
-            task.task
-        )),
+        PilotSessionMode::Baseline => Ok(PilotPromptPlan {
+            command: format!("baseline prompt without CallSieve for task {:?}", task.task),
+            files_read: Vec::new(),
+            context_selected_files: Vec::new(),
+            prompt: format!(
+                "Observed baseline measurement. Do not use CallSieve, callsieve MCP tools, or callsieve commands. Do not edit files. Use only normal code search and file reading. Task: {}\n\nUse Glob, Grep, and Read to inspect the repo. You must Read every file you rely on before answering. Return JSON only with files_read containing the actual Read tool paths, would_change, and a concise rationale.",
+                task.task
+            ),
+        }),
         PilotSessionMode::Callsieve => {
             let index = load_or_build_index(repo)?;
-            let context = query::build_context_with_options(
-                repo,
-                &index,
-                &task.task,
-                context_limit,
-                snippets_per_file,
-                snippets_per_file > 0,
-                false,
-            )?;
-            let context_json = serde_json::to_string_pretty(&context)?;
-            Ok(format!(
-                "Observed CallSieve measurement. Do not edit files. Use the CallSieve context below first, then use Glob, Grep, and Read only as needed. Task: {}\n\nYou must Read every file you rely on before answering, even if the context includes snippets. Return the files you would change and a concise summary of why.\n\nCallSieve context JSON:\n```json\n{}\n```",
-                task.task, context_json
-            ))
+            let mut plan =
+                build_callsieve_prompt_plan(repo, &index, task, context_limit, snippets_per_file)?;
+            plan.prompt = format!(
+                "Observed CallSieve measurement. Do not edit files. Use the compact CallSieve context as primary evidence. Treat read_first as files selected into context, not as a mandatory Read list. Call Glob, Grep, or Read only if the packet is insufficient.\n\n{}",
+                plan.prompt
+            );
+            Ok(plan)
         }
     }
 }
@@ -4428,6 +4469,7 @@ fn record_observed_session(
     tokens: Option<usize>,
     usage_json: Option<&Path>,
     files_read: Vec<String>,
+    context_selected_files: Vec<String>,
     dry_run: bool,
 ) -> Result<RecordObservedSessionOutput> {
     let task_id = task_id.trim();
@@ -4450,7 +4492,18 @@ fn record_observed_session(
         files_read = claude_code_stream_read_files(path)?;
     }
     files_read = normalize_observed_files_read(manifest, task_id, files_read);
-    if files_read.is_empty() {
+    let context_selected_files = normalize_observed_files_read(
+        manifest,
+        task_id,
+        context_selected_files
+            .into_iter()
+            .map(|file| file.trim().to_string())
+            .filter(|file| !file.is_empty())
+            .collect(),
+    );
+    let context_covers_callsieve =
+        mode == PilotSessionMode::Callsieve && !context_selected_files.is_empty();
+    if files_read.is_empty() && !context_covers_callsieve {
         anyhow::bail!("files_read must include at least one file actually read")
     }
 
@@ -4462,19 +4515,23 @@ fn record_observed_session(
         event_command,
         token_input.tokens,
         &files_read,
+        &context_selected_files,
     );
     let pilot_run = if dry_run {
         None
     } else {
-        Some(serde_json::to_value(pilot_run_with_token_evidence(
-            manifest,
-            task_id,
-            mode,
-            event_command,
-            files_read.clone(),
-            token_input.tokens,
-            Some(&token_evidence),
-        )?)?)
+        Some(serde_json::to_value(
+            pilot_run_with_context_and_token_evidence(
+                manifest,
+                task_id,
+                mode,
+                event_command,
+                files_read.clone(),
+                context_selected_files.clone(),
+                token_input.tokens,
+                Some(&token_evidence),
+            )?,
+        )?)
     };
     let status = if dry_run { "dry_run" } else { "recorded" }.to_string();
 
@@ -4493,6 +4550,7 @@ fn record_observed_session(
         task_id: task_id.to_string(),
         mode,
         files_read,
+        context_selected_files,
         tokens: token_input.tokens,
         token_accounting_source: "transcript_context_tokens",
         token_input_source: token_input.token_input_source,
@@ -4721,6 +4779,7 @@ fn record_observed_pilot_run_command(
     event_command: &str,
     tokens: usize,
     files_read: &[String],
+    context_selected_files: &[String],
 ) -> String {
     let mut args = vec![
         "pilot-run".to_string(),
@@ -4734,6 +4793,10 @@ fn record_observed_pilot_run_command(
     ];
     for file in files_read {
         args.push("--files-read".to_string());
+        args.push(file.clone());
+    }
+    for file in context_selected_files {
+        args.push("--context-selected-file".to_string());
         args.push(file.clone());
     }
     args.push("--tokens".to_string());
@@ -5452,13 +5515,14 @@ fn session_event(
     tokens: Option<usize>,
     phase: Option<SessionPhase>,
 ) -> Result<SessionEventOutput> {
-    session_event_with_token_evidence(trace, command, files_read, tokens, phase, None)
+    session_event_with_token_evidence(trace, command, files_read, Vec::new(), tokens, phase, None)
 }
 
 fn session_event_with_token_evidence(
     trace: &Path,
     command: &str,
     files_read: Vec<String>,
+    context_selected_files: Vec<String>,
     tokens: Option<usize>,
     phase: Option<SessionPhase>,
     token_evidence: Option<&serde_json::Value>,
@@ -5476,6 +5540,15 @@ fn session_event_with_token_evidence(
         "classification": classify_session_command(command),
         "phase": phase_name
     });
+    if !context_selected_files.is_empty() {
+        event
+            .as_object_mut()
+            .context("session event must be a JSON object")?
+            .insert(
+                "context_selected_files".to_string(),
+                serde_json::json!(context_selected_files),
+            );
+    }
     if let Some(token_evidence) = token_evidence {
         event
             .as_object_mut()
@@ -5708,25 +5781,29 @@ fn pilot_run(
     mode: PilotSessionMode,
     command: &str,
     files_read: Vec<String>,
+    context_selected_files: Vec<String>,
     tokens: usize,
 ) -> Result<PilotRunOutput> {
-    pilot_run_with_token_evidence(
+    pilot_run_with_context_and_token_evidence(
         manifest_path,
         task_id,
         mode,
         command,
         files_read,
+        context_selected_files,
         tokens,
         None,
     )
 }
 
-fn pilot_run_with_token_evidence(
+#[allow(clippy::too_many_arguments)]
+fn pilot_run_with_context_and_token_evidence(
     manifest_path: &Path,
     task_id: &str,
     mode: PilotSessionMode,
     command: &str,
     files_read: Vec<String>,
+    context_selected_files: Vec<String>,
     tokens: usize,
     token_evidence: Option<&serde_json::Value>,
 ) -> Result<PilotRunOutput> {
@@ -5754,6 +5831,7 @@ fn pilot_run_with_token_evidence(
         Path::new(&task.trace_path),
         command,
         files_read.clone(),
+        context_selected_files.clone(),
         Some(tokens),
         Some(phase),
         token_evidence,
@@ -5762,6 +5840,7 @@ fn pilot_run_with_token_evidence(
         mode_trace,
         command,
         files_read,
+        context_selected_files,
         Some(tokens),
         Some(phase),
         token_evidence,
@@ -5885,6 +5964,7 @@ fn collect_ollama_task(
             PilotSessionMode::Baseline,
             &baseline_plan.command,
             baseline_plan.files_read,
+            baseline_plan.context_selected_files,
             baseline_tokens,
         )?;
     } else if Path::new(&task.trace_path).is_file() {
@@ -5900,7 +5980,7 @@ fn collect_ollama_task(
     let callsieve_run = run_ollama_verbose(model, &callsieve_plan.prompt)
         .with_context(|| format!("ollama CallSieve phase failed for {}", task.id))?;
     let callsieve_tokens = callsieve_run.prompt_eval_count;
-    let callsieve_files = callsieve_plan.files_read.len();
+    let callsieve_files = callsieve_plan.context_selected_files.len();
     write_ollama_artifact(
         &callsieve_artifact,
         task,
@@ -5915,6 +5995,7 @@ fn collect_ollama_task(
         PilotSessionMode::Callsieve,
         &callsieve_plan.command,
         callsieve_plan.files_read,
+        callsieve_plan.context_selected_files,
         callsieve_tokens,
     )?;
     let summary_value = serde_json::to_value(&output.summary)?;
@@ -6028,6 +6109,7 @@ fn build_baseline_prompt_plan(
     Ok(PilotPromptPlan {
         command,
         files_read,
+        context_selected_files: Vec::new(),
         prompt,
     })
 }
@@ -6048,7 +6130,7 @@ fn build_callsieve_prompt_plan(
         true,
     )?;
     let context_value = serde_json::to_value(&context)?;
-    let files_read = context_read_first_files(&context_value);
+    let context_selected_files = context_read_first_files(&context_value);
     let compact_context = compact_agent_context_value(&context_value);
     let command = format!(
         "callsieve agent-context {} {:?} --limit {context_limit} --snippets-per-file {snippets_per_file}",
@@ -6058,12 +6140,13 @@ fn build_callsieve_prompt_plan(
     let mut prompt = String::new();
     prompt.push_str("You are an audited local coding agent CallSieve phase.\n");
     prompt.push_str("Use the CallSieve read-first context below before any broad search.\n");
-    prompt.push_str("Return compact JSON with files_read copied from the read_first packet and a one-sentence rationale.\n\n");
+    prompt.push_str("If the context is sufficient, answer from it without reading whole files. Use Read or Grep only for missing evidence.\n");
+    prompt.push_str("Return compact JSON with context_selected_files copied from the read_first packet, files_read containing only actual Read tool paths, would_change, needed_more_context, and a one-sentence rationale.\n\n");
     prompt.push_str(&format!("TASK: {}\n", task.task));
     prompt.push_str(&format!("REPO: {}\n", root.display()));
     prompt.push_str(&format!("COMMAND: {command}\n"));
-    prompt.push_str("AUDITED_FILES:\n");
-    for file in &files_read {
+    prompt.push_str("CONTEXT_SELECTED_FILES:\n");
+    for file in &context_selected_files {
         prompt.push_str("- ");
         prompt.push_str(file);
         prompt.push('\n');
@@ -6074,7 +6157,8 @@ fn build_callsieve_prompt_plan(
 
     Ok(PilotPromptPlan {
         command,
-        files_read,
+        files_read: Vec::new(),
+        context_selected_files,
         prompt,
     })
 }
@@ -6309,6 +6393,7 @@ fn write_ollama_artifact(
         model: model.to_string(),
         command: plan.command.clone(),
         files_read: plan.files_read.clone(),
+        context_selected_files: plan.context_selected_files.clone(),
         prompt: plan.prompt.clone(),
         response: run.response.clone(),
         token_accounting: OllamaTokenAccounting {
@@ -7136,6 +7221,7 @@ struct SessionMetricTotals {
     tokens: usize,
     commands: Vec<String>,
     files_read: Vec<String>,
+    context_selected_files: Vec<String>,
 }
 
 fn normalize_session_trace(value: &mut serde_json::Value) -> Result<()> {
@@ -7176,14 +7262,22 @@ fn normalize_session_trace(value: &mut serde_json::Value) -> Result<()> {
 
     baseline.files_read.sort();
     baseline.files_read.dedup();
+    baseline.context_selected_files.sort();
+    baseline.context_selected_files.dedup();
     callsieve.files_read.sort();
     callsieve.files_read.dedup();
+    callsieve.context_selected_files.sort();
+    callsieve.context_selected_files.dedup();
 
     let baseline_value = session_metrics_value(&baseline);
     let callsieve_value = session_metrics_value(&callsieve);
     let expected_files = json_string_array(value.get("expected_files"));
-    let callsieve_files: std::collections::BTreeSet<&str> =
-        callsieve.files_read.iter().map(String::as_str).collect();
+    let callsieve_files: std::collections::BTreeSet<&str> = callsieve
+        .files_read
+        .iter()
+        .chain(callsieve.context_selected_files.iter())
+        .map(String::as_str)
+        .collect();
     let misses: Vec<String> = expected_files
         .into_iter()
         .filter(|file| !callsieve_files.contains(file.as_str()))
@@ -7253,6 +7347,7 @@ fn add_event_to_metrics(
         .and_then(serde_json::Value::as_str)
         .unwrap_or_else(|| classify_session_command(command));
     let files_read = json_string_array(event.get("files_read"));
+    let context_selected_files = json_string_array(event.get("context_selected_files"));
     if classification == "grep" || is_grep_command_local(command) {
         metrics.grep_commands += 1;
     }
@@ -7261,6 +7356,11 @@ fn add_event_to_metrics(
         metrics.files_read.extend(files_read);
     } else if classification == "file_read" || is_file_read_command_local(command) {
         metrics.file_reads += 1;
+    }
+    if !context_selected_files.is_empty() {
+        metrics
+            .context_selected_files
+            .extend(context_selected_files);
     }
     metrics.tokens += event
         .get("tokens")
@@ -7278,7 +7378,8 @@ fn session_metrics_value(metrics: &SessionMetricTotals) -> serde_json::Value {
         "file_reads": metrics.file_reads,
         "tokens": metrics.tokens,
         "commands": metrics.commands.clone(),
-        "files_read": metrics.files_read.clone()
+        "files_read": metrics.files_read.clone(),
+        "context_selected_files": metrics.context_selected_files.clone()
     })
 }
 
@@ -7288,7 +7389,8 @@ fn empty_session_metrics() -> serde_json::Value {
         "file_reads": 0,
         "tokens": 0,
         "commands": [],
-        "files_read": []
+        "files_read": [],
+        "context_selected_files": []
     })
 }
 

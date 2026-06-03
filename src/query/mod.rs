@@ -23,6 +23,8 @@ const MAX_CONTEXT_GRAPH_EDGES: usize = 1;
 const MAX_CONTEXT_RELATED_TESTS: usize = 3;
 const MAX_CONTEXT_RELATED_TEST_SYMBOLS: usize = 5;
 const MAX_CONTEXT_GRAPH_SCORE: i32 = 240;
+const MIN_CONTEXT_CANDIDATE_MATCHES: usize = 128;
+const MIN_TASK_SPECIFIC_TEST_SCORE: i32 = 2;
 const TASK_MEMORY_SCHEMA_VERSION: u32 = 1;
 const TASK_MEMORY_FILE: &str = "task-memory.json";
 const MAX_TASK_MEMORY_ENTRIES: usize = 50;
@@ -382,6 +384,8 @@ struct ObservedSessionMetrics {
     commands: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     files_read: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    context_selected_files: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     notes: Vec<String>,
 }
@@ -1639,7 +1643,11 @@ pub fn build_context_with_options(
     why_debug: bool,
 ) -> Result<ContextOutput> {
     let total_start = Instant::now();
-    let candidate_limit = limit.saturating_mul(16);
+    let candidate_limit = if limit == 0 {
+        0
+    } else {
+        limit.saturating_mul(16).max(MIN_CONTEXT_CANDIDATE_MATCHES)
+    };
     let lookup = IndexLookup::new(index);
     let ranking_start = Instant::now();
     let ranked = ranker::rank(index, task, candidate_limit);
@@ -1689,6 +1697,8 @@ pub fn build_context_with_options(
             .then(left.first_rank.cmp(&right.first_rank))
             .then(left.file_id.cmp(&right.file_id))
     });
+    promote_implementation_companion(&lookup, &mut candidates, limit, &query_tokens);
+    promote_task_specific_test_companion(&lookup, &mut candidates, limit, &query_tokens);
 
     let mut selected_symbols = 0;
     let mut selected_related_tests = 0;
@@ -1813,6 +1823,167 @@ pub fn context_read_first_files(context: &ContextOutput) -> Vec<String> {
         .iter()
         .map(|file| file.file.clone())
         .collect()
+}
+
+fn promote_implementation_companion(
+    lookup: &IndexLookup<'_>,
+    candidates: &mut Vec<ContextCandidate>,
+    limit: usize,
+    query_tokens: &[String],
+) {
+    let selected_len = limit.min(candidates.len());
+    if selected_len < 2 {
+        return;
+    }
+    let selected_are_all_tests = candidates.iter().take(selected_len).all(|candidate| {
+        lookup
+            .file_by_id(&candidate.file_id)
+            .is_some_and(|file| file.is_test)
+    });
+    if !selected_are_all_tests {
+        return;
+    }
+
+    let Some(companion_index) =
+        candidates
+            .iter()
+            .enumerate()
+            .skip(selected_len)
+            .find_map(|(index, candidate)| {
+                let file = lookup.file_by_id(&candidate.file_id)?;
+                (!file.is_test).then_some(index)
+            })
+    else {
+        return;
+    };
+
+    let replacement_index = (0..selected_len)
+        .min_by_key(|&index| {
+            let candidate = &candidates[index];
+            let specificity = lookup
+                .file_by_id(&candidate.file_id)
+                .map(|file| test_candidate_specificity(file, candidate, query_tokens))
+                .unwrap_or_default();
+            (specificity, candidate.score(), std::cmp::Reverse(index))
+        })
+        .unwrap_or(selected_len - 1);
+
+    let companion = candidates.remove(companion_index);
+    candidates.remove(replacement_index);
+    candidates.insert(replacement_index, companion);
+}
+
+fn test_candidate_specificity(
+    file: &FileRecord,
+    candidate: &ContextCandidate,
+    query_tokens: &[String],
+) -> i32 {
+    let path_lower = file.path.to_ascii_lowercase();
+    let mut terms: BTreeSet<String> = formatter::tokenize(&file.path).into_iter().collect();
+    for reason in &candidate.why {
+        terms.extend(formatter::tokenize(reason));
+    }
+
+    query_tokens
+        .iter()
+        .filter(|token| !is_generic_test_specificity_token(token))
+        .map(|token| {
+            let mut score = 0;
+            if terms.contains(token.as_str()) {
+                score += 1;
+            }
+            if path_lower.contains(token.as_str()) {
+                score += 1;
+            }
+            if candidate
+                .why
+                .iter()
+                .any(|reason| reason.to_ascii_lowercase().contains(token.as_str()))
+            {
+                score += 1;
+            }
+            score
+        })
+        .sum()
+}
+
+fn promote_task_specific_test_companion(
+    lookup: &IndexLookup<'_>,
+    candidates: &mut Vec<ContextCandidate>,
+    limit: usize,
+    query_tokens: &[String],
+) {
+    let selected_len = limit.min(candidates.len());
+    if selected_len < 2 {
+        return;
+    }
+    let selected_has_test = candidates.iter().take(selected_len).any(|candidate| {
+        lookup
+            .file_by_id(&candidate.file_id)
+            .is_some_and(|file| file.is_test)
+    });
+    if selected_has_test {
+        return;
+    }
+
+    let Some(companion_index) = candidates
+        .iter()
+        .enumerate()
+        .skip(selected_len)
+        .filter_map(|(index, candidate)| {
+            let file = lookup.file_by_id(&candidate.file_id)?;
+            if !file.is_test || is_test_init_file(&file.path) {
+                return None;
+            }
+            let specificity = test_candidate_specificity(file, candidate, query_tokens);
+            (specificity >= MIN_TASK_SPECIFIC_TEST_SCORE).then_some((
+                index,
+                specificity,
+                candidate.score(),
+            ))
+        })
+        .max_by_key(|(_, specificity, score)| (*specificity, *score))
+        .map(|(index, _, _)| index)
+    else {
+        return;
+    };
+
+    let replacement_index = (0..selected_len)
+        .min_by_key(|&index| {
+            let candidate = &candidates[index];
+            let keep_priority = lookup
+                .file_by_id(&candidate.file_id)
+                .map(|file| selected_non_test_keep_priority(file, candidate, query_tokens))
+                .unwrap_or_default();
+            (keep_priority, candidate.score(), std::cmp::Reverse(index))
+        })
+        .unwrap_or(selected_len - 1);
+
+    let companion = candidates.remove(companion_index);
+    candidates.remove(replacement_index);
+    candidates.insert(replacement_index, companion);
+}
+
+fn selected_non_test_keep_priority(
+    file: &FileRecord,
+    candidate: &ContextCandidate,
+    query_tokens: &[String],
+) -> i32 {
+    let direct_match_bonus =
+        candidate.why.iter().any(|reason| {
+            reason.starts_with("exact symbol match") || reason.starts_with("exact path")
+        }) as i32
+            * 10;
+    let code_bonus = file.language.is_code() as i32 * 10;
+    test_candidate_specificity(file, candidate, query_tokens) + direct_match_bonus + code_bonus
+}
+
+fn is_test_init_file(path: &str) -> bool {
+    path.ends_with("/__init__.py") || path.ends_with("/__init__.rs") || path.ends_with("/mod.rs")
+}
+
+fn is_generic_test_specificity_token(token: &str) -> bool {
+    matches!(token, "test" | "tests" | "spec" | "specs")
 }
 
 pub fn benchmark_context_payload_reduction_value(
@@ -4443,6 +4614,7 @@ fn trace_task_for_context_first_session(
                     .map(|term| format!("rg -n {term} {}", root.display()))
                     .collect(),
                 files_read: baseline.matched_files,
+                context_selected_files: Vec::new(),
                 notes: vec![
                     "Controlled local replay, not human-session telemetry.".to_string(),
                     "Baseline simulates grepping task terms, then reading every matched indexed file."
@@ -4455,6 +4627,7 @@ fn trace_task_for_context_first_session(
                 tokens: packet_tokens + callsieve_read_tokens,
                 commands: vec![callsieve_command],
                 files_read: callsieve_files,
+                context_selected_files: Vec::new(),
                 notes: callsieve_notes,
             },
         },
@@ -4714,15 +4887,16 @@ impl TraceAccumulator {
         self.avoided_grep_commands += observed.savings.avoided_grep_commands;
         self.avoided_file_reads += observed.savings.avoided_file_reads;
 
-        let read_files: BTreeSet<&str> = observed
+        let covered_files: BTreeSet<&str> = observed
             .callsieve
             .files_read
             .iter()
+            .chain(observed.callsieve.context_selected_files.iter())
             .map(String::as_str)
             .collect();
         let missing: Vec<String> = expected_files
             .into_iter()
-            .filter(|file| !read_files.contains(file.as_str()))
+            .filter(|file| !covered_files.contains(file.as_str()))
             .collect();
         if !missing.is_empty() {
             self.files_still_missed += missing.len();
@@ -4734,7 +4908,7 @@ impl TraceAccumulator {
         }
         let critical_missing: Vec<String> = critical_files
             .into_iter()
-            .filter(|file| !read_files.contains(file.as_str()))
+            .filter(|file| !covered_files.contains(file.as_str()))
             .collect();
         if !critical_missing.is_empty() {
             self.critical_files_still_missed += critical_missing.len();
@@ -5605,6 +5779,103 @@ mod tests {
     }
 
     #[test]
+    fn context_promotes_implementation_companion_for_test_heavy_tasks() {
+        let temp = tempfile::tempdir().unwrap();
+        write(
+            temp.path().join("httpx/__init__.py"),
+            "from ._client import Client, AsyncClient\n",
+        );
+        write(
+            temp.path().join("httpx/_client.py"),
+            "class Client:\n    def get(self, url, follow_redirects=False):\n        return self._send_handling_redirects(url)\n\n    def _send_handling_redirects(self, request):\n        return request\n\nclass AsyncClient:\n    async def get(self, url, follow_redirects=False):\n        return await self._send_handling_redirects(url)\n\n    async def _send_handling_redirects(self, request):\n        return request\n",
+        );
+        for name in [
+            "test_client",
+            "test_async_client",
+            "test_headers",
+            "test_redirects",
+        ] {
+            let content = if name == "test_redirects" {
+                "import httpx\n\n\ndef test_redirect_301():\n    client = httpx.Client()\n    response = client.get('https://example.org/redirect', follow_redirects=True)\n    assert response\n\n\ndef test_redirect_history():\n    client = httpx.Client()\n    response = client.get('https://example.org/redirect-chain', follow_redirects=True)\n    assert response\n"
+            } else {
+                "import httpx\n\n\ndef test_client_closed_state_using_implicit_open():\n    client = httpx.Client()\n    client.get('https://example.org')\n\n\ndef test_client_header_defaults():\n    client = httpx.Client()\n    response = client.get('https://example.org')\n    assert response\n"
+            };
+            write(temp.path().join(format!("tests/client/{name}.py")), content);
+        }
+
+        let index = indexer::build_index(temp.path()).unwrap();
+        let output = build_context(
+            temp.path(),
+            &index,
+            "change redirect handling and client redirect tests",
+            4,
+            1,
+            true,
+        )
+        .unwrap();
+        let files = context_read_first_files(&output);
+
+        assert!(
+            files.contains(&"httpx/_client.py".to_string()),
+            "selected files: {files:?}"
+        );
+        assert!(
+            files.contains(&"tests/client/test_redirects.py".to_string()),
+            "selected files: {files:?}"
+        );
+    }
+
+    #[test]
+    fn context_promotes_task_specific_test_companion_for_implementation_tasks() {
+        let temp = tempfile::tempdir().unwrap();
+        write(
+            temp.path().join("httpx/_config.py"),
+            "class Timeout:\n    def as_dict(self):\n        return {'timeout': 5}\n",
+        );
+        write(
+            temp.path().join("httpx/_client.py"),
+            "from ._config import Timeout\n\nclass Client:\n    def request(self, timeout=None):\n        return Timeout()\n",
+        );
+        write(
+            temp.path().join("httpx/_models.py"),
+            "class Request:\n    pass\n",
+        );
+        write(
+            temp.path().join("docs/advanced/timeouts.md"),
+            "Timeout configuration controls client request behavior.\n",
+        );
+        write(
+            temp.path().join(".github/ISSUE_TEMPLATE/config.yml"),
+            "name: timeout configuration request\n",
+        );
+        write(
+            temp.path().join("tests/test_timeouts.py"),
+            "import httpx\n\n\ndef test_timeout_configuration_for_client_request():\n    client = httpx.Client()\n    response = client.request('GET', 'https://example.org', timeout=5)\n    assert response\n",
+        );
+
+        let index = indexer::build_index(temp.path()).unwrap();
+        let output = build_context(
+            temp.path(),
+            &index,
+            "change timeout configuration and client request behavior",
+            4,
+            0,
+            false,
+        )
+        .unwrap();
+        let files = context_read_first_files(&output);
+
+        assert!(
+            files.contains(&"tests/test_timeouts.py".to_string()),
+            "selected files: {files:?}"
+        );
+        assert!(
+            files.contains(&"httpx/_config.py".to_string()),
+            "selected files: {files:?}"
+        );
+    }
+
+    #[test]
     fn benchmark_estimates_token_savings_against_grep_read_loop() {
         let temp = tempfile::tempdir().unwrap();
         write(
@@ -5703,6 +5974,7 @@ mod tests {
                         tokens: 12_000,
                         commands: vec!["rg createSession".to_string()],
                         files_read: vec!["src/auth/session.ts".to_string()],
+                        context_selected_files: Vec::new(),
                         notes: Vec::new(),
                     },
                     callsieve: ObservedSessionMetrics {
@@ -5711,6 +5983,7 @@ mod tests {
                         tokens: 4_000,
                         commands: vec!["callsieve context".to_string()],
                         files_read: vec!["src/auth/session.ts".to_string()],
+                        context_selected_files: Vec::new(),
                         notes: Vec::new(),
                     },
                 }),

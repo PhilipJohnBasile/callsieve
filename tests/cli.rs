@@ -2124,6 +2124,197 @@ fn observed_recording_reads_claude_usage_json_and_records_trace_evidence() {
 }
 
 #[test]
+fn callsieve_observed_recording_counts_context_selected_files_without_reads() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+    let manifest_root = tempfile::tempdir().unwrap();
+    let manifest_path = manifest_root.path().join("observed-context-selected.json");
+    let baseline_usage_path = manifest_root.path().join("baseline.json");
+    let callsieve_usage_path = manifest_root.path().join("callsieve.json");
+    write(
+        &baseline_usage_path,
+        r#"{
+  "type": "result",
+  "usage": {
+    "input_tokens": 120,
+    "cache_creation_input_tokens": 20,
+    "cache_read_input_tokens": 10,
+    "output_tokens": 10
+  }
+}
+"#,
+    );
+    write(
+        &callsieve_usage_path,
+        r#"{
+  "type": "result",
+  "usage": {
+    "input_tokens": 25,
+    "cache_creation_input_tokens": 5,
+    "cache_read_input_tokens": 5,
+    "output_tokens": 5
+  }
+}
+"#,
+    );
+
+    json(&run(&[
+        "pilot-init",
+        manifest_path.to_str().unwrap(),
+        "--sessions",
+        "1",
+    ]));
+    json(&run(&[
+        "pilot-task",
+        "add",
+        manifest_path.to_str().unwrap(),
+        root,
+        "change createSession token behavior",
+        "--id",
+        "auth",
+        "--expected-file",
+        "src/auth/session.ts",
+        "--critical-file",
+        "src/auth/session.ts",
+        "--client",
+        "claude",
+        "--model",
+        "claude-opus-4-8",
+    ]));
+
+    json(&run(&[
+        "record-observed-session",
+        "--manifest",
+        manifest_path.to_str().unwrap(),
+        "--client",
+        "claude",
+        "--model",
+        "claude-opus-4-8",
+        "--task-id",
+        "auth",
+        "--mode",
+        "baseline",
+        "--command",
+        "claude baseline normal repo search",
+        "--usage-json",
+        baseline_usage_path.to_str().unwrap(),
+        "--files-read",
+        "src/auth/session.ts",
+    ]));
+    let recorded = json(&run(&[
+        "record-observed-session",
+        "--manifest",
+        manifest_path.to_str().unwrap(),
+        "--client",
+        "claude",
+        "--model",
+        "claude-opus-4-8",
+        "--task-id",
+        "auth",
+        "--mode",
+        "callsieve",
+        "--command",
+        "callsieve agent-context . \"change createSession token behavior\" && claude callsieve",
+        "--usage-json",
+        callsieve_usage_path.to_str().unwrap(),
+        "--context-selected-file",
+        "src/auth/session.ts",
+    ]));
+
+    assert!(recorded["files_read"].as_array().unwrap().is_empty());
+    assert_eq!(recorded["context_selected_files"][0], "src/auth/session.ts");
+    assert!(
+        recorded["pilot_run_command"]
+            .as_str()
+            .unwrap()
+            .contains("--context-selected-file src/auth/session.ts")
+    );
+
+    let trace_path = manifest_root
+        .path()
+        .join("tasks")
+        .join("auth")
+        .join("combined-observed.json");
+    let summary = json(&run(&["trace-summary", trace_path.to_str().unwrap()]));
+    assert_eq!(summary["files_still_missed"], 0);
+    assert_eq!(summary["critical_files_still_missed"], 0);
+    assert_eq!(summary["observed_sessions"], 1);
+
+    let trace: Value = serde_json::from_slice(&fs::read(trace_path).unwrap()).unwrap();
+    assert!(
+        trace["session"]["callsieve"]["files_read"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        trace["session"]["callsieve"]["context_selected_files"][0],
+        "src/auth/session.ts"
+    );
+
+    let qa = json(&run(&["pilot-qa", manifest_path.to_str().unwrap()]));
+    assert_eq!(qa["status"], "pass");
+    assert_eq!(qa["observed_sessions"], 1);
+}
+
+#[test]
+fn claude_collector_dry_run_defaults_to_compact_context_snippets() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+    json(&run(&["index", root]));
+    let manifest_root = tempfile::tempdir().unwrap();
+    let manifest_path = manifest_root.path().join("observed-claude.json");
+    json(&run(&[
+        "pilot-init",
+        manifest_path.to_str().unwrap(),
+        "--sessions",
+        "1",
+    ]));
+    json(&run(&[
+        "pilot-task",
+        "add",
+        manifest_path.to_str().unwrap(),
+        root,
+        "change createSession token behavior",
+        "--id",
+        "auth",
+        "--expected-file",
+        "src/auth/session.ts",
+        "--critical-file",
+        "src/auth/session.ts",
+        "--client",
+        "claude",
+        "--model",
+        "claude-opus-4-8",
+    ]));
+
+    let dry_run = json(&run(&[
+        "collect-claude-observed-session",
+        "--manifest",
+        manifest_path.to_str().unwrap(),
+        "--task-id",
+        "auth",
+        "--mode",
+        "callsieve",
+        "--model",
+        "claude-opus-4-8",
+        "--dry-run",
+    ]));
+
+    assert_eq!(dry_run["status"], "dry_run");
+    assert_eq!(dry_run["snippets_per_file"], 1);
+    assert!(dry_run["prompt_tokens_estimate"].as_u64().unwrap() > 0);
+    assert!(dry_run.get("record").is_none());
+    assert!(
+        dry_run["context_selected_files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|file| file == "src/auth/session.ts")
+    );
+}
+
+#[test]
 fn pilot_task_reject_preserves_audit_and_excludes_task_from_count() {
     let repo = fixture_repo();
     let root = repo.path().to_str().unwrap();
