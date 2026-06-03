@@ -1093,6 +1093,11 @@ struct ContextFirstTraceInput {
     callsieve_notes: Vec<String>,
 }
 
+/// Scale applied to an off-topic test file's whole candidate score (symbol plus
+/// graph contributions) so a well-connected test file cannot outrank the real
+/// implementation on a non-test query. Tests still appear, just not at the top.
+const TEST_OFFTOPIC_SCALE: f32 = 0.4;
+
 #[derive(Debug)]
 struct ContextCandidate {
     file_id: String,
@@ -1100,6 +1105,7 @@ struct ContextCandidate {
     graph_score: i32,
     graph_confidence: f64,
     first_rank: usize,
+    test_offtopic: bool,
     symbol_ids: Vec<String>,
     why: Vec<String>,
     seen_why: BTreeSet<String>,
@@ -1115,6 +1121,7 @@ impl ContextCandidate {
             graph_score: 0,
             graph_confidence: 0.0,
             first_rank,
+            test_offtopic: false,
             symbol_ids: Vec::new(),
             why: Vec::new(),
             seen_why: BTreeSet::new(),
@@ -1129,7 +1136,12 @@ impl ContextCandidate {
             .len()
             .saturating_sub(1)
             .min((i32::MAX / 5) as usize) as i32;
-        self.best_score + self.graph_score + (bonus_count * 5)
+        let raw = self.best_score + self.graph_score + (bonus_count * 5);
+        if self.test_offtopic {
+            (raw as f32 * TEST_OFFTOPIC_SCALE).round() as i32
+        } else {
+            raw
+        }
     }
 
     fn add_match(
@@ -1653,6 +1665,22 @@ pub fn build_context_with_options(
     let graph_expansion_ms = elapsed_ms(graph_start.elapsed());
 
     let mut candidates: Vec<ContextCandidate> = grouped.into_values().collect();
+
+    let query_tokens = ranker::query_tokens(task);
+    // A test file that merely references the relevant source files gets a large
+    // graph boost; on a non-test query, scale the whole candidate down so it
+    // cannot outrank the implementation it tests.
+    if !ranker::has_test_intent(&query_tokens) {
+        for candidate in &mut candidates {
+            if lookup
+                .file_by_id(&candidate.file_id)
+                .is_some_and(|file| file.is_test)
+            {
+                candidate.test_offtopic = true;
+            }
+        }
+    }
+
     candidates.sort_by(|left, right| {
         right
             .score()
@@ -1662,7 +1690,6 @@ pub fn build_context_with_options(
             .then(left.file_id.cmp(&right.file_id))
     });
 
-    let snippet_query_tokens = ranker::query_tokens(task);
     let mut selected_symbols = 0;
     let mut selected_related_tests = 0;
     let mut snippet_elapsed = Duration::ZERO;
@@ -1681,8 +1708,8 @@ pub fn build_context_with_options(
             // multi-purpose file points at the matching symbol instead of the
             // first symbol by accumulation order.
             symbol_records.sort_by(|left, right| {
-                ranker::symbol_query_affinity(right, &snippet_query_tokens)
-                    .cmp(&ranker::symbol_query_affinity(left, &snippet_query_tokens))
+                ranker::symbol_query_affinity(right, &query_tokens)
+                    .cmp(&ranker::symbol_query_affinity(left, &query_tokens))
                     .then(left.start_line.cmp(&right.start_line))
             });
 

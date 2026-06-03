@@ -798,7 +798,7 @@ fn is_fixture_data(file: &FileRecord) -> bool {
         || path.contains("/tests/fixtures/")
 }
 
-fn has_test_intent(query_tokens: &[String]) -> bool {
+pub fn has_test_intent(query_tokens: &[String]) -> bool {
     query_tokens
         .iter()
         .any(|token| matches!(token.as_str(), "test" | "tests" | "fixture" | "fixtures"))
