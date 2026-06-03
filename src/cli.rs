@@ -455,6 +455,37 @@ pub enum Command {
         dry_run: bool,
     },
 
+    /// Run Claude Code for one observed task, save stream JSON, and record it.
+    #[command(name = "collect-claude-observed-session")]
+    CollectClaudeObservedSession {
+        #[arg(
+            long,
+            default_value = "benchmarks/evidence/observed-claude-oss-50.local.json"
+        )]
+        manifest: PathBuf,
+
+        #[arg(long = "task-id", alias = "task_id")]
+        task_id: String,
+
+        #[arg(long, value_enum)]
+        mode: PilotSessionMode,
+
+        #[arg(long, default_value = "claude-opus-4-8")]
+        model: String,
+
+        #[arg(long = "max-budget-usd", default_value = "0.50")]
+        max_budget_usd: String,
+
+        #[arg(long)]
+        artifact: Option<PathBuf>,
+
+        #[arg(long = "allowed-tool")]
+        allowed_tools: Vec<String>,
+
+        #[arg(long = "dry-run")]
+        dry_run: bool,
+    },
+
     /// Record one real observed Codex paired-session event with transcript token counts.
     #[command(name = "record-codex-observed-session")]
     RecordCodexObservedSession {
@@ -1369,6 +1400,24 @@ struct RecordObservedSessionOutput {
     next_qa: String,
 }
 
+#[derive(Debug, Serialize)]
+struct CollectClaudeObservedSessionOutput {
+    command: &'static str,
+    status: String,
+    manifest: String,
+    task_id: String,
+    mode: PilotSessionMode,
+    repo: String,
+    model: String,
+    artifact: String,
+    max_budget_usd: String,
+    allowed_tools: Vec<String>,
+    prompt_tokens_estimate: usize,
+    claude_command: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    record: Option<RecordObservedSessionOutput>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 struct ClaudeCodeUsageBreakdown {
     input_tokens: usize,
@@ -2224,6 +2273,28 @@ pub fn run() -> Result<()> {
                 tokens,
                 usage_json.as_deref(),
                 files_read,
+                dry_run,
+            )?;
+            output::json::print(&output)?;
+        }
+        Command::CollectClaudeObservedSession {
+            manifest,
+            task_id,
+            mode,
+            model,
+            max_budget_usd,
+            artifact,
+            allowed_tools,
+            dry_run,
+        } => {
+            let output = collect_claude_observed_session(
+                &manifest,
+                &task_id,
+                mode,
+                &model,
+                &max_budget_usd,
+                artifact.as_deref(),
+                allowed_tools,
                 dry_run,
             )?;
             output::json::print(&output)?;
@@ -4110,6 +4181,199 @@ fn record_codex_observed_session(
         None,
         files_read,
         dry_run,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn collect_claude_observed_session(
+    manifest: &Path,
+    task_id: &str,
+    mode: PilotSessionMode,
+    model: &str,
+    max_budget_usd: &str,
+    artifact: Option<&Path>,
+    allowed_tools: Vec<String>,
+    dry_run: bool,
+) -> Result<CollectClaudeObservedSessionOutput> {
+    let task_id = task_id.trim();
+    if task_id.is_empty() {
+        anyhow::bail!("task_id is required")
+    }
+    let model = model.trim();
+    if model.is_empty() {
+        anyhow::bail!("model is required")
+    }
+    let max_budget_usd = max_budget_usd.trim();
+    if max_budget_usd.is_empty() {
+        anyhow::bail!("max_budget_usd is required")
+    }
+    let task = pilot_task_from_manifest(manifest, task_id)?;
+    if task.status == "rejected" {
+        anyhow::bail!("pilot task is rejected and cannot be collected: {task_id}");
+    }
+    let repo = Path::new(&task.repo);
+    let artifact = artifact.map(Path::to_path_buf).unwrap_or_else(|| {
+        Path::new(".callsieve").join(format!(
+            "observed-{}-{}.ndjson",
+            safe_pilot_label(task_id),
+            pilot_session_mode_name(mode)
+        ))
+    });
+    let allowed_tools = normalize_claude_allowed_tools(allowed_tools);
+    let prompt = claude_observed_prompt(repo, &task, mode)?;
+    let prompt_tokens_estimate = prompt.len().div_ceil(4);
+    let command_summary = claude_observed_command_summary(
+        repo,
+        &task.task,
+        mode,
+        model,
+        max_budget_usd,
+        &allowed_tools,
+    );
+
+    let record = if dry_run {
+        None
+    } else {
+        if let Some(parent) = artifact
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("failed to create {}", parent.display()))?;
+        }
+        let output = ProcessCommand::new("claude")
+            .current_dir(repo)
+            .arg("-p")
+            .arg(&prompt)
+            .arg("--model")
+            .arg(model)
+            .arg("--output-format")
+            .arg("stream-json")
+            .arg("--verbose")
+            .arg("--no-session-persistence")
+            .arg("--max-budget-usd")
+            .arg(max_budget_usd)
+            .arg("--permission-mode")
+            .arg("acceptEdits")
+            .arg("--allowedTools")
+            .args(&allowed_tools)
+            .output()
+            .with_context(|| format!("failed to run Claude Code in {}", repo.display()))?;
+        fs::write(&artifact, &output.stdout)
+            .with_context(|| format!("failed to write {}", artifact.display()))?;
+        let stderr_path = artifact.with_extension("stderr.txt");
+        if !output.stderr.is_empty() {
+            fs::write(&stderr_path, &output.stderr)
+                .with_context(|| format!("failed to write {}", stderr_path.display()))?;
+        }
+        if !output.status.success() {
+            anyhow::bail!(
+                "Claude Code exited with status {:?}. Stream saved to {} and stderr saved to {}.",
+                output.status.code(),
+                artifact.display(),
+                stderr_path.display()
+            );
+        }
+        Some(record_observed_session(
+            "record-observed-session",
+            manifest,
+            Some(AgentClient::Claude),
+            Some(model),
+            task_id,
+            mode,
+            &command_summary,
+            None,
+            Some(&artifact),
+            Vec::new(),
+            false,
+        )?)
+    };
+
+    Ok(CollectClaudeObservedSessionOutput {
+        command: "collect-claude-observed-session",
+        status: if dry_run { "dry_run" } else { "recorded" }.to_string(),
+        manifest: manifest.display().to_string(),
+        task_id: task_id.to_string(),
+        mode,
+        repo: task.repo,
+        model: model.to_string(),
+        artifact: artifact.display().to_string(),
+        max_budget_usd: max_budget_usd.to_string(),
+        allowed_tools,
+        prompt_tokens_estimate,
+        claude_command: command_summary,
+        record,
+    })
+}
+
+fn pilot_task_from_manifest(manifest: &Path, task_id: &str) -> Result<PilotHarnessTask> {
+    read_pilot_manifest(manifest)?
+        .tasks
+        .into_iter()
+        .find(|task| task.id == task_id)
+        .with_context(|| format!("pilot task not found: {task_id}"))
+}
+
+fn normalize_claude_allowed_tools(allowed_tools: Vec<String>) -> Vec<String> {
+    let mut tools: Vec<String> = allowed_tools
+        .into_iter()
+        .map(|tool| tool.trim().to_string())
+        .filter(|tool| !tool.is_empty())
+        .collect();
+    if tools.is_empty() {
+        tools = vec!["Glob".to_string(), "Grep".to_string(), "Read".to_string()];
+    }
+    tools
+}
+
+fn claude_observed_prompt(
+    repo: &Path,
+    task: &PilotHarnessTask,
+    mode: PilotSessionMode,
+) -> Result<String> {
+    match mode {
+        PilotSessionMode::Baseline => Ok(format!(
+            "Observed baseline measurement. Do not use CallSieve, callsieve MCP tools, or callsieve commands. Do not edit files. Use only normal code search and file reading. Task: {}\n\nUse Glob, Grep, and Read to inspect the repo. You must Read every file you rely on before answering. Return the files you would change and a concise summary of why.",
+            task.task
+        )),
+        PilotSessionMode::Callsieve => {
+            let index = load_or_build_index(repo)?;
+            let context = query::build_context(repo, &index, &task.task, 8, 2, true)?;
+            let context_json = serde_json::to_string_pretty(&context)?;
+            Ok(format!(
+                "Observed CallSieve measurement. Do not edit files. Use the CallSieve context below first, then use Glob, Grep, and Read only as needed. Task: {}\n\nYou must Read every file you rely on before answering, even if the context includes snippets. Return the files you would change and a concise summary of why.\n\nCallSieve context JSON:\n```json\n{}\n```",
+                task.task, context_json
+            ))
+        }
+    }
+}
+
+fn claude_observed_command_summary(
+    repo: &Path,
+    task: &str,
+    mode: PilotSessionMode,
+    model: &str,
+    max_budget_usd: &str,
+    allowed_tools: &[String],
+) -> String {
+    let prompt_summary = match mode {
+        PilotSessionMode::Baseline => {
+            format!("baseline prompt without CallSieve for task {task:?}")
+        }
+        PilotSessionMode::Callsieve => {
+            format!(
+                "callsieve agent-context {} {:?} followed by Claude prompt",
+                repo.display(),
+                task
+            )
+        }
+    };
+    format!(
+        "claude -p {:?} --model {} --output-format stream-json --verbose --no-session-persistence --max-budget-usd {} --allowedTools {}",
+        prompt_summary,
+        model,
+        max_budget_usd,
+        allowed_tools.join(" ")
     )
 }
 
@@ -8854,6 +9118,28 @@ mod tests {
             "benchmarks/evidence/claude-auth-baseline.json",
             "--files-read",
             "src/main.rs",
+        ])
+        .unwrap();
+        Cli::try_parse_from([
+            "callsieve",
+            "collect-claude-observed-session",
+            "--manifest",
+            "benchmarks/evidence/observed-claude-oss-50.local.json",
+            "--task-id",
+            "auth",
+            "--mode",
+            "callsieve",
+            "--model",
+            "claude-opus-4-8",
+            "--max-budget-usd",
+            "0.50",
+            "--allowed-tool",
+            "Glob",
+            "--allowed-tool",
+            "Grep",
+            "--allowed-tool",
+            "Read",
+            "--dry-run",
         ])
         .unwrap();
         Cli::try_parse_from([

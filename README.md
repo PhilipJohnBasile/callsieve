@@ -135,6 +135,7 @@ cargo run -- pilot-run benchmarks/evidence/pilot.local.json --task-id auth-expir
 cargo run -- pilot-run benchmarks/evidence/pilot.local.json --task-id auth-expiry --mode callsieve --command "callsieve agent-context . \"change login token expiry behavior\"" --files-read src/auth/session.ts --tokens 3000
 cargo run -- record-codex-observed-session --manifest benchmarks/evidence/pilot.local.json --task-id auth-expiry --mode callsieve --command "callsieve agent-context . \"change login token expiry behavior\"" --tokens 3000 --files-read src/auth/session.ts
 cargo run -- record-observed-session --manifest benchmarks/evidence/pilot.local.json --client claude --model claude-opus-4-8 --task-id auth-expiry --mode callsieve --command "claude -p \"change login token expiry behavior\" --output-format json" --usage-json .callsieve/observed/auth-expiry-callsieve.json --files-read src/auth/session.ts
+cargo run -- collect-claude-observed-session --manifest benchmarks/evidence/observed-claude-oss-50.local.json --task-id ripgrep-ignore-walk-claude-r01 --mode callsieve --max-budget-usd 0.50
 cargo run -- pilot-collect-ollama benchmarks/evidence/observed-generic-ollama-100.local.json --model qwen2.5-coder:7b --limit 10 --context-limit 24
 cargo run -- pilot-qa benchmarks/evidence/pilot.local.json
 cargo run -- pilot-finalize benchmarks/evidence/pilot.local.json --out benchmarks/evidence/proof.local.json

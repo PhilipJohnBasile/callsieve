@@ -139,6 +139,24 @@ callsieve record-codex-observed-session \
 For Claude Code, save the stream JSON result and record with the generic helper. If the stream contains `Read` tool calls, `--files-read` can be omitted because CallSieve extracts them from the artifact.
 
 ```bash
+callsieve collect-claude-observed-session \
+  --manifest benchmarks/evidence/observed-claude-oss-50.local.json \
+  --task-id <task-id> \
+  --mode baseline \
+  --max-budget-usd 2.00
+
+callsieve collect-claude-observed-session \
+  --manifest benchmarks/evidence/observed-claude-oss-50.local.json \
+  --task-id <task-id> \
+  --mode callsieve \
+  --max-budget-usd 2.00
+```
+
+The collector is preferred when available because it spawns Claude Code directly, saves `.callsieve/observed-<task-id>-<mode>.ndjson`, extracts `Read` tool calls, and records the phase.
+
+Manual equivalent:
+
+```bash
 claude -p "<baseline task prompt>" --output-format stream-json --verbose --no-session-persistence --max-budget-usd 2.00 > .callsieve/observed/<task-id>-baseline.ndjson
 
 callsieve record-observed-session \
