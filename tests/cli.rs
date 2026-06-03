@@ -1949,6 +1949,7 @@ fn observed_recording_reads_claude_usage_json_and_records_trace_evidence() {
     let manifest_root = tempfile::tempdir().unwrap();
     let manifest_path = manifest_root.path().join("observed-claude.json");
     let usage_path = manifest_root.path().join("claude-auth-baseline.json");
+    let stream_usage_path = manifest_root.path().join("claude-auth-callsieve.ndjson");
     write(
         &usage_path,
         r#"{
@@ -1963,6 +1964,35 @@ fn observed_recording_reads_claude_usage_json_and_records_trace_evidence() {
 }
 "#,
     );
+    let stream_artifact = [
+        serde_json::json!({
+            "type": "assistant",
+            "message": {
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "name": "Read",
+                        "input": {
+                            "file_path": repo.path().join("src/auth/session.ts").display().to_string()
+                        }
+                    }
+                ]
+            }
+        })
+        .to_string(),
+        serde_json::json!({
+            "type": "result",
+            "usage": {
+                "input_tokens": 200,
+                "cache_creation_input_tokens": 50,
+                "cache_read_input_tokens": 25,
+                "output_tokens": 5
+            }
+        })
+        .to_string(),
+    ]
+    .join("\n");
+    write(&stream_usage_path, &stream_artifact);
 
     json(&run(&[
         "pilot-init",
@@ -2036,6 +2066,31 @@ fn observed_recording_reads_claude_usage_json_and_records_trace_evidence() {
     assert_eq!(
         event["token_evidence"]["claude_code_usage"]["total_tokens"],
         160
+    );
+
+    let stream_dry_run = json(&run(&[
+        "record-observed-session",
+        "--manifest",
+        manifest_path.to_str().unwrap(),
+        "--client",
+        "claude",
+        "--model",
+        "claude-opus-4-8",
+        "--task-id",
+        "auth",
+        "--mode",
+        "callsieve",
+        "--command",
+        "claude -p auth --output-format stream-json --verbose",
+        "--usage-json",
+        stream_usage_path.to_str().unwrap(),
+        "--dry-run",
+    ]));
+    assert_eq!(stream_dry_run["tokens"], 280);
+    assert_eq!(stream_dry_run["files_read"][0], "src/auth/session.ts");
+    assert_eq!(
+        stream_dry_run["usage_breakdown"]["cache_read_input_tokens"],
+        25
     );
 
     let ambiguous = run(&[

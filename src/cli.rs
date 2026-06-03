@@ -4136,11 +4136,17 @@ fn record_observed_session(
         anyhow::bail!("command is required")
     }
     let token_input = observed_token_input(tokens, usage_json)?;
-    let files_read: Vec<String> = files_read
+    let mut files_read: Vec<String> = files_read
         .into_iter()
         .map(|file| file.trim().to_string())
         .filter(|file| !file.is_empty())
         .collect();
+    if files_read.is_empty()
+        && let Some(path) = usage_json
+    {
+        files_read = claude_code_stream_read_files(path)?;
+    }
+    files_read = normalize_observed_files_read(manifest, task_id, files_read);
     if files_read.is_empty() {
         anyhow::bail!("files_read must include at least one file actually read")
     }
@@ -4226,11 +4232,12 @@ fn observed_token_input(
 fn claude_code_usage_token_input(path: &Path) -> Result<ObservedTokenInput> {
     let json = fs::read_to_string(path)
         .with_context(|| format!("failed to read Claude Code usage JSON: {}", path.display()))?;
-    let value: serde_json::Value = serde_json::from_str(&json)
-        .with_context(|| format!("failed to parse Claude Code usage JSON: {}", path.display()))?;
-    let usage = value
-        .get("usage")
-        .context("Claude Code usage JSON is missing top-level usage object")?;
+    let values = parse_claude_code_artifact(path, &json)?;
+    let usage = values
+        .iter()
+        .rev()
+        .find_map(|value| value.get("usage"))
+        .context("Claude Code usage artifact is missing a usage object")?;
     let input_tokens = json_field_usize(usage, "input_tokens");
     let cache_creation_input_tokens = json_field_usize(usage, "cache_creation_input_tokens");
     let cache_read_input_tokens = json_field_usize(usage, "cache_read_input_tokens");
@@ -4258,12 +4265,126 @@ fn claude_code_usage_token_input(path: &Path) -> Result<ObservedTokenInput> {
     })
 }
 
+fn parse_claude_code_artifact(path: &Path, json: &str) -> Result<Vec<serde_json::Value>> {
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(json) {
+        return Ok(vec![value]);
+    }
+
+    let mut values = Vec::new();
+    for (index, line) in json.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let value: serde_json::Value = serde_json::from_str(line).with_context(|| {
+            format!(
+                "failed to parse Claude Code stream JSON line {} in {}",
+                index + 1,
+                path.display()
+            )
+        })?;
+        values.push(value);
+    }
+    if values.is_empty() {
+        anyhow::bail!("Claude Code usage artifact is empty: {}", path.display())
+    }
+    Ok(values)
+}
+
 fn json_field_usize(value: &serde_json::Value, field: &str) -> usize {
     value
         .get(field)
         .and_then(serde_json::Value::as_u64)
         .and_then(|value| usize::try_from(value).ok())
         .unwrap_or_default()
+}
+
+fn claude_code_stream_read_files(path: &Path) -> Result<Vec<String>> {
+    let json = fs::read_to_string(path)
+        .with_context(|| format!("failed to read Claude Code stream JSON: {}", path.display()))?;
+    let values = parse_claude_code_artifact(path, &json)?;
+    let mut files = BTreeSet::new();
+    for value in &values {
+        collect_claude_read_tool_paths(value, &mut files);
+    }
+    Ok(files.into_iter().collect())
+}
+
+fn collect_claude_read_tool_paths(value: &serde_json::Value, files: &mut BTreeSet<String>) {
+    match value {
+        serde_json::Value::Object(object) => {
+            if object
+                .get("type")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|kind| kind == "tool_use")
+                && object
+                    .get("name")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|name| name == "Read")
+                && let Some(path) = object
+                    .get("input")
+                    .and_then(|input| input.get("file_path").or_else(|| input.get("path")))
+                    .and_then(serde_json::Value::as_str)
+            {
+                let path = path.trim();
+                if !path.is_empty() {
+                    files.insert(path.to_string());
+                }
+            }
+            for child in object.values() {
+                collect_claude_read_tool_paths(child, files);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                collect_claude_read_tool_paths(item, files);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn normalize_observed_files_read(
+    manifest: &Path,
+    task_id: &str,
+    files_read: Vec<String>,
+) -> Vec<String> {
+    let repo_root = read_pilot_manifest(manifest)
+        .ok()
+        .and_then(|manifest| {
+            manifest
+                .tasks
+                .into_iter()
+                .find(|task| task.id == task_id)
+                .map(|task| PathBuf::from(task.repo))
+        })
+        .and_then(|path| path.canonicalize().ok());
+    let mut seen = BTreeSet::new();
+    let mut normalized = Vec::new();
+    for file in files_read {
+        let file = observed_file_path_for_manifest(&file, repo_root.as_deref());
+        if !file.is_empty() && seen.insert(file.clone()) {
+            normalized.push(file);
+        }
+    }
+    normalized
+}
+
+fn observed_file_path_for_manifest(path: &str, repo_root: Option<&Path>) -> String {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    let path = Path::new(trimmed);
+    if path.is_absolute()
+        && let Some(repo_root) = repo_root
+    {
+        let path_for_prefix = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        if let Ok(relative) = path_for_prefix.strip_prefix(repo_root) {
+            return relative.to_string_lossy().replace('\\', "/");
+        }
+    }
+    trimmed.replace('\\', "/")
 }
 
 fn observed_token_evidence(token_input: &ObservedTokenInput) -> serde_json::Value {

@@ -34,7 +34,7 @@ For Claude Code JSON, CallSieve records:
 usage.input_tokens + usage.cache_creation_input_tokens + usage.cache_read_input_tokens + usage.output_tokens
 ```
 
-The recorder stores that total as `transcript_context_tokens` and attaches the raw `--usage-json` path plus the token breakdown to trace event `token_evidence`.
+The recorder stores that total as `transcript_context_tokens` and attaches the raw `--usage-json` path plus the token breakdown to trace event `token_evidence`. It accepts Claude Code `json` or `stream-json` artifacts. Prefer `stream-json --verbose` because CallSieve can extract `Read` tool file paths from the same transcript artifact.
 
 A session does not count if:
 
@@ -136,10 +136,10 @@ callsieve record-codex-observed-session \
   --files-read <file>
 ```
 
-For Claude Code, save the JSON result from `claude --output-format json` and record with the generic helper:
+For Claude Code, save the stream JSON result and record with the generic helper. If the stream contains `Read` tool calls, `--files-read` can be omitted because CallSieve extracts them from the artifact.
 
 ```bash
-claude -p "<baseline task prompt>" --output-format json --no-session-persistence --max-budget-usd 2.00 > .callsieve/observed/<task-id>-baseline.json
+claude -p "<baseline task prompt>" --output-format stream-json --verbose --no-session-persistence --max-budget-usd 2.00 > .callsieve/observed/<task-id>-baseline.ndjson
 
 callsieve record-observed-session \
   --manifest benchmarks/evidence/observed-claude-oss-50.local.json \
@@ -147,13 +147,11 @@ callsieve record-observed-session \
   --model claude-opus-4-8 \
   --task-id <task-id> \
   --mode baseline \
-  --command "claude -p <baseline task prompt> --output-format json" \
-  --usage-json .callsieve/observed/<task-id>-baseline.json \
-  --files-read <file> \
-  --files-read <file>
+  --command "claude -p <baseline task prompt> --output-format stream-json --verbose" \
+  --usage-json .callsieve/observed/<task-id>-baseline.ndjson
 
 callsieve agent-context <repo> "<task>" --format markdown > .callsieve/observed/<task-id>-callsieve-context.md
-claude -p "<task prompt with CallSieve context first>" --output-format json --no-session-persistence --max-budget-usd 2.00 > .callsieve/observed/<task-id>-callsieve.json
+claude -p "<task prompt with CallSieve context first>" --output-format stream-json --verbose --no-session-persistence --max-budget-usd 2.00 > .callsieve/observed/<task-id>-callsieve.ndjson
 
 callsieve record-observed-session \
   --manifest benchmarks/evidence/observed-claude-oss-50.local.json \
@@ -161,10 +159,8 @@ callsieve record-observed-session \
   --model claude-opus-4-8 \
   --task-id <task-id> \
   --mode callsieve \
-  --command "callsieve agent-context <repo> \"<task>\" && claude -p <task prompt with CallSieve context first> --output-format json" \
-  --usage-json .callsieve/observed/<task-id>-callsieve.json \
-  --files-read <file> \
-  --files-read <file>
+  --command "callsieve agent-context <repo> \"<task>\" && claude -p <task prompt with CallSieve context first> --output-format stream-json --verbose" \
+  --usage-json .callsieve/observed/<task-id>-callsieve.ndjson
 ```
 
 Run QA after each pair:
