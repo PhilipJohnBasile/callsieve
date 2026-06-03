@@ -479,6 +479,12 @@ pub enum Command {
         #[arg(long)]
         artifact: Option<PathBuf>,
 
+        #[arg(long = "context-limit", default_value_t = 4)]
+        context_limit: usize,
+
+        #[arg(long = "snippets-per-file", default_value_t = 0)]
+        snippets_per_file: usize,
+
         #[arg(long = "allowed-tool")]
         allowed_tools: Vec<String>,
 
@@ -1411,6 +1417,8 @@ struct CollectClaudeObservedSessionOutput {
     model: String,
     artifact: String,
     max_budget_usd: String,
+    context_limit: usize,
+    snippets_per_file: usize,
     allowed_tools: Vec<String>,
     prompt_tokens_estimate: usize,
     claude_command: String,
@@ -2284,6 +2292,8 @@ pub fn run() -> Result<()> {
             model,
             max_budget_usd,
             artifact,
+            context_limit,
+            snippets_per_file,
             allowed_tools,
             dry_run,
         } => {
@@ -2294,6 +2304,8 @@ pub fn run() -> Result<()> {
                 &model,
                 &max_budget_usd,
                 artifact.as_deref(),
+                context_limit,
+                snippets_per_file,
                 allowed_tools,
                 dry_run,
             )?;
@@ -4192,6 +4204,8 @@ fn collect_claude_observed_session(
     model: &str,
     max_budget_usd: &str,
     artifact: Option<&Path>,
+    context_limit: usize,
+    snippets_per_file: usize,
     allowed_tools: Vec<String>,
     dry_run: bool,
 ) -> Result<CollectClaudeObservedSessionOutput> {
@@ -4220,7 +4234,7 @@ fn collect_claude_observed_session(
         ))
     });
     let allowed_tools = normalize_claude_allowed_tools(allowed_tools);
-    let prompt = claude_observed_prompt(repo, &task, mode)?;
+    let prompt = claude_observed_prompt(repo, &task, mode, context_limit, snippets_per_file)?;
     let prompt_tokens_estimate = prompt.len().div_ceil(4);
     let command_summary = claude_observed_command_summary(
         repo,
@@ -4299,6 +4313,8 @@ fn collect_claude_observed_session(
         model: model.to_string(),
         artifact: artifact.display().to_string(),
         max_budget_usd: max_budget_usd.to_string(),
+        context_limit,
+        snippets_per_file,
         allowed_tools,
         prompt_tokens_estimate,
         claude_command: command_summary,
@@ -4330,6 +4346,8 @@ fn claude_observed_prompt(
     repo: &Path,
     task: &PilotHarnessTask,
     mode: PilotSessionMode,
+    context_limit: usize,
+    snippets_per_file: usize,
 ) -> Result<String> {
     match mode {
         PilotSessionMode::Baseline => Ok(format!(
@@ -4338,7 +4356,15 @@ fn claude_observed_prompt(
         )),
         PilotSessionMode::Callsieve => {
             let index = load_or_build_index(repo)?;
-            let context = query::build_context(repo, &index, &task.task, 8, 2, true)?;
+            let context = query::build_context_with_options(
+                repo,
+                &index,
+                &task.task,
+                context_limit,
+                snippets_per_file,
+                snippets_per_file > 0,
+                false,
+            )?;
             let context_json = serde_json::to_string_pretty(&context)?;
             Ok(format!(
                 "Observed CallSieve measurement. Do not edit files. Use the CallSieve context below first, then use Glob, Grep, and Read only as needed. Task: {}\n\nYou must Read every file you rely on before answering, even if the context includes snippets. Return the files you would change and a concise summary of why.\n\nCallSieve context JSON:\n```json\n{}\n```",
@@ -8929,6 +8955,16 @@ mod tests {
 
     #[test]
     fn parses_all_commands() {
+        std::thread::Builder::new()
+            .name("parse-all-commands".to_string())
+            .stack_size(8 * 1024 * 1024)
+            .spawn(parses_all_commands_inner)
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    fn parses_all_commands_inner() {
         Cli::try_parse_from(["callsieve", "index", "."]).unwrap();
         Cli::try_parse_from(["callsieve", "index", ".", "--lsp"]).unwrap();
         Cli::try_parse_from(["callsieve", "symbols", "."]).unwrap();
@@ -9133,6 +9169,10 @@ mod tests {
             "claude-opus-4-8",
             "--max-budget-usd",
             "0.50",
+            "--context-limit",
+            "4",
+            "--snippets-per-file",
+            "0",
             "--allowed-tool",
             "Glob",
             "--allowed-tool",

@@ -149,10 +149,12 @@ callsieve collect-claude-observed-session \
   --manifest benchmarks/evidence/observed-claude-oss-50.local.json \
   --task-id <task-id> \
   --mode callsieve \
+  --context-limit 4 \
+  --snippets-per-file 0 \
   --max-budget-usd 2.00
 ```
 
-The collector is preferred when available because it spawns Claude Code directly, saves `.callsieve/observed-<task-id>-<mode>.ndjson`, extracts `Read` tool calls, and records the phase.
+The collector is preferred when available because it spawns Claude Code directly, saves `.callsieve/observed-<task-id>-<mode>.ndjson`, extracts `Read` tool calls, and records the phase. The default CallSieve phase uses a compact 4-file, zero-snippet context packet so the proof measures file selection instead of stuffing the transcript with code snippets before Claude reads files.
 
 Manual equivalent:
 
