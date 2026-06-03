@@ -4255,8 +4255,8 @@ fn collect_claude_observed_session(
             .arg(max_budget_usd)
             .arg("--permission-mode")
             .arg("acceptEdits")
-            .arg("--allowedTools")
-            .args(&allowed_tools)
+            .arg("--tools")
+            .arg(allowed_tools.join(","))
             .output()
             .with_context(|| format!("failed to run Claude Code in {}", repo.display()))?;
         fs::write(&artifact, &output.stdout)
@@ -4369,11 +4369,11 @@ fn claude_observed_command_summary(
         }
     };
     format!(
-        "claude -p {:?} --model {} --output-format stream-json --verbose --no-session-persistence --max-budget-usd {} --allowedTools {}",
+        "claude -p {:?} --model {} --output-format stream-json --verbose --no-session-persistence --max-budget-usd {} --tools {}",
         prompt_summary,
         model,
         max_budget_usd,
-        allowed_tools.join(" ")
+        allowed_tools.join(",")
     )
 }
 
