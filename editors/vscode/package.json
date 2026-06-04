@@ -1,0 +1,77 @@
+{
+  "name": "callsieve-vscode",
+  "displayName": "CallSieve",
+  "description": "Live read-first context packets for your AI coding agent.",
+  "version": "0.1.0",
+  "publisher": "callsieve",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./out/src/extension.js",
+  "activationEvents": [
+    "onView:callsieve.sidebar"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "callsieve",
+          "title": "CallSieve",
+          "icon": "media/callsieve.svg"
+        }
+      ]
+    },
+    "views": {
+      "callsieve": [
+        {
+          "id": "callsieve.sidebar",
+          "name": "Read-first",
+          "type": "webview"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "callsieve.copyAsMarkdown",
+        "title": "CallSieve: Copy as Markdown"
+      }
+    ],
+    "configuration": {
+      "title": "CallSieve",
+      "properties": {
+        "callsieve.binaryPath": {
+          "type": "string",
+          "default": "",
+          "description": "Absolute path to the callsieve binary. Leave empty to use PATH then .callsieve/bin/callsieve."
+        },
+        "callsieve.limit": {
+          "type": "integer",
+          "default": 8,
+          "minimum": 1,
+          "description": "Number of read-first files to request."
+        },
+        "callsieve.debounceMs": {
+          "type": "integer",
+          "default": 250,
+          "minimum": 0,
+          "description": "Debounce delay before sending the task to callsieve."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -p ./ -w",
+    "test": "node ./out/test/runTest.js"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/test-electron": "^2.3.9",
+    "typescript": "^5.4.5"
+  }
+}
