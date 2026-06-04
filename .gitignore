@@ -8,6 +8,7 @@
 /.codex/config.toml
 /.codex/hooks.json
 /.claude/settings.local.json
+/.claude/worktrees/
 /.mcp.json
 /.github/copilot-mcp.json
 /.github/hooks/callsieve.json
