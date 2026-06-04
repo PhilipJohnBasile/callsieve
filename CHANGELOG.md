@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.2.1 - 2026-06-04
+
+### Added
+
+- Surfaced CODEOWNERS ownership hints in compact context outputs.
+- Added session metrics and public benchmark support for proof-oriented retrieval checks.
+- Added Codex hooks and hardened agent-context enforcement for context-first workflows.
+- Added an optional `embed` feature scaffold without changing the default local deterministic retrieval path.
+- Added the VS Code extension scaffold and compile gate.
+- Added commercial pricing, positioning, and roadmap documentation.
+
+### Changed
+
+- Updated the README with a competitor comparison that positions CallSieve as local-first retrieval infrastructure for coding agents.
+
 ## v0.2.0 - 2026-06-03
 
 ### Added

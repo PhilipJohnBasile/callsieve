@@ -21,6 +21,19 @@ CallSieve is built to stay slim while making the strongest practical token-savin
 - Strongest proof posture: `benchmark`, `eval-retrieval`, `trace-check`, `trace-replay`, `pilot-*`, `proof-report`, `enterprise-proof-report`, and `evidence-pack`.
 - Strongest token-saving positioning: read these files first, grep only if needed. CallSieve retrieval costs zero AI model tokens; the compact packet is the only token-bearing artifact agents need to read first.
 
+## How CallSieve Compares
+
+As of June 2026, CallSieve is best compared as retrieval infrastructure, not as a replacement coding assistant.
+
+| Category | Examples | How CallSieve compares |
+| --- | --- | --- |
+| AI coding IDEs | Cursor, Windsurf, Continue | These bundle chat, edits, autocomplete, and context indexing. CallSieve is narrower: local deterministic retrieval, MCP, hooks, and compact context packets. It is stronger for portability and auditability, but weaker on polished IDE UX and semantic search. |
+| Agent CLIs | Claude Code, Codex CLI, Aider | Claude Code and Codex are full agents that read, edit, run commands, and search files. CallSieve sits in front of them as a context-first tool. Aider is the closest technical peer because its repo map gives LLMs compact codebase structure, but Aider is still an editing agent. |
+| Enterprise code intelligence | Sourcegraph Cody and Sourcegraph Search | Sourcegraph is broader: enterprise search, code graph, IDE and web experiences, and multi-repo context. CallSieve is slimmer: local CLI, local JSON index, no cloud, no API key, no vector DB, and no dashboard. |
+| Semantic RAG and code indexers | Embedding or vector-backed codebase tools | These can be better for vague semantic discovery. CallSieve is more deterministic, explainable, local-first, and proof-oriented, but it can miss queries that need semantic matching beyond symbols, paths, imports, tests, and keywords. |
+
+The wedge is agent-agnostic setup plus local proof: CallSieve can make Codex, Claude Code, GitHub Copilot, Cursor, Windsurf, Continue, or any MCP client read the right files first, then audit whether that happened. It wins when a team wants a vendor-neutral context layer across many agents. It loses when the buyer only wants one integrated AI editor.
+
 ## Open Source And Commercial Model
 
 CallSieve's core local engine is open source under the [MIT License](LICENSE).
