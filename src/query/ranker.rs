@@ -1069,6 +1069,7 @@ mod tests {
             is_config: false,
             module_path: path.to_string(),
             content_terms: Vec::new(),
+            ownership: None,
         }
     }
 

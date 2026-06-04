@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::{
-    indexer::{SCHEMA_VERSION, language::Language},
+    indexer::{SCHEMA_VERSION, language::Language, ownership::Ownership},
     store::{self, CodeIndex, FileRecord, ImportRecord, ReferenceRecord, SymbolRecord},
 };
 
@@ -215,6 +215,8 @@ struct ContextFile {
     called_by: Vec<ReferenceEdge>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     related_tests: Vec<RelatedTest>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ownership: Option<Ownership>,
     why: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     why_debug: Vec<ranker::ScoreComponent>,
@@ -1981,6 +1983,7 @@ pub fn build_context_with_options(
                 calls,
                 called_by,
                 related_tests,
+                ownership: file.ownership.clone(),
                 why,
                 why_debug: debug,
             })

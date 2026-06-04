@@ -2,7 +2,7 @@ pub mod json_store;
 
 use serde::{Deserialize, Serialize};
 
-use crate::indexer::language::Language;
+use crate::indexer::{language::Language, ownership::Ownership};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CodeIndex {
@@ -77,6 +77,8 @@ pub struct FileRecord {
     pub module_path: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub content_terms: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ownership: Option<Ownership>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

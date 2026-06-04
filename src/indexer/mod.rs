@@ -1,6 +1,7 @@
 pub mod imports;
 pub mod language;
 pub mod lsp;
+pub mod ownership;
 pub mod references;
 pub mod symbols;
 pub mod tree_sitter_symbols;
@@ -58,6 +59,8 @@ pub fn build_index_with_options(root: &Path, options: IndexOptions) -> Result<Co
     let mut symbols = Vec::new();
     let mut imports = Vec::new();
     let mut file_contents = Vec::new();
+    let ownership_resolver = self::ownership::OwnershipResolver::from_repo_root(&root)
+        .filter(|resolver| !resolver.is_empty());
 
     for relative_path in walker::source_files(&root)? {
         let absolute_path = root.join(&relative_path);
@@ -80,6 +83,14 @@ pub fn build_index_with_options(root: &Path, options: IndexOptions) -> Result<Co
         let metadata = fs::metadata(&absolute_path)
             .with_context(|| format!("failed to stat {}", absolute_path.display()))?;
         let file_id = file_id(&path_string);
+        let ownership = ownership_resolver.as_ref().and_then(|resolver| {
+            let computed = resolver.ownership_for(&path_string);
+            if computed.is_empty() {
+                None
+            } else {
+                Some(computed)
+            }
+        });
         let file = FileRecord {
             id: file_id.clone(),
             path: path_string.clone(),
@@ -92,6 +103,7 @@ pub fn build_index_with_options(root: &Path, options: IndexOptions) -> Result<Co
             is_config: is_config_file(&path_string),
             module_path: module_path(&relative_path),
             content_terms: content_terms(&content, language),
+            ownership,
         };
 
         if language.is_code() {

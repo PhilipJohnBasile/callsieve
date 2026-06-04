@@ -6169,6 +6169,76 @@ fn missing_index_returns_json_error() {
 }
 
 #[test]
+fn context_surfaces_codeowners_ownership_on_read_first_entries() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+    write(
+        repo.path().join(".github/CODEOWNERS"),
+        "# CODEOWNERS for the fixture repo\n\
+         *                       @everyone\n\
+         *.ts                    @ts-team\n\
+         src/auth/                @org/auth-team alice@example.com\n",
+    );
+    json(&run(&["index", root]));
+
+    let context = json(&run(&[
+        "context",
+        root,
+        "change createSession token behavior",
+        "--limit",
+        "5",
+    ]));
+
+    let read_first = context["read_first"].as_array().unwrap();
+    let session_entry = read_first
+        .iter()
+        .find(|entry| entry["file"] == "src/auth/session.ts")
+        .expect("session.ts should appear in read_first");
+
+    let ownership = &session_entry["ownership"];
+    assert!(
+        ownership.is_object(),
+        "ownership should be an object for files matching CODEOWNERS rules: {ownership}"
+    );
+    let teams: Vec<&str> = ownership["teams"]
+        .as_array()
+        .expect("teams should be an array")
+        .iter()
+        .map(|value| value.as_str().unwrap())
+        .collect();
+    let owners: Vec<&str> = ownership["owners"]
+        .as_array()
+        .expect("owners should be an array")
+        .iter()
+        .map(|value| value.as_str().unwrap())
+        .collect();
+    assert_eq!(teams, vec!["@org/auth-team"]);
+    assert_eq!(owners, vec!["alice@example.com"]);
+}
+
+#[test]
+fn context_omits_ownership_when_no_codeowners_file_is_present() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+    json(&run(&["index", root]));
+
+    let context = json(&run(&[
+        "context",
+        root,
+        "change createSession token behavior",
+        "--limit",
+        "5",
+    ]));
+
+    for entry in context["read_first"].as_array().unwrap() {
+        assert!(
+            entry.get("ownership").is_none(),
+            "ownership should be absent when no CODEOWNERS file exists, got {entry}",
+        );
+    }
+}
+
+#[test]
 fn session_finish_ground_truth_metrics_hit() {
     let repo = fixture_repo();
     let root = repo.path().to_str().unwrap();
