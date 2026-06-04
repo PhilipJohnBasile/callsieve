@@ -1,3 +1,5 @@
+#[cfg(feature = "embed")]
+pub mod embed;
 pub mod formatter;
 pub mod ranker;
 
