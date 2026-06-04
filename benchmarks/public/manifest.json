@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "description": "CallSieve public benchmark - Mode A (retrieval-only) seed manifest. Five issues drawn from SWE-bench Lite for psf/requests. Each entry pins a base commit and the resolving PR's patched-file list so a third party can reproduce the recall@K result deterministically without invoking any LLM.",
+  "mode": "A",
+  "default_k": 5,
+  "issues": [
+    {
+      "id": "psf__requests-1963",
+      "repo": "psf/requests",
+      "base_commit": "110048f9837f8441ea536804115e80b69f400277",
+      "task": "`Session.resolve_redirects` copies the original request for all subsequent requests, can cause incorrect method selection",
+      "ground_truth_files": [
+        "requests/sessions.py"
+      ],
+      "resolving_pr": 1963
+    },
+    {
+      "id": "psf__requests-2317",
+      "repo": "psf/requests",
+      "base_commit": "091991be0da19de9108dbe5e3752917fea3d7fdc",
+      "task": "`method = builtin_str(method)` problem",
+      "ground_truth_files": [
+        "requests/sessions.py"
+      ],
+      "resolving_pr": 2326
+    },
+    {
+      "id": "psf__requests-2674",
+      "repo": "psf/requests",
+      "base_commit": "0be38a0c37c59c4b66ce908731da15b401655113",
+      "task": "urllib3 exceptions passing through requests API",
+      "ground_truth_files": [
+        "requests/adapters.py",
+        "requests/models.py"
+      ],
+      "resolving_pr": 2675
+    },
+    {
+      "id": "psf__requests-3362",
+      "repo": "psf/requests",
+      "base_commit": "36453b95b13079296776d11b09cab2567ea3e703",
+      "task": "Uncertain about content/text vs iter_content(decode_unicode=True)",
+      "ground_truth_files": [
+        "requests/utils.py"
+      ],
+      "resolving_pr": 3366
+    },
+    {
+      "id": "psf__requests-5414",
+      "repo": "psf/requests",
+      "base_commit": "4f6c0187150af09d085e3c7bfa3675fde1b03b00",
+      "task": "Getting http://.example.com raises UnicodeError",
+      "ground_truth_files": [
+        "requests/models.py"
+      ],
+      "resolving_pr": 5435
+    }
+  ]
+}

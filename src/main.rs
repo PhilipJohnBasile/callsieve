@@ -1,3 +1,4 @@
+mod bench_public;
 mod cli;
 mod indexer;
 mod mcp;

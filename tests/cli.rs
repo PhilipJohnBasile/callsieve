@@ -6167,3 +6167,225 @@ fn missing_index_returns_json_error() {
         );
     }
 }
+
+#[test]
+fn session_finish_ground_truth_metrics_hit() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+    json(&run(&["index", root]));
+    let trace_path = repo.path().join("hit-session.json");
+    let summary_path = repo.path().join("hit-summary.json");
+
+    json(&run(&[
+        "session-start",
+        root,
+        "change createSession token behavior",
+        "--client",
+        "claude",
+        "--model",
+        "claude-opus-4-7",
+        "--trace",
+        trace_path.to_str().unwrap(),
+    ]));
+    json(&run(&[
+        "session-event",
+        trace_path.to_str().unwrap(),
+        "--command",
+        "rg createSession",
+        "--tokens",
+        "5000",
+        "--phase",
+        "baseline",
+    ]));
+    json(&run(&[
+        "session-event",
+        trace_path.to_str().unwrap(),
+        "--command",
+        "callsieve agent-context . \"change createSession token behavior\"",
+        "--files-read",
+        "src/auth/session.ts",
+        "--files-read",
+        "src/auth/token.ts",
+        "--tokens",
+        "1500",
+        "--phase",
+        "callsieve",
+    ]));
+    json(&run(&[
+        "session-event",
+        trace_path.to_str().unwrap(),
+        "--command",
+        "Read",
+        "--files-read",
+        "src/auth/session.test.ts",
+        "--tokens",
+        "200",
+        "--phase",
+        "callsieve",
+    ]));
+    json(&run(&[
+        "session-event",
+        trace_path.to_str().unwrap(),
+        "--command",
+        "Edit",
+        "--files-read",
+        "src/auth/session.ts",
+        "--tokens",
+        "0",
+        "--phase",
+        "callsieve",
+    ]));
+
+    let finish = json(&run(&[
+        "session-finish",
+        trace_path.to_str().unwrap(),
+        "--out",
+        summary_path.to_str().unwrap(),
+        "--ground-truth-files",
+        "src/auth/session.ts",
+    ]));
+
+    assert_eq!(finish["command"], "session-finish");
+    assert_eq!(finish["first_correct_file_rate_at_k"], 1.0);
+    assert_eq!(finish["first_correct_file_rate_k"], 5);
+    assert_eq!(finish["turns_to_first_edit"], 4);
+    assert_eq!(finish["wrong_files_read"], 1);
+
+    let summary_json: Value = serde_json::from_slice(&fs::read(&summary_path).unwrap()).unwrap();
+    assert_eq!(summary_json["first_correct_file_rate_at_k"], 1.0);
+    assert_eq!(summary_json["first_correct_file_rate_k"], 5);
+    assert_eq!(summary_json["turns_to_first_edit"], 4);
+    assert_eq!(summary_json["wrong_files_read"], 1);
+    assert_eq!(
+        summary_json["ground_truth_files"].as_array().unwrap().len(),
+        1
+    );
+}
+
+#[test]
+fn session_finish_ground_truth_metrics_miss() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+    json(&run(&["index", root]));
+    let trace_path = repo.path().join("miss-session.json");
+    let summary_path = repo.path().join("miss-summary.json");
+
+    json(&run(&[
+        "session-start",
+        root,
+        "rename refreshSession",
+        "--client",
+        "claude",
+        "--model",
+        "claude-opus-4-7",
+        "--trace",
+        trace_path.to_str().unwrap(),
+    ]));
+    json(&run(&[
+        "session-event",
+        trace_path.to_str().unwrap(),
+        "--command",
+        "callsieve agent-context . \"rename refreshSession\"",
+        "--files-read",
+        "src/auth/session.ts",
+        "--files-read",
+        "src/auth/token.ts",
+        "--tokens",
+        "1200",
+        "--phase",
+        "callsieve",
+    ]));
+    json(&run(&[
+        "session-event",
+        trace_path.to_str().unwrap(),
+        "--command",
+        "Read",
+        "--files-read",
+        "src/auth/session.ts",
+        "--tokens",
+        "300",
+        "--phase",
+        "callsieve",
+    ]));
+    json(&run(&[
+        "session-event",
+        trace_path.to_str().unwrap(),
+        "--command",
+        "Read",
+        "--files-read",
+        "src/auth/token.ts",
+        "--tokens",
+        "200",
+        "--phase",
+        "callsieve",
+    ]));
+
+    let finish = json(&run(&[
+        "session-finish",
+        trace_path.to_str().unwrap(),
+        "--out",
+        summary_path.to_str().unwrap(),
+        "--ground-truth-files",
+        "src/auth/refresh.ts",
+    ]));
+
+    assert_eq!(finish["command"], "session-finish");
+    assert_eq!(finish["first_correct_file_rate_at_k"], 0.0);
+    assert_eq!(finish["first_correct_file_rate_k"], 5);
+    assert!(finish["turns_to_first_edit"].is_null());
+    assert_eq!(finish["wrong_files_read"], 2);
+
+    let summary_json: Value = serde_json::from_slice(&fs::read(&summary_path).unwrap()).unwrap();
+    assert_eq!(summary_json["first_correct_file_rate_at_k"], 0.0);
+    assert!(summary_json["turns_to_first_edit"].is_null());
+    assert_eq!(summary_json["wrong_files_read"], 2);
+}
+
+#[test]
+fn session_finish_without_ground_truth_omits_metrics() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+    json(&run(&["index", root]));
+    let trace_path = repo.path().join("plain-session.json");
+    let summary_path = repo.path().join("plain-summary.json");
+
+    json(&run(&[
+        "session-start",
+        root,
+        "noop",
+        "--client",
+        "claude",
+        "--model",
+        "claude-opus-4-7",
+        "--trace",
+        trace_path.to_str().unwrap(),
+    ]));
+    json(&run(&[
+        "session-event",
+        trace_path.to_str().unwrap(),
+        "--command",
+        "callsieve agent-context . \"noop\"",
+        "--files-read",
+        "src/auth/session.ts",
+        "--tokens",
+        "1000",
+        "--phase",
+        "callsieve",
+    ]));
+
+    let finish = json(&run(&[
+        "session-finish",
+        trace_path.to_str().unwrap(),
+        "--out",
+        summary_path.to_str().unwrap(),
+    ]));
+    assert_eq!(finish["command"], "session-finish");
+    assert!(finish.get("first_correct_file_rate_at_k").is_none());
+    assert!(finish.get("turns_to_first_edit").is_none());
+    assert!(finish.get("wrong_files_read").is_none());
+
+    let summary_json: Value = serde_json::from_slice(&fs::read(&summary_path).unwrap()).unwrap();
+    assert!(summary_json.get("first_correct_file_rate_at_k").is_none());
+    assert!(summary_json.get("turns_to_first_edit").is_none());
+    assert!(summary_json.get("wrong_files_read").is_none());
+}

@@ -17,7 +17,7 @@ use std::os::unix::fs::PermissionsExt;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
-use crate::{indexer, output, query, store};
+use crate::{bench_public, indexer, output, query, store};
 
 const REHEARSAL_RETRIEVAL_FIXTURES: &str = "benchmarks/retrieval-fixtures.json";
 const REHEARSAL_EXTERNAL_MANIFEST: &str = "benchmarks/external-github-manifest.example.json";
@@ -367,6 +367,10 @@ pub enum Command {
 
         #[arg(long)]
         out: PathBuf,
+
+        /// Ground-truth patched file paths. Repeat for multiple files.
+        #[arg(long = "ground-truth-files")]
+        ground_truth_files: Vec<String>,
     },
 
     /// Generate a controlled baseline versus CallSieve trace from a benchmark suite.
@@ -1145,6 +1149,24 @@ pub enum Command {
 
     /// Show index statistics.
     Stats { path: PathBuf },
+
+    /// Run the Mode A public benchmark: retrieval-only, offline, deterministic.
+    #[command(name = "bench-public")]
+    BenchPublic {
+        /// Path to benchmarks/public/manifest.json.
+        manifest: PathBuf,
+
+        /// Directory containing cloned repos, one per <owner>/<repo> entry.
+        repos_dir: PathBuf,
+
+        /// K for first_correct_file_rate_at_k.
+        #[arg(long)]
+        k: Option<usize>,
+
+        /// Where to write the aggregated results JSON.
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -2039,6 +2061,14 @@ struct SessionFinishOutput {
     trace: String,
     out: String,
     summary: query::TraceSummaryOutput,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    first_correct_file_rate_at_k: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    first_correct_file_rate_k: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    turns_to_first_edit: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    wrong_files_read: Option<usize>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -2968,8 +2998,12 @@ pub fn run() -> Result<()> {
             )?;
             output::json::print(&output)?;
         }
-        Command::SessionFinish { trace, out } => {
-            let output = session_finish(&trace, &out)?;
+        Command::SessionFinish {
+            trace,
+            out,
+            ground_truth_files,
+        } => {
+            let output = session_finish(&trace, &out, &ground_truth_files)?;
             output::json::print(&output)?;
         }
         Command::TraceReplay {
@@ -3877,6 +3911,18 @@ pub fn run() -> Result<()> {
             let index = store::json_store::load_index(&path)?;
             let output = query::stats(&path, &index)?;
             output::json::print(&output)?;
+        }
+        Command::BenchPublic {
+            manifest,
+            repos_dir,
+            k,
+            out,
+        } => {
+            let report = bench_public::run(&manifest, &repos_dir, k)?;
+            let out_path = bench_public::resolve_output_path(&manifest, out.as_deref(), &report)?;
+            bench_public::write_report(&out_path, &report)?;
+            let summary = bench_public::SummaryOutput::new(&manifest, &out_path, &report);
+            output::json::print(&summary)?;
         }
     }
 
@@ -6846,7 +6892,11 @@ fn session_event_with_token_evidence(
     })
 }
 
-fn session_finish(trace: &Path, out: &Path) -> Result<SessionFinishOutput> {
+fn session_finish(
+    trace: &Path,
+    out: &Path,
+    ground_truth_files: &[String],
+) -> Result<SessionFinishOutput> {
     let mut value = read_trace_value(trace)?;
     normalize_session_trace(&mut value)?;
     if let Some(metadata) = value
@@ -6861,7 +6911,16 @@ fn session_finish(trace: &Path, out: &Path) -> Result<SessionFinishOutput> {
     fs::write(trace, serde_json::to_vec_pretty(&value)?)
         .with_context(|| format!("failed to write {}", trace.display()))?;
     let summary = query::trace_summary_from_str(&serde_json::to_string(&value)?)?;
-    let summary_value = serde_json::json!({
+    let ground_truth_metrics = if ground_truth_files.is_empty() {
+        None
+    } else {
+        Some(compute_ground_truth_metrics(
+            &value,
+            ground_truth_files,
+            FIRST_CORRECT_FILE_RATE_DEFAULT_K,
+        ))
+    };
+    let mut summary_value = serde_json::json!({
         "command": "session-finish",
         "trace": trace.display().to_string(),
         "summary": summary,
@@ -6872,6 +6931,40 @@ fn session_finish(trace: &Path, out: &Path) -> Result<SessionFinishOutput> {
             .unwrap_or_else(|| serde_json::json!({}))
     });
 
+    if let Some(metrics) = &ground_truth_metrics
+        && let Some(obj) = summary_value.as_object_mut()
+    {
+        obj.insert(
+            "first_correct_file_rate_at_k".to_string(),
+            serde_json::Value::from(metrics.first_correct_file_rate),
+        );
+        obj.insert(
+            "first_correct_file_rate_k".to_string(),
+            serde_json::Value::from(metrics.k as u64),
+        );
+        obj.insert(
+            "turns_to_first_edit".to_string(),
+            match metrics.turns_to_first_edit {
+                Some(turns) => serde_json::Value::from(turns as u64),
+                None => serde_json::Value::Null,
+            },
+        );
+        obj.insert(
+            "wrong_files_read".to_string(),
+            serde_json::Value::from(metrics.wrong_files_read as u64),
+        );
+        obj.insert(
+            "ground_truth_files".to_string(),
+            serde_json::Value::from(
+                metrics
+                    .ground_truth_files
+                    .iter()
+                    .cloned()
+                    .collect::<Vec<_>>(),
+            ),
+        );
+    }
+
     if let Some(parent) = out.parent().filter(|parent| !parent.as_os_str().is_empty()) {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
@@ -6879,12 +6972,171 @@ fn session_finish(trace: &Path, out: &Path) -> Result<SessionFinishOutput> {
     fs::write(out, serde_json::to_vec_pretty(&summary_value)?)
         .with_context(|| format!("failed to write {}", out.display()))?;
 
+    let (
+        first_correct_file_rate_at_k,
+        first_correct_file_rate_k,
+        turns_to_first_edit,
+        wrong_files_read,
+    ) = match ground_truth_metrics {
+        Some(metrics) => (
+            Some(metrics.first_correct_file_rate),
+            Some(metrics.k),
+            Some(match metrics.turns_to_first_edit {
+                Some(turns) => serde_json::Value::from(turns as u64),
+                None => serde_json::Value::Null,
+            }),
+            Some(metrics.wrong_files_read),
+        ),
+        None => (None, None, None, None),
+    };
+
     Ok(SessionFinishOutput {
         command: "session-finish",
         trace: trace.display().to_string(),
         out: out.display().to_string(),
         summary,
+        first_correct_file_rate_at_k,
+        first_correct_file_rate_k,
+        turns_to_first_edit,
+        wrong_files_read,
     })
+}
+
+const FIRST_CORRECT_FILE_RATE_DEFAULT_K: usize = 5;
+
+#[derive(Debug, Clone)]
+struct GroundTruthMetrics {
+    k: usize,
+    first_correct_file_rate: f64,
+    turns_to_first_edit: Option<usize>,
+    wrong_files_read: usize,
+    ground_truth_files: BTreeSet<String>,
+}
+
+fn compute_ground_truth_metrics(
+    trace: &serde_json::Value,
+    ground_truth_files: &[String],
+    k: usize,
+) -> GroundTruthMetrics {
+    let ground_truth: BTreeSet<String> = ground_truth_files.iter().cloned().collect();
+    let events = trace
+        .get("events")
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+
+    let mut first_correct_file_rate = 0.0_f64;
+    for event in &events {
+        let command = event
+            .get("command")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        let classification = event
+            .get("classification")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_else(|| classify_session_command(command));
+        let is_callsieve_context =
+            classification == "callsieve_context" || is_callsieve_context_command_local(command);
+        if !is_callsieve_context {
+            continue;
+        }
+        let mut selected = json_string_array(event.get("context_selected_files"));
+        if selected.is_empty() {
+            selected = json_string_array(event.get("files_read"));
+        }
+        let top_k: Vec<String> = selected.into_iter().take(k).collect();
+        if top_k.iter().any(|file| ground_truth.contains(file)) {
+            first_correct_file_rate = 1.0;
+        }
+        break;
+    }
+
+    let mut turns_to_first_edit: Option<usize> = None;
+    for (idx, event) in events.iter().enumerate() {
+        let command = event
+            .get("command")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        if !is_edit_or_write_command_local(command) {
+            continue;
+        }
+        let targets = json_string_array(event.get("files_read"));
+        if targets.iter().any(|file| ground_truth.contains(file)) {
+            turns_to_first_edit = Some(idx + 1);
+            break;
+        }
+    }
+
+    let mut wrong_files = BTreeSet::new();
+    for event in &events {
+        let command = event
+            .get("command")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        let classification = event
+            .get("classification")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_else(|| classify_session_command(command));
+        let counts_as_full_read = classification == "file_read"
+            || is_file_read_command_local(command)
+            || is_full_file_grep_with_context_local(command);
+        if !counts_as_full_read {
+            continue;
+        }
+        for file in json_string_array(event.get("files_read")) {
+            if !ground_truth.contains(&file) {
+                wrong_files.insert(file);
+            }
+        }
+    }
+
+    GroundTruthMetrics {
+        k,
+        first_correct_file_rate,
+        turns_to_first_edit,
+        wrong_files_read: wrong_files.len(),
+        ground_truth_files: ground_truth,
+    }
+}
+
+fn is_edit_or_write_command_local(command: &str) -> bool {
+    if command.is_empty() {
+        return false;
+    }
+    let first = command.split_whitespace().next().unwrap_or_default();
+    let first_lower = first.to_ascii_lowercase();
+    let lower = command.to_ascii_lowercase();
+    matches!(
+        first,
+        "Edit" | "Write" | "MultiEdit" | "NotebookEdit" | "Update"
+    ) || matches!(
+        first_lower.as_str(),
+        "edit"
+            | "write"
+            | "multiedit"
+            | "notebookedit"
+            | "edit_file"
+            | "write_file"
+            | "apply_patch"
+            | "applypatch"
+            | "str_replace"
+            | "str_replace_editor"
+            | "create_file"
+    ) || lower.starts_with("apply_patch ")
+        || lower.contains(" edit_file ")
+        || lower.contains(" write_file ")
+        || lower.contains(" apply_patch ")
+}
+
+fn is_full_file_grep_with_context_local(command: &str) -> bool {
+    if !is_grep_command_local(command) {
+        return false;
+    }
+    let lower = command.to_ascii_lowercase();
+    lower.contains(" -c ")
+        || lower.contains(" --context")
+        || lower.contains(" -a ")
+        || lower.contains(" -b ")
 }
 
 fn pilot_init(manifest: &Path, sessions: usize) -> Result<PilotInitOutput> {
@@ -7114,7 +7366,11 @@ fn pilot_run_with_context_and_token_evidence(
         Some(phase),
         token_evidence,
     )?;
-    let finish = session_finish(Path::new(&task.trace_path), Path::new(&task.summary_path))?;
+    let finish = session_finish(
+        Path::new(&task.trace_path),
+        Path::new(&task.summary_path),
+        &[],
+    )?;
     let summary_value = serde_json::to_value(&finish.summary)?;
     manifest.tasks[index].status = pilot_task_status(&summary_value);
     write_pilot_manifest(manifest_path, &manifest)?;
