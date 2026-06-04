@@ -27,7 +27,7 @@ CallSieve's core local engine is open source under the [MIT License](LICENSE).
 
 The public repo includes the local CLI, MCP server, repository indexer, deterministic retrieval, agent-context workflow, benchmark harness, proof reports, docs, and tests. The commercial motion is not selling access to the code. It is selling outcomes around it: paid pilots, local installation, agent integration, evidence collection, retrieval tuning, private workflow support, and enterprise proof reporting.
 
-For productized commercial options and placeholder pricing, see [commercial/PRICING.md](commercial/PRICING.md).
+For proposed commercial packages and placeholder pricing, see [commercial/PRICING.md](commercial/PRICING.md).
 
 Keep broad claims gated. Use `context_payload_reduction` for estimated prompt-payload savings, and use observed token reduction only when real paired transcripts provide audited token counts.
 
