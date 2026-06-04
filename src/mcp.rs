@@ -87,7 +87,7 @@ fn tools_list_result() -> Value {
         "tools": [
             {
                 "name": "callsieve_context",
-                "description": "Preferred first tool for codebase discovery. Build a compact CallSieve read-first packet before grep or broad file reads.",
+                "description": "Zero-AI-model-token local retrieval. Preferred first tool for codebase discovery before grep or broad file reads.",
                 "annotations": {
                     "title": "CallSieve Context",
                     "readOnlyHint": true
@@ -111,11 +111,21 @@ fn tools_list_result() -> Value {
                         "snippets_per_file": {
                             "type": "integer",
                             "minimum": 0,
-                            "default": 2
+                            "default": 0
                         },
                         "no_snippets": {
                             "type": "boolean",
                             "default": false
+                        },
+                        "profile": {
+                            "type": "string",
+                            "enum": ["skim", "normal", "full"],
+                            "default": "skim"
+                        },
+                        "token_budget": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "default": 1200
                         }
                     },
                     "required": ["path", "task"]
@@ -142,6 +152,48 @@ fn tools_list_result() -> Value {
                         }
                     },
                     "required": ["path", "symbol_name"]
+                }
+            },
+            {
+                "name": "callsieve_focus",
+                "description": "Return targeted symbols and snippets for one indexed file selected by CallSieve.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string"},
+                        "file": {"type": "string"},
+                        "symbol": {"type": "string"},
+                        "snippets_per_symbol": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "default": 1
+                        }
+                    },
+                    "required": ["path", "file"]
+                }
+            },
+            {
+                "name": "callsieve_related",
+                "description": "Return import, caller, callee, and blast-radius hints for one indexed file.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string"},
+                        "file": {"type": "string"}
+                    },
+                    "required": ["path", "file"]
+                }
+            },
+            {
+                "name": "callsieve_tests",
+                "description": "Return tests likely related to one indexed file.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string"},
+                        "file": {"type": "string"}
+                    },
+                    "required": ["path", "file"]
                 }
             },
             {
@@ -218,6 +270,15 @@ fn tools_list_result() -> Value {
                         "no_snippets": {
                             "type": "boolean",
                             "default": false
+                        },
+                        "profile": {
+                            "type": "string",
+                            "enum": ["skim", "normal", "full"],
+                            "default": "normal"
+                        },
+                        "token_budget": {
+                            "type": "integer",
+                            "minimum": 1
                         }
                     },
                     "required": ["path", "task"]
@@ -238,6 +299,9 @@ fn call_tool(params: Option<Value>) -> Result<Value> {
     match name {
         "callsieve_context" => Ok(execute_context_tool(&arguments)),
         "callsieve_symbol" => Ok(tool_execution_result(execute_symbol(&arguments))),
+        "callsieve_focus" => Ok(tool_execution_result(execute_focus(&arguments))),
+        "callsieve_related" => Ok(tool_execution_result(execute_related(&arguments))),
+        "callsieve_tests" => Ok(tool_execution_result(execute_tests(&arguments))),
         "callsieve_stats" => Ok(tool_execution_result(execute_stats(&arguments))),
         "callsieve_status" => Ok(tool_execution_result(execute_status(&arguments))),
         "callsieve_trace_check" => Ok(tool_execution_result(execute_trace_check(&arguments))),
@@ -265,8 +329,14 @@ fn execute_context(arguments: &Value) -> Result<Value> {
     let path = repo_path(arguments)?;
     let task = required_str(arguments, "task")?;
     let limit = optional_usize(arguments, "limit", 8)?;
-    let snippets_per_file = optional_usize(arguments, "snippets_per_file", 2)?;
+    let snippets_per_file = optional_usize(arguments, "snippets_per_file", 0)?;
     let include_snippets = !optional_bool(arguments, "no_snippets", false)?;
+    let profile = optional_context_profile(arguments, "profile", query::ContextProfile::Skim)?;
+    let token_budget = optional_usize(
+        arguments,
+        "token_budget",
+        query::DEFAULT_AGENT_CONTEXT_TOKEN_BUDGET,
+    )?;
     let freshness_start = Instant::now();
     let initial_index = store::json_store::load_index(&path).ok();
     let initial_status = query::index_status(&path, initial_index.as_ref());
@@ -309,7 +379,13 @@ fn execute_context(arguments: &Value) -> Result<Value> {
         include_snippets,
     )?;
 
-    let mut value = serde_json::to_value(output)?;
+    let mut value = query::context_value(
+        &output,
+        query::ContextViewOptions {
+            profile,
+            token_budget: Some(token_budget),
+        },
+    )?;
     if let Some(object) = value.as_object_mut() {
         object.insert(
             "freshness".to_string(),
@@ -365,6 +441,35 @@ fn execute_symbol(arguments: &Value) -> Result<Value> {
     Ok(serde_json::to_value(output)?)
 }
 
+fn execute_focus(arguments: &Value) -> Result<Value> {
+    let path = repo_path(arguments)?;
+    let file = required_str(arguments, "file")?;
+    let symbol = arguments.get("symbol").and_then(Value::as_str);
+    let snippets_per_symbol = optional_usize(arguments, "snippets_per_symbol", 1)?;
+    let index = store::json_store::load_index(&path)?;
+    let output = query::focus_file(&path, &index, file, symbol, snippets_per_symbol)?;
+
+    Ok(serde_json::to_value(output)?)
+}
+
+fn execute_related(arguments: &Value) -> Result<Value> {
+    let path = repo_path(arguments)?;
+    let file = required_str(arguments, "file")?;
+    let index = store::json_store::load_index(&path)?;
+    let output = query::related_file(&path, &index, file)?;
+
+    Ok(serde_json::to_value(output)?)
+}
+
+fn execute_tests(arguments: &Value) -> Result<Value> {
+    let path = repo_path(arguments)?;
+    let file = required_str(arguments, "file")?;
+    let index = store::json_store::load_index(&path)?;
+    let output = query::tests_for_file(&path, &index, file)?;
+
+    Ok(serde_json::to_value(output)?)
+}
+
 fn execute_stats(arguments: &Value) -> Result<Value> {
     let path = repo_path(arguments)?;
     let index = store::json_store::load_index(&path)?;
@@ -399,14 +504,20 @@ fn execute_benchmark(arguments: &Value) -> Result<Value> {
     let limit = optional_usize(arguments, "limit", 8)?;
     let snippets_per_file = optional_usize(arguments, "snippets_per_file", 2)?;
     let include_snippets = !optional_bool(arguments, "no_snippets", false)?;
+    let profile = optional_context_profile(arguments, "profile", query::ContextProfile::Normal)?;
+    let token_budget = optional_usize_opt(arguments, "token_budget")?;
     let index = store::json_store::load_index(&path)?;
-    let output = query::benchmark_context(
+    let output = query::benchmark_context_with_options(
         &path,
         &index,
         task,
         limit,
         snippets_per_file,
         include_snippets,
+        query::ContextViewOptions {
+            profile,
+            token_budget,
+        },
     )?;
 
     Ok(serde_json::to_value(output)?)
@@ -433,6 +544,25 @@ fn optional_bool(value: &Value, field: &str, default: bool) -> Result<bool> {
     }
 }
 
+fn optional_context_profile(
+    value: &Value,
+    field: &str,
+    default: query::ContextProfile,
+) -> Result<query::ContextProfile> {
+    match value.get(field) {
+        Some(value) => match value
+            .as_str()
+            .ok_or_else(|| anyhow!("field must be string: {field}"))?
+        {
+            "skim" => Ok(query::ContextProfile::Skim),
+            "normal" => Ok(query::ContextProfile::Normal),
+            "full" => Ok(query::ContextProfile::Full),
+            other => Err(anyhow!("unsupported context profile: {other}")),
+        },
+        None => Ok(default),
+    }
+}
+
 fn optional_usize(value: &Value, field: &str, default: usize) -> Result<usize> {
     match value.get(field) {
         Some(value) => {
@@ -442,6 +572,20 @@ fn optional_usize(value: &Value, field: &str, default: usize) -> Result<usize> {
             usize::try_from(number).map_err(|_| anyhow!("field is too large: {field}"))
         }
         None => Ok(default),
+    }
+}
+
+fn optional_usize_opt(value: &Value, field: &str) -> Result<Option<usize>> {
+    match value.get(field) {
+        Some(value) => {
+            let number = value
+                .as_u64()
+                .ok_or_else(|| anyhow!("field must be a non-negative integer: {field}"))?;
+            Ok(Some(
+                usize::try_from(number).map_err(|_| anyhow!("field is too large: {field}"))?,
+            ))
+        }
+        None => Ok(None),
     }
 }
 
@@ -459,8 +603,7 @@ fn elapsed_ms(duration: std::time::Duration) -> u64 {
 fn tool_execution_result(result: Result<Value>) -> Value {
     match result {
         Ok(structured_content) => {
-            let text = serde_json::to_string_pretty(&structured_content)
-                .unwrap_or_else(|_| structured_content.to_string());
+            let text = tool_text_summary(&structured_content);
             json!({
                 "content": [
                     {
@@ -482,6 +625,37 @@ fn tool_execution_result(result: Result<Value>) -> Value {
             "isError": true
         }),
     }
+}
+
+fn tool_text_summary(value: &Value) -> String {
+    if let Some(files) = value.get("read_first").and_then(Value::as_array) {
+        let names = files
+            .iter()
+            .filter_map(|file| file.get("file").and_then(Value::as_str))
+            .take(5)
+            .collect::<Vec<_>>();
+        let count = files.len();
+        if names.is_empty() {
+            return "CallSieve used zero AI model tokens for retrieval and selected no read-first files. See structuredContent.".to_string();
+        }
+        return format!(
+            "CallSieve used zero AI model tokens for retrieval and selected {count} read-first files: {}. See structuredContent for details.",
+            names.join(", ")
+        );
+    }
+
+    if let Some(matches) = value.get("matches").and_then(Value::as_array) {
+        return format!(
+            "CallSieve returned {} symbol/query matches. See structuredContent for details.",
+            matches.len()
+        );
+    }
+
+    if let Some(status) = value.get("status").and_then(Value::as_str) {
+        return format!("CallSieve status: {status}. See structuredContent for details.");
+    }
+
+    "CallSieve tool result is available in structuredContent.".to_string()
 }
 
 fn tool_execution_error(message: String, fix_command: Option<String>) -> Value {

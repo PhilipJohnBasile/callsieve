@@ -8,8 +8,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 
 use crate::{
     indexer::{SCHEMA_VERSION, language::Language},
@@ -31,6 +32,47 @@ const MAX_TASK_MEMORY_ENTRIES: usize = 50;
 const MAX_TASK_MEMORY_SIMILAR_TASKS: usize = 3;
 const MAX_TASK_MEMORY_RECOMMENDED_FILES: usize = 8;
 const MAX_TASK_MEMORY_RECOMMENDED_SYMBOLS: usize = 12;
+pub const DEFAULT_AGENT_CONTEXT_TOKEN_BUDGET: usize = 1200;
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum ContextProfile {
+    Skim,
+    Normal,
+    Full,
+}
+
+impl ContextProfile {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Skim => "skim",
+            Self::Normal => "normal",
+            Self::Full => "full",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ContextViewOptions {
+    pub profile: ContextProfile,
+    pub token_budget: Option<usize>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct RetrievalCost {
+    retrieval_model_tokens: usize,
+    retrieval_method: &'static str,
+    agent_token_cost_scope: &'static str,
+    note: &'static str,
+}
+
+pub const fn zero_token_retrieval_cost() -> RetrievalCost {
+    RetrievalCost {
+        retrieval_model_tokens: 0,
+        retrieval_method: "deterministic_local_index",
+        agent_token_cost_scope: "retrieval_only",
+        note: "CallSieve spends zero AI model tokens on local retrieval. Only the returned context packet consumes agent context tokens when read.",
+    }
+}
 
 #[derive(Debug, Serialize)]
 pub struct SymbolsOutput {
@@ -145,6 +187,7 @@ pub struct TimingStats {
 pub struct ContextOutput {
     task: String,
     root: String,
+    retrieval_cost: RetrievalCost,
     read_first: Vec<ContextFile>,
     stats: ContextStats,
     timing: TimingStats,
@@ -342,6 +385,7 @@ struct ContextPayloadReduction {
     label: &'static str,
     evidence_tier: &'static str,
     platform_scope: &'static str,
+    retrieval_cost: RetrievalCost,
     baseline_context_payload_tokens_estimate: usize,
     callsieve_context_payload_tokens_estimate: usize,
     context_payload_tokens_saved_estimate: isize,
@@ -1417,6 +1461,42 @@ pub struct TraceCheckOutput {
 }
 
 #[derive(Debug, Serialize)]
+pub struct FocusOutput {
+    root: String,
+    file: String,
+    language: Language,
+    symbols: Vec<QuerySymbol>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    snippets: Vec<Snippet>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    warnings: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RelatedOutput {
+    root: String,
+    file: String,
+    imports: Vec<String>,
+    referenced_by: Vec<String>,
+    blast_radius: BlastRadius,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    calls: Vec<ReferenceEdge>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    called_by: Vec<ReferenceEdge>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    warnings: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TestsOutput {
+    root: String,
+    file: String,
+    related_tests: Vec<RelatedTest>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    warnings: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
 struct TraceCheckViolation {
     #[serde(skip_serializing_if = "Option::is_none")]
     id: Option<String>,
@@ -1516,6 +1596,117 @@ pub fn find_symbol(
     })
 }
 
+pub fn focus_file(
+    root: &Path,
+    index: &CodeIndex,
+    file_path: &str,
+    symbol_name: Option<&str>,
+    snippets_per_symbol: usize,
+) -> Result<FocusOutput> {
+    let lookup = IndexLookup::new(index);
+    let file = lookup
+        .file_by_path(file_path)
+        .ok_or_else(|| anyhow!("file is not indexed: {file_path}"))?;
+    let symbol_name_lower = symbol_name.map(str::to_ascii_lowercase);
+    let mut symbol_records: Vec<&SymbolRecord> = lookup
+        .symbols_for_file(&file.id)
+        .iter()
+        .copied()
+        .filter(|symbol| {
+            symbol_name_lower.as_ref().is_none_or(|name| {
+                symbol.name.eq_ignore_ascii_case(name)
+                    || symbol.name.to_ascii_lowercase().contains(name)
+            })
+        })
+        .collect();
+    symbol_records.sort_by_key(|symbol| symbol.start_line);
+    if symbol_name.is_some() && symbol_records.is_empty() {
+        return Err(anyhow!(
+            "symbol was not found in indexed file {file_path}: {}",
+            symbol_name.unwrap_or_default()
+        ));
+    }
+    if symbol_name.is_none() {
+        symbol_records.truncate(MAX_CONTEXT_SYMBOLS_PER_FILE);
+    }
+
+    let symbols = symbol_records
+        .iter()
+        .map(|symbol| QuerySymbol {
+            name: symbol.name.clone(),
+            kind: symbol.kind.clone(),
+            lines: [symbol.start_line, symbol.end_line],
+            visibility: symbol.visibility.clone(),
+            signature: symbol.signature.clone(),
+        })
+        .collect();
+    let snippets = context_snippets(
+        root,
+        file,
+        &symbol_records,
+        snippets_per_symbol,
+        snippets_per_symbol > 0,
+    );
+
+    Ok(FocusOutput {
+        root: root_label(root),
+        file: file.path.clone(),
+        language: file.language,
+        symbols,
+        snippets,
+        warnings: stale_warnings(root, index),
+    })
+}
+
+pub fn related_file(root: &Path, index: &CodeIndex, file_path: &str) -> Result<RelatedOutput> {
+    let lookup = IndexLookup::new(index);
+    let file = lookup
+        .file_by_path(file_path)
+        .ok_or_else(|| anyhow!("file is not indexed: {file_path}"))?;
+    let related_tests_all = related_tests(&lookup, file);
+    let imports_all = resolved_imports_for_file(&lookup, &file.path);
+    let referenced_by_all = references_to_file(&lookup, &file.path);
+    let calls_all = calls_from_file(&lookup, file);
+    let called_by_all = called_by_file(&lookup, file);
+    let blast_radius = blast_radius_for(
+        &imports_all,
+        &referenced_by_all,
+        &related_tests_all,
+        &calls_all,
+        &called_by_all,
+    );
+
+    Ok(RelatedOutput {
+        root: root_label(root),
+        file: file.path.clone(),
+        imports: take_strings(imports_all, MAX_CONTEXT_RELATION_FILES),
+        referenced_by: take_strings(referenced_by_all, MAX_CONTEXT_RELATION_FILES),
+        blast_radius,
+        calls: calls_all
+            .into_iter()
+            .take(MAX_CONTEXT_GRAPH_EDGES)
+            .collect(),
+        called_by: called_by_all
+            .into_iter()
+            .take(MAX_CONTEXT_GRAPH_EDGES)
+            .collect(),
+        warnings: stale_warnings(root, index),
+    })
+}
+
+pub fn tests_for_file(root: &Path, index: &CodeIndex, file_path: &str) -> Result<TestsOutput> {
+    let lookup = IndexLookup::new(index);
+    let file = lookup
+        .file_by_path(file_path)
+        .ok_or_else(|| anyhow!("file is not indexed: {file_path}"))?;
+    Ok(TestsOutput {
+        root: root_label(root),
+        file: file.path.clone(),
+        related_tests: compact_related_tests(related_tests(&lookup, file)),
+        warnings: stale_warnings(root, index),
+    })
+}
+
 pub fn run_query(
     root: &Path,
     index: &CodeIndex,
@@ -1589,7 +1780,7 @@ pub fn run_query_with_options(
                 snippet,
                 why: ranked.why,
                 why_debug: score_debug,
-                related_tests: related_tests(&lookup, file),
+                related_tests: compact_related_tests(related_tests(&lookup, file)),
             })
         })
         .collect();
@@ -1678,7 +1869,7 @@ pub fn build_context_with_options(
     // A test file that merely references the relevant source files gets a large
     // graph boost; on a non-test query, scale the whole candidate down so it
     // cannot outrank the implementation it tests.
-    if !ranker::has_test_intent(&query_tokens) {
+    if !ranker::has_test_intent(&query_tokens) && !ranker::has_hook_meta_intent(&query_tokens) {
         for candidate in &mut candidates {
             if lookup
                 .file_by_id(&candidate.file_id)
@@ -1799,6 +1990,7 @@ pub fn build_context_with_options(
     Ok(ContextOutput {
         task: task.to_string(),
         root: root_label(root),
+        retrieval_cost: zero_token_retrieval_cost(),
         stats: ContextStats {
             candidate_matches: ranked.len(),
             selected_files: read_first.len(),
@@ -1823,6 +2015,250 @@ pub fn context_read_first_files(context: &ContextOutput) -> Vec<String> {
         .iter()
         .map(|file| file.file.clone())
         .collect()
+}
+
+pub fn context_value(context: &ContextOutput, options: ContextViewOptions) -> Result<Value> {
+    let mut value = match options.profile {
+        ContextProfile::Skim => skim_context_value(context),
+        ContextProfile::Normal | ContextProfile::Full => serde_json::to_value(context)?,
+    };
+    if options.profile == ContextProfile::Normal {
+        add_compact_impact_to_full_context(&mut value);
+    }
+    annotate_context_stats(&mut value, options.profile, options.token_budget, false)?;
+    let trimmed = apply_context_token_budget(&mut value, options.token_budget)?;
+    annotate_context_stats(&mut value, options.profile, options.token_budget, trimmed)?;
+    Ok(value)
+}
+
+pub fn value_estimated_tokens(value: &Value) -> Result<usize> {
+    Ok(estimate_tokens(&serde_json::to_string(value)?))
+}
+
+fn skim_context_value(context: &ContextOutput) -> Value {
+    let read_first: Vec<Value> = context
+        .read_first
+        .iter()
+        .map(|file| {
+            json!({
+                "rank": file.rank,
+                "score": file.score,
+                "file": file.file,
+                "language": file.language,
+                "symbols": compact_symbols_for_value(&file.symbols),
+                "why": file.why.iter().take(2).cloned().collect::<Vec<_>>(),
+                "impact": compact_impact_for_value(file)
+            })
+        })
+        .collect();
+
+    json!({
+        "task": context.task,
+        "root": context.root,
+        "retrieval_cost": context.retrieval_cost,
+        "read_first": read_first,
+        "stats": {
+            "candidate_matches": context.stats.candidate_matches,
+            "selected_files": context.stats.selected_files,
+            "selected_symbols": context.stats.selected_symbols,
+            "related_tests": context.stats.related_tests
+        },
+        "warnings": context.warnings
+    })
+}
+
+fn compact_symbols_for_value(symbols: &[QuerySymbol]) -> Vec<Value> {
+    symbols
+        .iter()
+        .map(|symbol| {
+            json!({
+                "name": symbol.name,
+                "kind": symbol.kind,
+                "lines": symbol.lines
+            })
+        })
+        .collect()
+}
+
+fn compact_impact_for_value(file: &ContextFile) -> Value {
+    let mut tests = BTreeSet::new();
+    tests.extend(file.blast_radius.tests.iter().cloned());
+    tests.extend(file.related_tests.iter().map(|test| test.file.clone()));
+    json!({
+        "risk": file.blast_radius.risk,
+        "tests": tests.into_iter().take(MAX_CONTEXT_RELATED_TESTS).collect::<Vec<_>>(),
+        "upstream_count": file.imports.len() + file.calls.len(),
+        "downstream_count": file.referenced_by.len() + file.called_by.len()
+    })
+}
+
+fn add_compact_impact_to_full_context(value: &mut Value) {
+    let Some(files) = value.get_mut("read_first").and_then(Value::as_array_mut) else {
+        return;
+    };
+
+    for file in files {
+        let risk = file
+            .get("blast_radius")
+            .and_then(|blast| blast.get("risk"))
+            .cloned()
+            .unwrap_or_else(|| json!("unknown"));
+        let tests = file
+            .get("blast_radius")
+            .and_then(|blast| blast.get("tests"))
+            .cloned()
+            .unwrap_or_else(|| json!([]));
+        let upstream_count = file
+            .get("imports")
+            .and_then(Value::as_array)
+            .map(Vec::len)
+            .unwrap_or_default()
+            + file
+                .get("calls")
+                .and_then(Value::as_array)
+                .map(Vec::len)
+                .unwrap_or_default();
+        let downstream_count = file
+            .get("referenced_by")
+            .and_then(Value::as_array)
+            .map(Vec::len)
+            .unwrap_or_default()
+            + file
+                .get("called_by")
+                .and_then(Value::as_array)
+                .map(Vec::len)
+                .unwrap_or_default();
+        if let Some(object) = file.as_object_mut() {
+            object.insert(
+                "impact".to_string(),
+                json!({
+                    "risk": risk,
+                    "tests": tests,
+                    "upstream_count": upstream_count,
+                    "downstream_count": downstream_count
+                }),
+            );
+        }
+    }
+}
+
+fn annotate_context_stats(
+    value: &mut Value,
+    profile: ContextProfile,
+    token_budget: Option<usize>,
+    trimmed: bool,
+) -> Result<()> {
+    if !value.get("stats").is_some_and(Value::is_object)
+        && let Some(object) = value.as_object_mut()
+    {
+        object.insert("stats".to_string(), json!({}));
+    }
+    if let Some(stats) = value.get_mut("stats").and_then(Value::as_object_mut) {
+        stats.insert("profile".to_string(), json!(profile.as_str()));
+        stats.insert("trimmed".to_string(), json!(trimmed));
+        if let Some(token_budget) = token_budget {
+            stats.insert("token_budget".to_string(), json!(token_budget));
+        } else {
+            stats.remove("token_budget");
+        }
+        stats.remove("estimated_tokens");
+    }
+    let estimated_tokens = value_estimated_tokens(value)?;
+    if let Some(stats) = value.get_mut("stats").and_then(Value::as_object_mut) {
+        stats.insert("estimated_tokens".to_string(), json!(estimated_tokens));
+    }
+    Ok(())
+}
+
+fn apply_context_token_budget(value: &mut Value, token_budget: Option<usize>) -> Result<bool> {
+    let Some(token_budget) = token_budget else {
+        return Ok(false);
+    };
+    if value_estimated_tokens(value)? <= token_budget {
+        return Ok(false);
+    }
+
+    trim_context_detail(value);
+    if value_estimated_tokens(value)? <= token_budget {
+        return Ok(true);
+    }
+
+    while value_estimated_tokens(value)? > token_budget {
+        let Some(files) = value.get_mut("read_first").and_then(Value::as_array_mut) else {
+            break;
+        };
+        if files.len() <= 1 {
+            break;
+        }
+        files.pop();
+    }
+
+    let selected_files = value
+        .get("read_first")
+        .and_then(Value::as_array)
+        .map(Vec::len);
+    if let Some(stats) = value.get_mut("stats").and_then(Value::as_object_mut)
+        && let Some(selected_files) = selected_files
+    {
+        stats.insert("selected_files".to_string(), json!(selected_files));
+    }
+
+    Ok(true)
+}
+
+fn trim_context_detail(value: &mut Value) {
+    let Some(files) = value.get_mut("read_first").and_then(Value::as_array_mut) else {
+        return;
+    };
+
+    for file in files {
+        let Some(object) = file.as_object_mut() else {
+            continue;
+        };
+        object.remove("snippets");
+        object.remove("calls");
+        object.remove("called_by");
+        object.remove("imports");
+        object.remove("referenced_by");
+        object.remove("why_debug");
+        if let Some(why) = object.get_mut("why").and_then(Value::as_array_mut) {
+            why.truncate(2);
+        }
+        if let Some(symbols) = object.get_mut("symbols").and_then(Value::as_array_mut) {
+            for symbol in symbols {
+                if let Some(symbol) = symbol.as_object_mut() {
+                    symbol.remove("signature");
+                    symbol.remove("visibility");
+                }
+            }
+        }
+        if let Some(tests) = object
+            .get_mut("related_tests")
+            .and_then(Value::as_array_mut)
+        {
+            for test in tests {
+                if let Some(test) = test.as_object_mut() {
+                    test.remove("symbols");
+                }
+            }
+        }
+        if let Some(blast_radius) = object
+            .get_mut("blast_radius")
+            .and_then(Value::as_object_mut)
+        {
+            let risk = blast_radius
+                .get("risk")
+                .cloned()
+                .unwrap_or_else(|| json!("unknown"));
+            let tests = blast_radius
+                .get("tests")
+                .cloned()
+                .unwrap_or_else(|| json!([]));
+            blast_radius.clear();
+            blast_radius.insert("risk".to_string(), risk);
+            blast_radius.insert("tests".to_string(), tests);
+        }
+    }
 }
 
 fn promote_implementation_companion(
@@ -1998,6 +2434,7 @@ fn candidate_has_direct_surface_signal(candidate: &ContextCandidate) -> bool {
             || reason == "docs intent"
             || reason == "docs path intent"
             || reason == "command surface intent"
+            || reason == "hook doctor and lifecycle implementation intent"
     })
 }
 
@@ -2041,6 +2478,15 @@ pub fn clear_task_memory(root: &Path) -> Result<bool> {
     }
     fs::remove_file(&path).with_context(|| format!("failed to remove {}", path.display()))?;
     Ok(true)
+}
+
+pub fn latest_task_memory_task(root: &Path) -> Option<String> {
+    let path = task_memory_path(root);
+    load_task_memory(&path)
+        .entries
+        .into_iter()
+        .max_by_key(|entry| entry.created_at)
+        .map(|entry| entry.task)
 }
 
 pub fn task_memory_for_context(
@@ -2236,6 +2682,29 @@ pub fn benchmark_context(
     snippets_per_file: usize,
     include_snippets: bool,
 ) -> Result<BenchmarkOutput> {
+    benchmark_context_with_options(
+        root,
+        index,
+        task,
+        limit,
+        snippets_per_file,
+        include_snippets,
+        ContextViewOptions {
+            profile: ContextProfile::Full,
+            token_budget: None,
+        },
+    )
+}
+
+pub fn benchmark_context_with_options(
+    root: &Path,
+    index: &CodeIndex,
+    task: &str,
+    limit: usize,
+    snippets_per_file: usize,
+    include_snippets: bool,
+    view_options: ContextViewOptions,
+) -> Result<BenchmarkOutput> {
     let baseline = baseline_benchmark(root, index, task);
     let context = build_context(
         root,
@@ -2245,7 +2714,8 @@ pub fn benchmark_context(
         snippets_per_file,
         include_snippets,
     )?;
-    let packet = serde_json::to_string(&context)?;
+    let packet_value = context_value(&context, view_options)?;
+    let packet = serde_json::to_string(&packet_value)?;
     let packet_tokens = estimate_tokens(&packet);
     let top_files = context
         .read_first
@@ -2312,6 +2782,29 @@ pub fn benchmark_suite(
     snippets_per_file: usize,
     include_snippets: bool,
 ) -> Result<BenchmarkSuiteOutput> {
+    benchmark_suite_with_options(
+        root,
+        index,
+        suite,
+        limit,
+        snippets_per_file,
+        include_snippets,
+        ContextViewOptions {
+            profile: ContextProfile::Full,
+            token_budget: None,
+        },
+    )
+}
+
+pub fn benchmark_suite_with_options(
+    root: &Path,
+    index: &CodeIndex,
+    suite: BenchmarkSuiteInput,
+    limit: usize,
+    snippets_per_file: usize,
+    include_snippets: bool,
+    view_options: ContextViewOptions,
+) -> Result<BenchmarkSuiteOutput> {
     let mut task_outputs = Vec::new();
     let mut total_expected_files = 0;
     let mut total_expected_files_found = 0;
@@ -2334,13 +2827,14 @@ pub fn benchmark_suite(
             observed,
             session,
         } = task;
-        let benchmark = benchmark_context(
+        let benchmark = benchmark_context_with_options(
             root,
             index,
             &task,
             limit,
             snippets_per_file,
             include_snippets,
+            view_options,
         )?;
         let selected_files: Vec<String> = benchmark
             .callsieve
@@ -2451,6 +2945,29 @@ pub fn eval_retrieval(
     snippets_per_file: usize,
     include_snippets: bool,
 ) -> Result<EvalRetrievalOutput> {
+    eval_retrieval_with_options(
+        root,
+        index,
+        suite,
+        limit,
+        snippets_per_file,
+        include_snippets,
+        ContextViewOptions {
+            profile: ContextProfile::Full,
+            token_budget: None,
+        },
+    )
+}
+
+pub fn eval_retrieval_with_options(
+    root: &Path,
+    index: &CodeIndex,
+    suite: BenchmarkSuiteInput,
+    limit: usize,
+    snippets_per_file: usize,
+    include_snippets: bool,
+    view_options: ContextViewOptions,
+) -> Result<EvalRetrievalOutput> {
     let mut task_outputs = Vec::new();
     let mut total_expected_files = 0;
     let mut total_expected_files_found = 0;
@@ -2467,13 +2984,14 @@ pub fn eval_retrieval(
             observed: _,
             session: _,
         } = task;
-        let benchmark = benchmark_context(
+        let benchmark = benchmark_context_with_options(
             root,
             index,
             &task,
             limit,
             snippets_per_file,
             include_snippets,
+            view_options,
         )?;
         let selected_files: Vec<String> = benchmark
             .callsieve
@@ -2995,6 +3513,7 @@ pub fn pilot_report(
         let mut repo_grep_after_context = 0usize;
         let mut repo_violation_details = Vec::new();
         let mut repo_mislabeled_controlled_replay = false;
+        let mut repo_mislabeled_hook_trace = false;
         for trace_path in repo.trace_paths() {
             let trace_json = fs::read_to_string(&trace_path)?;
             let trace_value: serde_json::Value = serde_json::from_str(&trace_json)?;
@@ -3041,6 +3560,11 @@ pub fn pilot_report(
                 && trace_has_controlled_replay_markers(&trace_value)
             {
                 repo_mislabeled_controlled_replay = true;
+            }
+            if trace_collection == TraceCollection::ObservedSession
+                && trace_has_hook_trace_markers(&trace_value)
+            {
+                repo_mislabeled_hook_trace = true;
             }
         }
         for trace_path in repo.policy_trace_paths() {
@@ -3127,6 +3651,16 @@ pub fn pilot_report(
                 message:
                     "trace metadata says observed_session but controlled-replay markers are present"
                         .to_string(),
+            });
+        }
+        if repo_mislabeled_hook_trace {
+            repo_failed = true;
+            failures.push(PilotFailure {
+                label: repo.label.clone(),
+                path: repo.path.display().to_string(),
+                check: "observed_trace_mislabeled_hook_trace".to_string(),
+                message: "trace metadata says observed_session but lifecycle hook trace markers are present"
+                    .to_string(),
             });
         }
         if thresholds.require_fresh_index && !status.fresh {
@@ -4795,6 +5329,7 @@ fn context_payload_reduction(
         label: "context_payload_reduction",
         evidence_tier: "platform_neutral_proxy",
         platform_scope: "agent_platform_neutral",
+        retrieval_cost: zero_token_retrieval_cost(),
         baseline_context_payload_tokens_estimate,
         callsieve_context_payload_tokens_estimate,
         context_payload_tokens_saved_estimate,
@@ -5104,12 +5639,38 @@ fn related_tests(lookup: &IndexLookup<'_>, file: &FileRecord) -> Vec<RelatedTest
     }
 
     let stem = file_stem(&file.path).to_ascii_lowercase();
-    lookup
+    let mut tests: Vec<(i32, &FileRecord)> = lookup
         .test_files
         .iter()
-        .filter(|candidate| candidate.path.to_ascii_lowercase().contains(stem.as_str()))
+        .filter_map(|candidate| {
+            let candidate_path = candidate.path.to_ascii_lowercase();
+            let mut score = 0;
+            if candidate_path.contains(stem.as_str()) {
+                score += 3;
+            }
+            if lookup
+                .imports_from_path(&candidate.path)
+                .iter()
+                .any(|import| import.resolved_path.as_deref() == Some(file.path.as_str()))
+            {
+                score += 6;
+            }
+            if lookup
+                .references_from_path(&candidate.path)
+                .iter()
+                .any(|reference| reference.target_path.as_deref() == Some(file.path.as_str()))
+            {
+                score += 6;
+            }
+            (score > 0).then_some((score, *candidate))
+        })
+        .collect();
+
+    tests.sort_by(|left, right| right.0.cmp(&left.0).then(left.1.path.cmp(&right.1.path)));
+    tests
+        .into_iter()
         .take(5)
-        .map(|test_file| RelatedTest {
+        .map(|(_, test_file)| RelatedTest {
             file: test_file.path.clone(),
             symbols: lookup
                 .symbols_for_file(&test_file.id)
@@ -5361,6 +5922,39 @@ fn trace_has_controlled_replay_markers(value: &serde_json::Value) -> bool {
         || haystack.contains("deterministic local grep/read replay")
         || haystack.contains("baseline simulates grepping")
         || haystack.contains("callsieve codex-session")
+}
+
+fn trace_has_hook_trace_markers(value: &serde_json::Value) -> bool {
+    let collection = value
+        .get("metadata")
+        .and_then(|metadata| metadata.get("collection"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    if collection.ends_with("_hook_trace") {
+        return true;
+    }
+
+    let source = value
+        .get("policy")
+        .and_then(|policy| policy.get("source"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    if source.contains("lifecycle_hooks") || source.contains("plugin_hooks") {
+        return true;
+    }
+
+    trace_tasks_from_value(value.clone()).iter().any(|task| {
+        task.get("events")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .any(|event| event.get("hook_event").is_some())
+    }) || value
+        .get("events")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .any(|event| event.get("hook_event").is_some())
 }
 
 fn is_grep_command(command: &str) -> bool {

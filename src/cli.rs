@@ -75,6 +75,9 @@ pub struct Cli {
     #[arg(long, global = true)]
     verbose: bool,
 
+    #[arg(long, global = true)]
+    pretty: bool,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -111,6 +114,36 @@ pub enum Command {
         limit: usize,
     },
 
+    /// Return targeted symbols and snippets for one indexed file.
+    Focus {
+        path: PathBuf,
+
+        #[arg(long)]
+        file: String,
+
+        #[arg(long)]
+        symbol: Option<String>,
+
+        #[arg(long, default_value_t = 1)]
+        snippets_per_symbol: usize,
+    },
+
+    /// Return import, caller, callee, and blast-radius hints for one indexed file.
+    Related {
+        path: PathBuf,
+
+        #[arg(long)]
+        file: String,
+    },
+
+    /// Return tests likely related to one indexed file.
+    Tests {
+        path: PathBuf,
+
+        #[arg(long)]
+        file: String,
+    },
+
     /// Rank indexed files and symbols for a natural-language question.
     Query {
         path: PathBuf,
@@ -145,6 +178,12 @@ pub enum Command {
         #[arg(long)]
         why_debug: bool,
 
+        #[arg(long, value_enum, default_value_t = ContextProfileArg::Normal)]
+        profile: ContextProfileArg,
+
+        #[arg(long)]
+        token_budget: Option<usize>,
+
         #[arg(long, value_enum, default_value_t = AgentOutputFormat::Json)]
         format: AgentOutputFormat,
     },
@@ -157,12 +196,18 @@ pub enum Command {
         #[arg(long, default_value_t = 8)]
         limit: usize,
 
-        #[arg(long, default_value_t = 2)]
+        #[arg(long, default_value_t = 0)]
         snippets_per_file: usize,
 
         /// Include structured scoring components for ranking diagnostics.
         #[arg(long)]
         why_debug: bool,
+
+        #[arg(long, value_enum, default_value_t = ContextProfileArg::Skim)]
+        profile: ContextProfileArg,
+
+        #[arg(long, default_value_t = query::DEFAULT_AGENT_CONTEXT_TOKEN_BUDGET)]
+        token_budget: usize,
 
         #[arg(long, value_enum, default_value_t = AgentOutputFormat::Json)]
         format: AgentOutputFormat,
@@ -197,6 +242,12 @@ pub enum Command {
 
         #[arg(long)]
         no_snippets: bool,
+
+        #[arg(long, value_enum, default_value_t = ContextProfileArg::Normal)]
+        profile: ContextProfileArg,
+
+        #[arg(long)]
+        token_budget: Option<usize>,
     },
 
     /// Run benchmark estimates across a JSON task suite.
@@ -212,6 +263,12 @@ pub enum Command {
 
         #[arg(long)]
         no_snippets: bool,
+
+        #[arg(long, value_enum, default_value_t = ContextProfileArg::Normal)]
+        profile: ContextProfileArg,
+
+        #[arg(long)]
+        token_budget: Option<usize>,
     },
 
     /// Evaluate read-first retrieval against expected and critical task fixtures.
@@ -227,6 +284,12 @@ pub enum Command {
 
         #[arg(long)]
         no_snippets: bool,
+
+        #[arg(long, value_enum, default_value_t = ContextProfileArg::Normal)]
+        profile: ContextProfileArg,
+
+        #[arg(long)]
+        token_budget: Option<usize>,
 
         /// Accepted for compatibility. CallSieve command output is JSON by default.
         #[arg(long)]
@@ -282,6 +345,14 @@ pub enum Command {
 
         #[arg(long = "files-read")]
         files_read: Vec<String>,
+
+        #[arg(
+            long = "context-selected-file",
+            alias = "context_selected_file",
+            alias = "context-selected-files",
+            alias = "context_selected_files"
+        )]
+        context_selected_files: Vec<String>,
 
         #[arg(long)]
         tokens: Option<usize>,
@@ -973,6 +1044,9 @@ pub enum Command {
         #[arg(long)]
         trace_out: Option<PathBuf>,
 
+        #[arg(long)]
+        proof_trace: bool,
+
         #[arg(long, default_value_t = 8)]
         limit: usize,
 
@@ -1147,7 +1221,16 @@ pub enum CodexHooksCommand {
 
         #[arg(long)]
         strict: bool,
+
+        #[arg(long)]
+        smoke: bool,
+
+        #[arg(long)]
+        fix: bool,
     },
+
+    /// Record that a human reviewed and trusted the current Codex hook file.
+    TrustAck { path: PathBuf },
 
     /// Remove generated repo-local Codex lifecycle hooks.
     Uninstall { path: PathBuf },
@@ -1477,6 +1560,23 @@ pub enum McpConfigFormat {
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum ContextProfileArg {
+    Skim,
+    Normal,
+    Full,
+}
+
+impl From<ContextProfileArg> for query::ContextProfile {
+    fn from(value: ContextProfileArg) -> Self {
+        match value {
+            ContextProfileArg::Skim => Self::Skim,
+            ContextProfileArg::Normal => Self::Normal,
+            ContextProfileArg::Full => Self::Full,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
 pub enum AgentOutputFormat {
     Json,
     Markdown,
@@ -1527,6 +1627,7 @@ struct AgentContextInstruction {
     action: &'static str,
     guidance: &'static str,
     grep_policy: &'static str,
+    token_policy: &'static str,
 }
 
 #[derive(Debug, Serialize)]
@@ -1645,6 +1746,8 @@ struct BeginOutput {
     task: String,
     policy: &'static str,
     next_step: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    proof_next_commands: Vec<String>,
     context: query::ContextOutput,
     trace_event: serde_json::Value,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2322,14 +2425,18 @@ struct HookDoctorOutput {
     status: String,
     root: String,
     checks: Vec<EnforceCheck>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    codex_hooks: Option<CodexHooksDoctorOutput>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    claude_hooks: Option<ClaudeHooksDoctorOutput>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    client_hooks: Vec<ClientHooksDoctorOutput>,
-    shim: ShimDoctorOutput,
-    path_instruction: String,
+    integrations: Vec<HookDoctorIntegration>,
+}
+
+#[derive(Debug, Serialize)]
+struct HookDoctorIntegration {
+    client: String,
+    status: String,
+    profile: String,
+    hooks_file: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    events: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -2337,6 +2444,7 @@ struct CodexHooksInstallOutput {
     command: &'static str,
     status: String,
     root: String,
+    profile: &'static str,
     strict: bool,
     hooks_file: String,
     trace_dir: String,
@@ -2352,11 +2460,44 @@ struct CodexHooksDoctorOutput {
     command: &'static str,
     status: String,
     root: String,
+    profile: &'static str,
     strict: bool,
     hooks_file: String,
     trace_dir: String,
     checks: Vec<EnforceCheck>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    fixes: Vec<String>,
+    trust: CodexHookTrustReview,
     trust_instruction: &'static str,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct CodexHooksDoctorOptions {
+    smoke: bool,
+    fix: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct CodexHookTrustReview {
+    status: String,
+    trust_file: String,
+    hooks_hash: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reviewed_at: Option<u64>,
+    message: String,
+}
+
+#[derive(Debug, Serialize)]
+struct CodexHooksTrustAckOutput {
+    command: &'static str,
+    status: String,
+    root: String,
+    profile: &'static str,
+    hooks_file: String,
+    trust_file: String,
+    hooks_hash: String,
+    reviewed_at: u64,
+    manual_review: &'static str,
 }
 
 #[derive(Debug, Serialize)]
@@ -2459,6 +2600,8 @@ struct CodexHookState {
     violation_seen: bool,
     stop_blocked: bool,
     last_prompt_hash: String,
+    #[serde(default)]
+    last_prompt: String,
     selected_files: Vec<String>,
     updated_at: u64,
 }
@@ -2501,6 +2644,7 @@ struct EditorHookOutput {
 pub fn run() -> Result<()> {
     let cli = Cli::parse();
     init_tracing(cli.verbose)?;
+    output::json::set_pretty(cli.pretty);
 
     match cli.command {
         Command::Index { path, lsp, .. } => {
@@ -2543,6 +2687,27 @@ pub fn run() -> Result<()> {
             let output = query::find_symbol(&path, &index, &symbol_name, limit)?;
             output::json::print(&output)?;
         }
+        Command::Focus {
+            path,
+            file,
+            symbol,
+            snippets_per_symbol,
+        } => {
+            let index = store::json_store::load_index(&path)?;
+            let output =
+                query::focus_file(&path, &index, &file, symbol.as_deref(), snippets_per_symbol)?;
+            output::json::print(&output)?;
+        }
+        Command::Related { path, file } => {
+            let index = store::json_store::load_index(&path)?;
+            let output = query::related_file(&path, &index, &file)?;
+            output::json::print(&output)?;
+        }
+        Command::Tests { path, file } => {
+            let index = store::json_store::load_index(&path)?;
+            let output = query::tests_for_file(&path, &index, &file)?;
+            output::json::print(&output)?;
+        }
         Command::Query {
             path,
             question,
@@ -2566,6 +2731,8 @@ pub fn run() -> Result<()> {
             snippets_per_file,
             no_snippets,
             why_debug,
+            profile,
+            token_budget,
             format,
         } => {
             let (index, index_load_ms) = load_index_timed(&path)?;
@@ -2579,7 +2746,14 @@ pub fn run() -> Result<()> {
                 why_debug,
             )?;
             output.add_index_load_time(index_load_ms);
-            print_context_output(&output, format)?;
+            print_context_output(
+                &output,
+                format,
+                query::ContextViewOptions {
+                    profile: profile.into(),
+                    token_budget,
+                },
+            )?;
         }
         Command::AgentContext {
             path,
@@ -2587,13 +2761,16 @@ pub fn run() -> Result<()> {
             limit,
             snippets_per_file,
             why_debug,
+            profile,
+            token_budget,
             format,
         } => {
+            let retrieval_task = effective_task_for_retrieval(&path, &task);
             let (index, index_load_ms) = load_index_timed(&path)?;
             let mut context = query::build_context_with_options(
                 &path,
                 &index,
-                &task,
+                &retrieval_task,
                 limit,
                 snippets_per_file,
                 true,
@@ -2606,11 +2783,19 @@ pub fn run() -> Result<()> {
                     action: "read_first_before_grep",
                     guidance: "Read these files first; grep only if insufficient.",
                     grep_policy: "grep_only_if_context_is_insufficient",
+                    token_policy: "zero_ai_model_tokens_for_retrieval; context_packet_tokens_apply_when_read",
                 },
                 memory,
                 context,
             };
-            print_agent_context_output(&output, format)?;
+            print_agent_context_output(
+                &output,
+                format,
+                query::ContextViewOptions {
+                    profile: profile.into(),
+                    token_budget: Some(token_budget),
+                },
+            )?;
         }
         Command::Demo { path, task, lsp } => {
             let output = demo(&path, &task, lsp)?;
@@ -2633,15 +2818,21 @@ pub fn run() -> Result<()> {
             limit,
             snippets_per_file,
             no_snippets,
+            profile,
+            token_budget,
         } => {
             let index = store::json_store::load_index(&path)?;
-            let output = query::benchmark_context(
+            let output = query::benchmark_context_with_options(
                 &path,
                 &index,
                 &task,
                 limit,
                 snippets_per_file,
                 !no_snippets,
+                query::ContextViewOptions {
+                    profile: profile.into(),
+                    token_budget,
+                },
             )?;
             output::json::print(&output)?;
         }
@@ -2651,19 +2842,25 @@ pub fn run() -> Result<()> {
             limit,
             snippets_per_file,
             no_snippets,
+            profile,
+            token_budget,
         } => {
             let index = store::json_store::load_index(&path)?;
             let tasks_json = fs::read_to_string(&tasks)
                 .with_context(|| format!("failed to read benchmark suite: {}", tasks.display()))?;
             let suite: query::BenchmarkSuiteInput = serde_json::from_str(&tasks_json)
                 .with_context(|| format!("failed to parse benchmark suite: {}", tasks.display()))?;
-            let output = query::benchmark_suite(
+            let output = query::benchmark_suite_with_options(
                 &path,
                 &index,
                 suite,
                 limit,
                 snippets_per_file,
                 !no_snippets,
+                query::ContextViewOptions {
+                    profile: profile.into(),
+                    token_budget,
+                },
             )?;
             output::json::print(&output)?;
         }
@@ -2672,6 +2869,8 @@ pub fn run() -> Result<()> {
             limit,
             snippets_per_file,
             no_snippets,
+            profile,
+            token_budget,
             json: _,
         } => {
             let manifest_json = fs::read_to_string(&manifest).with_context(|| {
@@ -2696,13 +2895,17 @@ pub fn run() -> Result<()> {
                         manifest.display()
                     )
                 })?;
-            let output = query::eval_retrieval(
+            let output = query::eval_retrieval_with_options(
                 &path,
                 &index,
                 suite,
                 limit,
                 snippets_per_file,
                 !no_snippets,
+                query::ContextViewOptions {
+                    profile: profile.into(),
+                    token_budget,
+                },
             )?;
             let failed = output.failed();
             output::json::print(&output)?;
@@ -2750,10 +2953,19 @@ pub fn run() -> Result<()> {
             trace,
             event_command,
             files_read,
+            context_selected_files,
             tokens,
             phase,
         } => {
-            let output = session_event(&trace, &event_command, files_read, tokens, phase)?;
+            let output = session_event_with_token_evidence(
+                &trace,
+                &event_command,
+                files_read,
+                context_selected_files,
+                tokens,
+                phase,
+                None,
+            )?;
             output::json::print(&output)?;
         }
         Command::SessionFinish { trace, out } => {
@@ -3319,8 +3531,21 @@ pub fn run() -> Result<()> {
                     codex_hooks_install(&path, strict, force, limit, snippets_per_file, lsp)?;
                 output::json::print(&output)?;
             }
-            CodexHooksCommand::Doctor { path, strict } => {
-                let output = codex_hooks_doctor(&path, strict);
+            CodexHooksCommand::Doctor {
+                path,
+                strict,
+                smoke,
+                fix,
+            } => {
+                let output = codex_hooks_doctor_with_options(
+                    &path,
+                    strict,
+                    CodexHooksDoctorOptions { smoke, fix },
+                );
+                output::json::print(&output)?;
+            }
+            CodexHooksCommand::TrustAck { path } => {
+                let output = codex_hooks_trust_ack(&path)?;
                 output::json::print(&output)?;
             }
             CodexHooksCommand::Uninstall { path } => {
@@ -3340,12 +3565,16 @@ pub fn run() -> Result<()> {
                     codex_hook_pre_tool_use(&path, strict)?
                 }
                 CodexHookCommand::PostToolUse { path, strict } => {
-                    codex_hook_post_tool_use(&path, strict)?
+                    codex_hook_post_tool_use(&path, strict)?;
+                    return Ok(());
                 }
                 CodexHookCommand::PermissionRequest { path, strict } => {
                     codex_hook_permission_request(&path, strict)?
                 }
-                CodexHookCommand::Stop { path, strict } => codex_hook_stop(&path, strict)?,
+                CodexHookCommand::Stop { path, strict } => {
+                    codex_hook_stop(&path, strict)?;
+                    return Ok(());
+                }
             };
             output::json::print(&output)?;
         }
@@ -3460,6 +3689,7 @@ pub fn run() -> Result<()> {
             task,
             client,
             trace_out,
+            proof_trace,
             limit,
             snippets_per_file,
         } => {
@@ -3468,6 +3698,7 @@ pub fn run() -> Result<()> {
                 &task,
                 client,
                 trace_out.as_deref(),
+                proof_trace,
                 limit,
                 snippets_per_file,
             )?;
@@ -3743,11 +3974,15 @@ fn demo(path: &Path, task: &str, lsp: bool) -> Result<DemoOutput> {
     })
 }
 
-fn print_context_output(output: &query::ContextOutput, format: AgentOutputFormat) -> Result<()> {
+fn print_context_output(
+    output: &query::ContextOutput,
+    format: AgentOutputFormat,
+    view_options: query::ContextViewOptions,
+) -> Result<()> {
+    let value = query::context_value(output, view_options)?;
     match format {
-        AgentOutputFormat::Json => output::json::print(output),
+        AgentOutputFormat::Json => output::json::print(&value),
         AgentOutputFormat::Markdown => {
-            let value = serde_json::to_value(output)?;
             println!(
                 "{}",
                 context_markdown(&value, "grep_only_if_context_is_insufficient")
@@ -3760,11 +3995,17 @@ fn print_context_output(output: &query::ContextOutput, format: AgentOutputFormat
 fn print_agent_context_output(
     output: &AgentContextOutput,
     format: AgentOutputFormat,
+    view_options: query::ContextViewOptions,
 ) -> Result<()> {
+    let context = query::context_value(&output.context, view_options)?;
+    let value = serde_json::json!({
+        "instruction": &output.instruction,
+        "memory": &output.memory,
+        "context": context
+    });
     match format {
-        AgentOutputFormat::Json => output::json::print(output),
+        AgentOutputFormat::Json => output::json::print(&value),
         AgentOutputFormat::Markdown => {
-            let value = serde_json::to_value(output)?;
             let context = value.get("context").unwrap_or(&value);
             let grep_policy = value
                 .get("instruction")
@@ -3789,6 +4030,11 @@ fn context_markdown(context: &serde_json::Value, grep_policy: &str) -> String {
         output.push_str(&format!("Root: {root}\n"));
     }
     output.push_str(&format!("Grep policy: {grep_policy}\n\n"));
+    if let Some(tokens) = json_usize(context, &["retrieval_cost", "retrieval_model_tokens"]) {
+        output.push_str(&format!(
+            "Retrieval cost: {tokens} AI model tokens for local retrieval. Returned context still counts when read.\n\n"
+        ));
+    }
     output.push_str("## Read First\n");
 
     let files = context
@@ -6096,6 +6342,7 @@ fn begin_task(
     task: &str,
     client: AgentClient,
     trace_out: Option<&Path>,
+    proof_trace: bool,
     limit: usize,
     snippets_per_file: usize,
 ) -> Result<BeginOutput> {
@@ -6103,7 +6350,7 @@ fn begin_task(
     let mut context = query::build_context(root, &index, task, limit, snippets_per_file, true)?;
     context.add_index_load_time(index_load_ms);
     let context_value = serde_json::to_value(&context)?;
-    let files_read = context_read_first_files(&context_value);
+    let context_selected_files = context_read_first_files(&context_value);
     let tokens = serde_json::to_string(&context_value)
         .map(|json| json.len().div_ceil(4))
         .unwrap_or_default();
@@ -6116,15 +6363,20 @@ fn begin_task(
             client,
             default_agent_model(client),
             trace,
-            files_read.clone(),
-            files_read.clone(),
+            context_selected_files.clone(),
+            context_selected_files.clone(),
         )?;
-        let event = session_event(
+        if proof_trace {
+            mark_explicit_proof_trace(trace)?;
+        }
+        let event = session_event_with_token_evidence(
             trace,
             &command,
-            files_read,
+            Vec::new(),
+            context_selected_files.clone(),
             Some(tokens),
             Some(SessionPhase::Callsieve),
+            None,
         )?
         .event;
         (Some(trace.display().to_string()), event)
@@ -6134,7 +6386,8 @@ fn begin_task(
             serde_json::json!({
                 "timestamp": now_unix_seconds(),
                 "command": command,
-                "files_read": files_read,
+                "files_read": [],
+                "context_selected_files": context_selected_files.clone(),
                 "tokens": tokens,
                 "classification": "callsieve_context",
                 "phase": "callsieve"
@@ -6143,12 +6396,33 @@ fn begin_task(
     };
 
     let next_step = if let Some(trace_path) = trace_path.as_deref() {
-        format!(
-            "Read read_first files before broad grep; audit with `callsieve trace-check {trace_path} --strict`."
-        )
+        if proof_trace {
+            format!(
+                "Read read_first files before broad grep; append explicit session-event records with tokens and phase, then audit with `callsieve trace-check {trace_path} --strict`."
+            )
+        } else {
+            format!(
+                "Read read_first files before broad grep; audit with `callsieve trace-check {trace_path} --strict`."
+            )
+        }
     } else {
         "Read read_first files before broad grep; pass --trace-out to record an audited trace."
             .to_string()
+    };
+    let proof_next_commands = if proof_trace {
+        trace_path
+            .as_deref()
+            .map(|trace_path| {
+                vec![
+                    format!(
+                        "callsieve session-event {trace_path} --phase callsieve --tokens <transcript_context_tokens> --command \"<command>\" --context-selected-file <file>"
+                    ),
+                    format!("callsieve trace-check {trace_path} --strict"),
+                ]
+            })
+            .unwrap_or_default()
+    } else {
+        Vec::new()
     };
 
     Ok(BeginOutput {
@@ -6158,6 +6432,7 @@ fn begin_task(
         task: task.to_string(),
         policy: "context_first; read returned files before broad grep or repeated file reads",
         next_step,
+        proof_next_commands,
         context,
         trace_event,
         trace_path,
@@ -6453,14 +6728,48 @@ fn session_start(
     })
 }
 
-fn session_event(
-    trace: &Path,
-    command: &str,
-    files_read: Vec<String>,
-    tokens: Option<usize>,
-    phase: Option<SessionPhase>,
-) -> Result<SessionEventOutput> {
-    session_event_with_token_evidence(trace, command, files_read, Vec::new(), tokens, phase, None)
+fn mark_explicit_proof_trace(trace: &Path) -> Result<()> {
+    let mut value = read_trace_value(trace)?;
+    let object = value
+        .as_object_mut()
+        .context("session trace root must be a JSON object")?;
+    if let Some(metadata) = object
+        .get_mut("metadata")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        metadata.insert(
+            "proof_trace_source".to_string(),
+            serde_json::json!("explicit_callsieve_begin"),
+        );
+        metadata.insert(
+            "updated_at".to_string(),
+            serde_json::json!(now_unix_seconds()),
+        );
+    }
+    if let Some(policy) = object
+        .get_mut("policy")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        policy.insert("proof_mode".to_string(), serde_json::json!(true));
+        policy.insert(
+            "post_tool_hook_required".to_string(),
+            serde_json::json!(false),
+        );
+        policy.insert(
+            "event_source".to_string(),
+            serde_json::json!("explicit_session_events"),
+        );
+    }
+    fs::write(trace, serde_json::to_vec_pretty(&value)?)
+        .with_context(|| format!("failed to write {}", trace.display()))
+}
+
+fn trace_proof_mode(value: &serde_json::Value) -> bool {
+    value
+        .get("policy")
+        .and_then(|policy| policy.get("proof_mode"))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
 }
 
 fn session_event_with_token_evidence(
@@ -6473,6 +6782,21 @@ fn session_event_with_token_evidence(
     token_evidence: Option<&serde_json::Value>,
 ) -> Result<SessionEventOutput> {
     let mut value = read_trace_value(trace)?;
+    let proof_mode = trace_proof_mode(&value);
+    if proof_mode && tokens.is_none() {
+        anyhow::bail!(
+            "proof-mode traces require --tokens on every session-event after begin --proof-trace"
+        );
+    }
+    if proof_mode && phase.is_none() {
+        anyhow::bail!(
+            "proof-mode traces require explicit --phase baseline|callsieve on every session-event after begin --proof-trace"
+        );
+    }
+    let classification = classify_session_command(command);
+    if proof_mode && classification == "file_read" && files_read.is_empty() {
+        anyhow::bail!("proof-mode file-read events require at least one --files-read value");
+    }
     let phase_name = phase
         .map(session_phase_name)
         .map(str::to_string)
@@ -6482,7 +6806,7 @@ fn session_event_with_token_evidence(
         "command": command,
         "files_read": files_read,
         "tokens": tokens,
-        "classification": classify_session_command(command),
+        "classification": classification,
         "phase": phase_name
     });
     if !context_selected_files.is_empty() {
@@ -7909,6 +8233,7 @@ fn pilot_task_is_countable(
         && violations == 0
         && observed_collection
         && !trace_has_controlled_replay_marker(&trace_json)
+        && !trace_has_hook_trace_marker(&trace_json)
         && transcript_token_accounting)
 }
 
@@ -8128,6 +8453,15 @@ fn pilot_qa(manifest_path: &Path) -> Result<PilotQaOutput> {
             "trace contains no controlled replay markers".to_string(),
             "trace contains controlled replay markers".to_string(),
         );
+        let no_hook_trace_markers = !trace_has_hook_trace_marker(&trace_json);
+        push_qa(
+            &mut results,
+            &task.id,
+            "hook_trace_markers",
+            no_hook_trace_markers,
+            "trace contains no lifecycle hook trace markers".to_string(),
+            "trace contains lifecycle hook trace markers".to_string(),
+        );
         let trace_token_source = trace_token_accounting_source(&trace_value);
         let transcript_token_accounting = if require_transcript_token_accounting {
             trace_token_source == "transcript_context_tokens"
@@ -8151,6 +8485,7 @@ fn pilot_qa(manifest_path: &Path) -> Result<PilotQaOutput> {
             && violations == 0
             && observed_collection
             && no_controlled_markers
+            && no_hook_trace_markers
             && transcript_token_accounting;
         push_qa(
             &mut results,
@@ -8424,6 +8759,22 @@ fn trace_has_controlled_replay_marker(trace_json: &str) -> bool {
         "deterministic local grep/read replay",
         "baseline simulates grepping",
         "callsieve codex-session",
+    ]
+    .iter()
+    .any(|marker| lower.contains(marker))
+}
+
+fn trace_has_hook_trace_marker(trace_json: &str) -> bool {
+    let lower = trace_json.to_ascii_lowercase();
+    [
+        "_hook_trace",
+        "codex_lifecycle_hooks",
+        "claude_code_lifecycle_hooks",
+        "github_copilot_lifecycle_hooks",
+        "antigravity_cli_lifecycle_hooks",
+        "cline_lifecycle_hooks",
+        "opencode_plugin_hooks",
+        "\"hook_event\"",
     ]
     .iter()
     .any(|marker| lower.contains(marker))
@@ -8958,6 +9309,7 @@ fn codex_hooks_install(
         command: "codex-hooks install",
         status: "pass".to_string(),
         root: root_label(root),
+        profile: CODEX_HOOK_PROFILE,
         strict,
         hooks_file,
         trace_dir,
@@ -8995,6 +9347,14 @@ fn write_codex_hooks_files(
 }
 
 fn codex_hooks_doctor(root: &Path, strict: bool) -> CodexHooksDoctorOutput {
+    codex_hooks_doctor_with_options(root, strict, CodexHooksDoctorOptions::default())
+}
+
+fn codex_hooks_doctor_with_options(
+    root: &Path,
+    strict: bool,
+    options: CodexHooksDoctorOptions,
+) -> CodexHooksDoctorOutput {
     let hooks_path = codex_hooks_path(root);
     let trace_dir = codex_hook_dir(root);
     let content = fs::read_to_string(&hooks_path).ok();
@@ -9070,22 +9430,606 @@ fn codex_hooks_doctor(root: &Path, strict: bool) -> CodexHooksDoctorOutput {
             "Codex hook trace directory will be created on first hook run"
         },
     ));
+    let hooks_hash = hook_hash(command_text);
+    let trust = codex_hook_trust_review(root, &hooks_hash);
     checks.push(check_with_status(
-        "codex_hook_trust",
-        "warn",
-        "Review and trust project hooks in Codex with /hooks before relying on enforcement",
+        "codex_hook_trust_ack",
+        if trust.status == "reviewed" {
+            "pass"
+        } else {
+            "warn"
+        },
+        trust.message.clone(),
     ));
+
+    let mut fixes = Vec::new();
+    if options.fix {
+        match archive_stale_codex_hook_files(root) {
+            Ok(archived) => {
+                if archived.is_empty() {
+                    fixes.push("no stale Codex hook state or trace files found".to_string());
+                } else {
+                    fixes.extend(archived);
+                }
+            }
+            Err(error) => checks.push(enforce_check(
+                "codex_hook_fix_stale_state",
+                false,
+                format!("failed to archive stale Codex hook state: {error}"),
+            )),
+        }
+    }
+
+    if options.smoke {
+        checks.extend(codex_hooks_smoke_checks(root, strict));
+    }
 
     CodexHooksDoctorOutput {
         command: "codex-hooks doctor",
         status: status_from_checks(&checks),
         root: root_label(root),
+        profile: CODEX_HOOK_PROFILE,
         strict,
         hooks_file: repo_relative_display(root, &hooks_path),
         trace_dir: repo_relative_display(root, &trace_dir),
         checks,
+        fixes,
+        trust,
         trust_instruction: "Review and trust project hooks in Codex with /hooks.",
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum HookSmokeExpectation {
+    UserPromptSubmit,
+    CodexNoop {
+        event: &'static str,
+    },
+    CodexPermissionDecision {
+        event: &'static str,
+        expected: &'static str,
+    },
+    EmptyStdout,
+}
+
+fn codex_hooks_smoke_checks(root: &Path, strict: bool) -> Vec<EnforceCheck> {
+    let session_prefix = format!("callsieve-smoke-{}", now_unix_seconds());
+    let cases = vec![
+        (
+            "codex_hook_smoke:user_prompt_submit",
+            "user-prompt-submit",
+            vec!["--limit", "1", "--snippets-per-file", "0"],
+            serde_json::json!({
+                "session_id": format!("{session_prefix}-prompt"),
+                "turn_id": "turn-1",
+                "prompt": "fix hook doctor smoke"
+            })
+            .to_string(),
+            HookSmokeExpectation::UserPromptSubmit,
+        ),
+        (
+            "codex_hook_smoke:pre_tool_use",
+            "pre-tool-use",
+            Vec::new(),
+            serde_json::json!({
+                "session_id": format!("{session_prefix}-pre"),
+                "hook_event_name": "PreToolUse",
+                "tool_name": "Bash",
+                "tool_input": { "command": "rg createSession" }
+            })
+            .to_string(),
+            HookSmokeExpectation::CodexPermissionDecision {
+                event: "PreToolUse",
+                expected: "deny",
+            },
+        ),
+        (
+            "codex_hook_smoke:pre_tool_use_allow",
+            "pre-tool-use",
+            Vec::new(),
+            serde_json::json!({
+                "session_id": format!("{session_prefix}-pre-allow"),
+                "hook_event_name": "PreToolUse",
+                "tool_name": "Bash",
+                "tool_input": { "command": "git status --short" }
+            })
+            .to_string(),
+            HookSmokeExpectation::CodexNoop {
+                event: "PreToolUse",
+            },
+        ),
+        (
+            "codex_hook_smoke:permission_request",
+            "permission-request",
+            Vec::new(),
+            serde_json::json!({
+                "session_id": format!("{session_prefix}-permission"),
+                "hook_event_name": "PermissionRequest",
+                "tool_name": "Bash",
+                "tool_input": { "command": "rg createSession" }
+            })
+            .to_string(),
+            HookSmokeExpectation::CodexPermissionDecision {
+                event: "PermissionRequest",
+                expected: "deny",
+            },
+        ),
+        (
+            "codex_hook_smoke:disabled_post_tool_use",
+            "post-tool-use",
+            Vec::new(),
+            serde_json::json!({
+                "session_id": format!("{session_prefix}-post"),
+                "hook_event_name": "PostToolUse",
+                "tool_name": "Bash",
+                "tool_input": { "command": "sed -n '1,20p' src/cli.rs" }
+            })
+            .to_string(),
+            HookSmokeExpectation::EmptyStdout,
+        ),
+        (
+            "codex_hook_smoke:disabled_stop",
+            "stop",
+            Vec::new(),
+            serde_json::json!({
+                "session_id": format!("{session_prefix}-stop"),
+                "hook_event_name": "Stop",
+                "stop_hook_active": false
+            })
+            .to_string(),
+            HookSmokeExpectation::EmptyStdout,
+        ),
+    ];
+
+    let checks = cases
+        .into_iter()
+        .map(|(check, hook_command, extra_args, input, expectation)| {
+            run_codex_hook_smoke_case(
+                root,
+                strict,
+                check,
+                hook_command,
+                &extra_args,
+                &input,
+                expectation,
+            )
+        })
+        .collect::<Vec<_>>();
+    cleanup_codex_smoke_files(root, &session_prefix);
+    checks
+}
+
+fn run_codex_hook_smoke_case(
+    root: &Path,
+    strict: bool,
+    check: &str,
+    hook_command: &str,
+    extra_args: &[&str],
+    input: &str,
+    expectation: HookSmokeExpectation,
+) -> EnforceCheck {
+    let exe = env::current_exe().unwrap_or_else(|_| PathBuf::from(callsieve_executable_display()));
+    let mut child = match ProcessCommand::new(exe)
+        .arg("codex-hook")
+        .arg(hook_command)
+        .arg(root)
+        .args(strict.then_some("--strict"))
+        .args(extra_args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(error) => {
+            return enforce_check(
+                check,
+                false,
+                format!("failed to spawn hook smoke case: {error}"),
+            );
+        }
+    };
+    if let Some(stdin) = child.stdin.as_mut()
+        && let Err(error) = stdin.write_all(input.as_bytes())
+    {
+        return enforce_check(
+            check,
+            false,
+            format!("failed to write hook smoke input: {error}"),
+        );
+    }
+    let output = match child.wait_with_output() {
+        Ok(output) => output,
+        Err(error) => {
+            return enforce_check(
+                check,
+                false,
+                format!("failed to collect hook smoke output: {error}"),
+            );
+        }
+    };
+    if !output.status.success() {
+        return enforce_check(
+            check,
+            false,
+            format!(
+                "hook smoke case exited nonzero: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ),
+        );
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let validation = validate_hook_smoke_output(&stdout, expectation);
+    let passed = validation.is_ok();
+
+    enforce_check(
+        check,
+        passed,
+        if passed {
+            "hook smoke case passed".to_string()
+        } else {
+            format!(
+                "{}: {stdout}",
+                validation.expect_err("failed validation should have an error")
+            )
+        },
+    )
+}
+
+fn validate_hook_smoke_output(
+    stdout: &str,
+    expectation: HookSmokeExpectation,
+) -> std::result::Result<(), String> {
+    match expectation {
+        HookSmokeExpectation::UserPromptSubmit => {
+            let value = parse_hook_smoke_json(stdout, "Codex UserPromptSubmit")?;
+            let hook = value.get("hookSpecificOutput").ok_or_else(|| {
+                "missing hookSpecificOutput in Codex UserPromptSubmit response".to_string()
+            })?;
+            let event = hook
+                .get("hookEventName")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default();
+            if event != "UserPromptSubmit" {
+                return Err(
+                    "missing hookSpecificOutput.hookEventName UserPromptSubmit in Codex UserPromptSubmit response"
+                        .to_string(),
+                );
+            }
+            if let Some(additional_context) = hook.get("additionalContext")
+                && !additional_context.is_string()
+            {
+                return Err(
+                    "invalid hookSpecificOutput.additionalContext in Codex UserPromptSubmit response"
+                        .to_string(),
+                );
+            }
+            Ok(())
+        }
+        HookSmokeExpectation::CodexNoop { event } => {
+            validate_codex_noop_smoke_output(stdout, event)
+        }
+        HookSmokeExpectation::CodexPermissionDecision { event, expected } => {
+            validate_codex_permission_smoke_output(stdout, event, expected)
+        }
+        HookSmokeExpectation::EmptyStdout => stdout
+            .trim()
+            .is_empty()
+            .then_some(())
+            .ok_or_else(|| "expected empty stdout from disabled Codex hook".to_string()),
+    }
+}
+
+fn validate_codex_noop_smoke_output(stdout: &str, event: &str) -> std::result::Result<(), String> {
+    let value = parse_hook_smoke_json(stdout, &format!("Codex {event}"))?;
+    validate_codex_smoke_top_level(&value, event)?;
+    let hook = value
+        .get("hookSpecificOutput")
+        .ok_or_else(|| format!("missing hookSpecificOutput in Codex {event} response"))?;
+    validate_codex_smoke_event(hook, event)?;
+    if hook.get("permissionDecision").is_some() {
+        return Err(format!(
+            "unsupported hookSpecificOutput.permissionDecision in Codex {event} no-op response"
+        ));
+    }
+    if hook.get("permissionDecisionReason").is_some() {
+        return Err(format!(
+            "unsupported hookSpecificOutput.permissionDecisionReason in Codex {event} no-op response"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_codex_permission_smoke_output(
+    stdout: &str,
+    event: &str,
+    expected: &str,
+) -> std::result::Result<(), String> {
+    let value = parse_hook_smoke_json(stdout, &format!("Codex {event}"))?;
+    validate_codex_smoke_top_level(&value, event)?;
+    let hook = value
+        .get("hookSpecificOutput")
+        .ok_or_else(|| format!("missing hookSpecificOutput in Codex {event} response"))?;
+    validate_codex_smoke_event(hook, event)?;
+    let decision = hook
+        .get("permissionDecision")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| {
+            format!("missing hookSpecificOutput.permissionDecision in Codex {event} response")
+        })?;
+    if decision != expected {
+        return Err(format!(
+            "unexpected hookSpecificOutput.permissionDecision in Codex {event} response"
+        ));
+    }
+    if expected == "deny" {
+        let reason = hook
+            .get("permissionDecisionReason")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        if reason.trim().is_empty() {
+            return Err(format!(
+                "missing hookSpecificOutput.permissionDecisionReason in Codex {event} response"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_codex_smoke_top_level(
+    value: &serde_json::Value,
+    event: &str,
+) -> std::result::Result<(), String> {
+    if value.get("suppressOutput").is_some() {
+        return Err(format!(
+            "unsupported top-level suppressOutput in Codex {event} response"
+        ));
+    }
+    if value.get("decision").is_some() {
+        return Err(format!(
+            "unsupported top-level decision in Codex {event} response"
+        ));
+    }
+    if value.get("reason").is_some() {
+        return Err(format!(
+            "unsupported top-level reason in Codex {event} response"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_codex_smoke_event(
+    hook: &serde_json::Value,
+    event: &str,
+) -> std::result::Result<(), String> {
+    let hook_event = hook
+        .get("hookEventName")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    if hook_event != event {
+        return Err(format!(
+            "missing hookSpecificOutput.hookEventName {event} in Codex {event} response"
+        ));
+    }
+    Ok(())
+}
+
+fn parse_hook_smoke_json(
+    stdout: &str,
+    label: &str,
+) -> std::result::Result<serde_json::Value, String> {
+    serde_json::from_str::<serde_json::Value>(stdout.trim())
+        .map_err(|error| format!("{label} response stdout is not valid JSON: {error}"))
+}
+
+fn cleanup_codex_smoke_files(root: &Path, session_prefix: &str) {
+    let dir = codex_hook_dir(root);
+    let Ok(entries) = fs::read_dir(&dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if name.starts_with(session_prefix) {
+            let _ = fs::remove_file(path);
+        }
+    }
+}
+
+fn archive_stale_codex_hook_files(root: &Path) -> Result<Vec<String>> {
+    let dir = codex_hook_dir(root);
+    if !dir.is_dir() {
+        return Ok(Vec::new());
+    }
+
+    let mut archived = Vec::new();
+    let mut archive_dir = None;
+    for entry in fs::read_dir(&dir).with_context(|| format!("failed to read {}", dir.display()))? {
+        let entry = entry?;
+        let path = entry.path();
+        if !path.is_file() || !codex_hook_file_is_stale(&path) {
+            continue;
+        }
+        let archive_dir = archive_dir.get_or_insert_with(|| {
+            dir.join("archive")
+                .join(format!("contract-{}", now_unix_seconds()))
+        });
+        fs::create_dir_all(&archive_dir)
+            .with_context(|| format!("failed to create {}", archive_dir.display()))?;
+        let dest = unique_archive_path(
+            archive_dir,
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("hook-state.json"),
+        );
+        fs::rename(&path, &dest).with_context(|| {
+            format!("failed to archive stale Codex hook file {}", path.display())
+        })?;
+        archived.push(format!(
+            "archived {} -> {}",
+            repo_relative_display(root, &path),
+            repo_relative_display(root, &dest)
+        ));
+    }
+    archived.sort();
+    Ok(archived)
+}
+
+fn unique_archive_path(dir: &Path, file_name: &str) -> PathBuf {
+    let mut candidate = dir.join(file_name);
+    if !candidate.exists() {
+        return candidate;
+    }
+    for index in 1.. {
+        candidate = dir.join(format!("{index}-{file_name}"));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    unreachable!("unbounded archive suffix loop should always return")
+}
+
+fn codex_hook_file_is_stale(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    if name.starts_with("callsieve-smoke-")
+        || name.starts_with("post-smoke")
+        || name.contains("-smoke")
+    {
+        return true;
+    }
+    if name.ends_with(".state.json") {
+        return fs::read(path)
+            .ok()
+            .and_then(|data| serde_json::from_slice::<serde_json::Value>(&data).ok())
+            .is_some_and(|value| {
+                value
+                    .get("stop_blocked")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false)
+                    || value
+                        .get("violation_seen")
+                        .and_then(serde_json::Value::as_bool)
+                        .unwrap_or(false)
+            });
+    }
+    if name.ends_with(".trace.json") {
+        return fs::read_to_string(path).ok().is_some_and(|content| {
+            content.contains("\"PostToolUse\"")
+                || content.contains("\"Stop\"")
+                || content.contains("post-tool-use")
+        });
+    }
+    false
+}
+
+fn codex_hooks_trust_path(root: &Path) -> PathBuf {
+    codex_hook_dir(root).join("trust-reviewed.json")
+}
+
+fn codex_hook_trust_review(root: &Path, hooks_hash: &str) -> CodexHookTrustReview {
+    let trust_path = codex_hooks_trust_path(root);
+    let trust_file = repo_relative_display(root, &trust_path);
+    let missing = || {
+        CodexHookTrustReview {
+        status: "manual_review_required".to_string(),
+        trust_file: trust_file.clone(),
+        hooks_hash: hooks_hash.to_string(),
+        reviewed_at: None,
+        message: "Review project hooks in Codex with /hooks, then run callsieve codex-hooks trust-ack <repo>.".to_string(),
+    }
+    };
+    if !trust_path.is_file() {
+        return missing();
+    }
+    let Ok(data) = fs::read(&trust_path) else {
+        return CodexHookTrustReview {
+            status: "manual_review_required".to_string(),
+            trust_file,
+            hooks_hash: hooks_hash.to_string(),
+            reviewed_at: None,
+            message:
+                "Codex hook trust marker could not be read; review /hooks and refresh trust-ack."
+                    .to_string(),
+        };
+    };
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(&data) else {
+        return CodexHookTrustReview {
+            status: "manual_review_required".to_string(),
+            trust_file,
+            hooks_hash: hooks_hash.to_string(),
+            reviewed_at: None,
+            message:
+                "Codex hook trust marker is invalid JSON; review /hooks and refresh trust-ack."
+                    .to_string(),
+        };
+    };
+    let reviewed_hash = value
+        .get("hooks_hash")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    let reviewed_profile = value
+        .get("profile")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    let reviewed_at = value.get("reviewed_at").and_then(serde_json::Value::as_u64);
+    if reviewed_hash == hooks_hash && reviewed_profile == CODEX_HOOK_PROFILE {
+        CodexHookTrustReview {
+            status: "reviewed".to_string(),
+            trust_file,
+            hooks_hash: hooks_hash.to_string(),
+            reviewed_at,
+            message: "Codex hook trust marker matches the installed hook file.".to_string(),
+        }
+    } else {
+        CodexHookTrustReview {
+            status: "manual_review_required".to_string(),
+            trust_file,
+            hooks_hash: hooks_hash.to_string(),
+            reviewed_at,
+            message: "Codex hook trust marker does not match the installed hook file; review /hooks and refresh trust-ack.".to_string(),
+        }
+    }
+}
+
+fn codex_hooks_trust_ack(root: &Path) -> Result<CodexHooksTrustAckOutput> {
+    let hooks_path = codex_hooks_path(root);
+    let hooks_text = fs::read_to_string(&hooks_path)
+        .with_context(|| format!("failed to read {}", hooks_path.display()))?;
+    serde_json::from_str::<serde_json::Value>(&hooks_text)
+        .with_context(|| format!("failed to parse {}", hooks_path.display()))?;
+    let hooks_hash = hook_hash(&hooks_text);
+    let trust_path = codex_hooks_trust_path(root);
+    if let Some(parent) = trust_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    let reviewed_at = now_unix_seconds();
+    let value = serde_json::json!({
+        "profile": CODEX_HOOK_PROFILE,
+        "hooks_file": repo_relative_display(root, &hooks_path),
+        "hooks_hash": hooks_hash.clone(),
+        "reviewed_at": reviewed_at,
+        "manual_review": "Human reviewed project hooks in Codex with /hooks before recording this marker."
+    });
+    fs::write(&trust_path, serde_json::to_vec_pretty(&value)?)
+        .with_context(|| format!("failed to write {}", trust_path.display()))?;
+
+    Ok(CodexHooksTrustAckOutput {
+        command: "codex-hooks trust-ack",
+        status: "pass".to_string(),
+        root: root_label(root),
+        profile: CODEX_HOOK_PROFILE,
+        hooks_file: repo_relative_display(root, &hooks_path),
+        trust_file: repo_relative_display(root, &trust_path),
+        hooks_hash,
+        reviewed_at,
+        manual_review: "Review project hooks in Codex with /hooks before using this acknowledgement as evidence.",
+    })
 }
 
 fn codex_hooks_uninstall(root: &Path) -> Result<CodexHooksUninstallOutput> {
@@ -9596,6 +10540,203 @@ fn client_hooks_uninstall(root: &Path, client: HookClient) -> Result<ClientHooks
     })
 }
 
+fn hook_prompt_should_inject_context(prompt: &str) -> bool {
+    let prompt = prompt.trim();
+    if prompt.is_empty() {
+        return false;
+    }
+
+    let tokens = query::formatter::tokenize(prompt);
+    if tokens.is_empty() {
+        return false;
+    }
+
+    let normalized = tokens.join(" ");
+    let low_signal_prompts = [
+        "ok",
+        "okay",
+        "yes",
+        "no",
+        "yep",
+        "nope",
+        "thanks",
+        "thank you",
+        "done",
+        "did it",
+        "i did it",
+        "got it",
+        "all set",
+        "sounds good",
+        "great",
+        "nice",
+        "cool",
+        "perfect",
+        "confirmed",
+        "it worked",
+        "that worked",
+    ];
+    if low_signal_prompts.contains(&normalized.as_str()) {
+        return false;
+    }
+
+    let codebase_intent_terms = [
+        "add",
+        "benchmark",
+        "bug",
+        "build",
+        "cargo",
+        "change",
+        "class",
+        "cli",
+        "code",
+        "compile",
+        "daemon",
+        "debug",
+        "delete",
+        "dependencies",
+        "dependency",
+        "doc",
+        "docs",
+        "error",
+        "explain",
+        "fail",
+        "failing",
+        "failure",
+        "file",
+        "files",
+        "find",
+        "fix",
+        "function",
+        "hook",
+        "hooks",
+        "how",
+        "implement",
+        "investigate",
+        "issue",
+        "mcp",
+        "module",
+        "notes",
+        "python",
+        "readme",
+        "refactor",
+        "release",
+        "repo",
+        "repository",
+        "review",
+        "rust",
+        "shim",
+        "symbol",
+        "test",
+        "tests",
+        "trace",
+        "typescript",
+        "update",
+        "where",
+        "why",
+    ];
+    if tokens
+        .iter()
+        .any(|token| codebase_intent_terms.contains(&token.as_str()))
+    {
+        return true;
+    }
+
+    tokens.len() >= 4
+}
+
+fn effective_task_for_retrieval(root: &Path, task: &str) -> String {
+    let task = task.trim();
+    if !hook_prompt_is_anaphoric_followup(task) {
+        return task.to_string();
+    }
+    query::latest_task_memory_task(root)
+        .map(|previous| format!("{}\nFollow-up: {task}", previous.trim()))
+        .unwrap_or_else(|| task.to_string())
+}
+
+fn hook_effective_prompt_for_retrieval(
+    root: &Path,
+    state: &CodexHookState,
+    prompt: &str,
+) -> String {
+    let prompt = prompt.trim();
+    let previous = state.last_prompt.trim();
+    if !hook_prompt_is_anaphoric_followup(prompt) {
+        return prompt.to_string();
+    }
+    if !previous.is_empty() {
+        return format!("{previous}\nFollow-up: {prompt}");
+    }
+    effective_task_for_retrieval(root, prompt)
+}
+
+fn hook_prompt_is_anaphoric_followup(prompt: &str) -> bool {
+    let tokens = query::formatter::tokenize(prompt);
+    if tokens.is_empty() {
+        return false;
+    }
+    let normalized = tokens.join(" ");
+    let direct_followups = [
+        "do it",
+        "do that",
+        "fix it",
+        "fix that",
+        "keep going",
+        "lets do it",
+        "make it better",
+        "what weak",
+    ];
+    direct_followups.contains(&normalized.as_str())
+        || (tokens.iter().any(|token| token == "fix")
+            && prompt.chars().any(|character| character.is_ascii_digit()))
+}
+
+fn hook_skipped_user_prompt_submit_response() -> serde_json::Value {
+    serde_json::json!({
+        "suppressOutput": true,
+        "hookSpecificOutput": {
+            "hookEventName": "UserPromptSubmit"
+        }
+    })
+}
+
+fn hook_context_intro(client: Option<&str>) -> String {
+    match client {
+        Some(client) => format!(
+            "CallSieve context ready for {client}. Read these files first. Use broad search only if this packet is insufficient."
+        ),
+        None => "CallSieve context ready. Read these files first. Use broad search only if this packet is insufficient.".to_string(),
+    }
+}
+
+fn hook_missing_index_message(root: &Path, retrieval_prompt: &str) -> String {
+    format!(
+        "CallSieve index is missing or stale for {}. Run `callsieve index {}` or `callsieve agent-context {} {:?}` before broad search or repeated file reads.",
+        root.display(),
+        root.display(),
+        root.display(),
+        retrieval_prompt
+    )
+}
+
+fn hook_injected_context_trace_event(
+    root: &Path,
+    retrieval_prompt: &str,
+    context_selected_files: Vec<String>,
+    tokens: usize,
+) -> serde_json::Value {
+    serde_json::json!({
+        "timestamp": now_unix_seconds(),
+        "command": first_required_context_command(root, retrieval_prompt),
+        "files_read": [],
+        "context_selected_files": context_selected_files,
+        "tokens": tokens,
+        "classification": "callsieve_context",
+        "phase": "callsieve",
+        "hook_event": "UserPromptSubmit"
+    })
+}
+
 fn codex_hook_user_prompt_submit(
     root: &Path,
     strict: bool,
@@ -9609,8 +10750,18 @@ fn codex_hook_user_prompt_submit(
     let mut state = load_codex_hook_state(root, &session_id);
     state.turn_id = turn_id;
     state.strict = strict;
+    let retrieval_prompt = hook_effective_prompt_for_retrieval(root, &state, &prompt);
+    let recovered_followup = retrieval_prompt.trim() != prompt.trim();
+    let should_inject = hook_prompt_should_inject_context(&prompt) || recovered_followup;
     state.last_prompt_hash = hook_hash(&prompt);
     state.updated_at = now_unix_seconds();
+    if !should_inject {
+        state.context_seen = false;
+        state.selected_files.clear();
+        save_codex_hook_state(root, &state)?;
+        return Ok(hook_skipped_user_prompt_submit_response());
+    }
+    state.last_prompt = prompt.clone();
 
     let maybe_index = store::json_store::load_index(root).ok();
     let status = query::index_status(root, maybe_index.as_ref());
@@ -9621,8 +10772,14 @@ fn codex_hook_user_prompt_submit(
 
     let additional_context = if fresh {
         let (index, index_load_ms) = load_index_timed(root)?;
-        let mut context =
-            query::build_context(root, &index, &prompt, limit, snippets_per_file, true)?;
+        let mut context = query::build_context(
+            root,
+            &index,
+            &retrieval_prompt,
+            limit,
+            snippets_per_file,
+            true,
+        )?;
         context.add_index_load_time(index_load_ms);
         let context_value = serde_json::to_value(&context)?;
         let files = context_read_first_files(&context_value);
@@ -9634,31 +10791,17 @@ fn codex_hook_user_prompt_submit(
         append_codex_hook_trace_event(
             root,
             &state,
-            &prompt,
-            serde_json::json!({
-                "timestamp": now_unix_seconds(),
-                "command": first_required_context_command(root, &prompt),
-                "files_read": files,
-                "context_selected_files": state.selected_files.clone(),
-                "tokens": tokens,
-                "classification": "callsieve_context",
-                "phase": "callsieve",
-                "hook_event": "UserPromptSubmit"
-            }),
+            &retrieval_prompt,
+            hook_injected_context_trace_event(root, &retrieval_prompt, files, tokens),
         )?;
         format!(
-            "CallSieve hook context injected. Read these files first; broad search is blocked until CallSieve context is established.\n\n{}",
+            "{}\n\n{}",
+            hook_context_intro(None),
             context_markdown(&context_value, "grep_only_if_context_is_insufficient")
         )
     } else {
         state.context_seen = false;
-        format!(
-            "CallSieve index is missing or stale for {}. Before broad search or repeated file reads, run `callsieve index {}` or `callsieve agent-context {} {:?}`.",
-            root.display(),
-            root.display(),
-            root.display(),
-            prompt
-        )
+        hook_missing_index_message(root, &retrieval_prompt)
     };
 
     save_codex_hook_state(root, &state)?;
@@ -9688,11 +10831,7 @@ fn codex_hook_pre_tool_use(root: &Path, strict: bool) -> Result<serde_json::Valu
             codex_hook_trace_event(&input, &command, false),
         )?;
         save_codex_hook_state(root, &state)?;
-        return Ok(codex_hook_permission_response(
-            "PreToolUse",
-            "allow",
-            "CallSieve context is allowed.",
-        ));
+        return Ok(codex_hook_noop_response("PreToolUse"));
     }
 
     if codex_hook_should_deny(&state, strict, &command) {
@@ -9712,36 +10851,13 @@ fn codex_hook_pre_tool_use(root: &Path, strict: bool) -> Result<serde_json::Valu
     }
 
     save_codex_hook_state(root, &state)?;
-    Ok(codex_hook_permission_response(
-        "PreToolUse",
-        "allow",
-        "Tool use allowed by CallSieve hook policy.",
-    ))
+    Ok(codex_hook_noop_response("PreToolUse"))
 }
 
-fn codex_hook_post_tool_use(root: &Path, strict: bool) -> Result<serde_json::Value> {
-    let input = read_codex_hook_input()?;
-    let session_id = hook_session_id(&input);
-    let task = hook_string_field(&input, &["prompt", "task"]).unwrap_or_default();
-    let mut state = load_codex_hook_state(root, &session_id);
-    state.strict = strict;
-    let command = hook_tool_command(&input);
-    if is_callsieve_context_command_local(&command) {
-        state.context_seen = true;
-    }
-    append_codex_hook_trace_event(
-        root,
-        &state,
-        &task,
-        codex_hook_trace_event(&input, &command, false),
-    )?;
-    save_codex_hook_state(root, &state)?;
-    Ok(serde_json::json!({
-        "suppressOutput": true,
-        "hookSpecificOutput": {
-            "hookEventName": "PostToolUse"
-        }
-    }))
+fn codex_hook_post_tool_use(_root: &Path, _strict: bool) -> Result<()> {
+    let mut input = String::new();
+    let _ = std::io::stdin().read_to_string(&mut input);
+    Ok(())
 }
 
 fn codex_hook_permission_request(root: &Path, strict: bool) -> Result<serde_json::Value> {
@@ -9767,36 +10883,13 @@ fn codex_hook_permission_request(root: &Path, strict: bool) -> Result<serde_json
         ));
     }
     save_codex_hook_state(root, &state)?;
-    Ok(serde_json::json!({
-        "suppressOutput": true,
-        "hookSpecificOutput": {
-            "hookEventName": "PermissionRequest"
-        }
-    }))
+    Ok(codex_hook_noop_response("PermissionRequest"))
 }
 
-fn codex_hook_stop(root: &Path, strict: bool) -> Result<serde_json::Value> {
-    let input = read_codex_hook_input()?;
-    let session_id = hook_session_id(&input);
-    let mut state = load_codex_hook_state(root, &session_id);
-    state.strict = strict;
-    let stop_hook_active = hook_bool_field(&input, &["stop_hook_active", "stopHookActive"]);
-    if strict && state.violation_seen && !state.stop_blocked && !stop_hook_active {
-        state.stop_blocked = true;
-        state.updated_at = now_unix_seconds();
-        save_codex_hook_state(root, &state)?;
-        return Ok(serde_json::json!({
-            "decision": "block",
-            "reason": "CallSieve blocked broad search or file reads before context. Continue from the injected CallSieve read-first context before broad search."
-        }));
-    }
-    save_codex_hook_state(root, &state)?;
-    Ok(serde_json::json!({
-        "suppressOutput": true,
-        "hookSpecificOutput": {
-            "hookEventName": "Stop"
-        }
-    }))
+fn codex_hook_stop(_root: &Path, _strict: bool) -> Result<()> {
+    let mut input = String::new();
+    let _ = std::io::stdin().read_to_string(&mut input);
+    Ok(())
 }
 
 fn claude_hook_user_prompt_submit(
@@ -9813,8 +10906,18 @@ fn claude_hook_user_prompt_submit(
     let mut state = load_claude_hook_state(root, &session_id);
     state.turn_id = turn_id;
     state.strict = strict;
+    let retrieval_prompt = hook_effective_prompt_for_retrieval(root, &state, &prompt);
+    let recovered_followup = retrieval_prompt.trim() != prompt.trim();
+    let should_inject = hook_prompt_should_inject_context(&prompt) || recovered_followup;
     state.last_prompt_hash = hook_hash(&prompt);
     state.updated_at = now_unix_seconds();
+    if !should_inject {
+        state.context_seen = false;
+        state.selected_files.clear();
+        save_claude_hook_state(root, &state)?;
+        return Ok(hook_skipped_user_prompt_submit_response());
+    }
+    state.last_prompt = prompt.clone();
 
     let maybe_index = store::json_store::load_index(root).ok();
     let status = query::index_status(root, maybe_index.as_ref());
@@ -9825,8 +10928,14 @@ fn claude_hook_user_prompt_submit(
 
     let additional_context = if fresh {
         let (index, index_load_ms) = load_index_timed(root)?;
-        let mut context =
-            query::build_context(root, &index, &prompt, limit, snippets_per_file, true)?;
+        let mut context = query::build_context(
+            root,
+            &index,
+            &retrieval_prompt,
+            limit,
+            snippets_per_file,
+            true,
+        )?;
         context.add_index_load_time(index_load_ms);
         let context_value = serde_json::to_value(&context)?;
         let files = context_read_first_files(&context_value);
@@ -9838,31 +10947,17 @@ fn claude_hook_user_prompt_submit(
         append_claude_hook_trace_event(
             root,
             &state,
-            &prompt,
-            serde_json::json!({
-                "timestamp": now_unix_seconds(),
-                "command": first_required_context_command(root, &prompt),
-                "files_read": files,
-                "context_selected_files": state.selected_files.clone(),
-                "tokens": tokens,
-                "classification": "callsieve_context",
-                "phase": "callsieve",
-                "hook_event": "UserPromptSubmit"
-            }),
+            &retrieval_prompt,
+            hook_injected_context_trace_event(root, &retrieval_prompt, files, tokens),
         )?;
         format!(
-            "CallSieve Claude hook context injected. Read these files first; broad search is blocked until CallSieve context is established.\n\n{}",
+            "{}\n\n{}",
+            hook_context_intro(Some("Claude")),
             context_markdown(&context_value, "grep_only_if_context_is_insufficient")
         )
     } else {
         state.context_seen = false;
-        format!(
-            "CallSieve index is missing or stale for {}. Before broad search or repeated file reads, run `callsieve index {}` or `callsieve agent-context {} {:?}`.",
-            root.display(),
-            root.display(),
-            root.display(),
-            prompt
-        )
+        hook_missing_index_message(root, &retrieval_prompt)
     };
 
     save_claude_hook_state(root, &state)?;
@@ -9893,7 +10988,7 @@ fn claude_hook_pre_tool_use(root: &Path, strict: bool) -> Result<serde_json::Val
             codex_hook_trace_event(&input, &command, false),
         )?;
         save_claude_hook_state(root, &state)?;
-        return Ok(codex_hook_permission_response(
+        return Ok(claude_hook_pre_tool_response(
             "PreToolUse",
             "allow",
             "CallSieve context is allowed.",
@@ -9909,7 +11004,7 @@ fn claude_hook_pre_tool_use(root: &Path, strict: bool) -> Result<serde_json::Val
             codex_hook_trace_event(&input, &command, true),
         )?;
         save_claude_hook_state(root, &state)?;
-        return Ok(codex_hook_permission_response(
+        return Ok(claude_hook_pre_tool_response(
             "PreToolUse",
             "deny",
             &codex_hook_denial_reason(&command, strict),
@@ -9917,7 +11012,7 @@ fn claude_hook_pre_tool_use(root: &Path, strict: bool) -> Result<serde_json::Val
     }
 
     save_claude_hook_state(root, &state)?;
-    Ok(codex_hook_permission_response(
+    Ok(claude_hook_pre_tool_response(
         "PreToolUse",
         "allow",
         "Tool use allowed by CallSieve hook policy.",
@@ -9981,22 +11076,9 @@ fn claude_hook_permission_request(root: &Path, strict: bool) -> Result<serde_jso
     }))
 }
 
-fn claude_hook_stop(root: &Path, strict: bool) -> Result<serde_json::Value> {
-    let input = read_claude_hook_input()?;
-    let session_id = hook_session_id(&input);
-    let mut state = load_claude_hook_state(root, &session_id);
-    state.strict = strict;
-    let stop_hook_active = hook_bool_field(&input, &["stop_hook_active", "stopHookActive"]);
-    if strict && state.violation_seen && !state.stop_blocked && !stop_hook_active {
-        state.stop_blocked = true;
-        state.updated_at = now_unix_seconds();
-        save_claude_hook_state(root, &state)?;
-        return Ok(serde_json::json!({
-            "decision": "block",
-            "reason": "CallSieve blocked broad search or file reads before context. Continue from the injected CallSieve read-first context before broad search."
-        }));
-    }
-    save_claude_hook_state(root, &state)?;
+fn claude_hook_stop(_root: &Path, _strict: bool) -> Result<serde_json::Value> {
+    let mut input = String::new();
+    let _ = std::io::stdin().read_to_string(&mut input);
     Ok(serde_json::json!({
         "suppressOutput": true,
         "hookSpecificOutput": {
@@ -10036,8 +11118,18 @@ fn client_hook_user_prompt_submit(
     let mut state = load_client_hook_state(root, client, &session_id);
     state.turn_id = turn_id;
     state.strict = strict;
+    let retrieval_prompt = hook_effective_prompt_for_retrieval(root, &state, &prompt);
+    let recovered_followup = retrieval_prompt.trim() != prompt.trim();
+    let should_inject = hook_prompt_should_inject_context(&prompt) || recovered_followup;
     state.last_prompt_hash = hook_hash(&prompt);
     state.updated_at = now_unix_seconds();
+    if !should_inject {
+        state.context_seen = false;
+        state.selected_files.clear();
+        save_client_hook_state(root, client, &state)?;
+        return Ok(hook_skipped_user_prompt_submit_response());
+    }
+    state.last_prompt = prompt.clone();
 
     let maybe_index = store::json_store::load_index(root).ok();
     let status = query::index_status(root, maybe_index.as_ref());
@@ -10048,8 +11140,14 @@ fn client_hook_user_prompt_submit(
 
     let additional_context = if fresh {
         let (index, index_load_ms) = load_index_timed(root)?;
-        let mut context =
-            query::build_context(root, &index, &prompt, limit, snippets_per_file, true)?;
+        let mut context = query::build_context(
+            root,
+            &index,
+            &retrieval_prompt,
+            limit,
+            snippets_per_file,
+            true,
+        )?;
         context.add_index_load_time(index_load_ms);
         let context_value = serde_json::to_value(&context)?;
         let files = context_read_first_files(&context_value);
@@ -10062,32 +11160,17 @@ fn client_hook_user_prompt_submit(
             root,
             client,
             &state,
-            &prompt,
-            serde_json::json!({
-                "timestamp": now_unix_seconds(),
-                "command": first_required_context_command(root, &prompt),
-                "files_read": files,
-                "context_selected_files": state.selected_files.clone(),
-                "tokens": tokens,
-                "classification": "callsieve_context",
-                "phase": "callsieve",
-                "hook_event": "UserPromptSubmit"
-            }),
+            &retrieval_prompt,
+            hook_injected_context_trace_event(root, &retrieval_prompt, files, tokens),
         )?;
         format!(
-            "CallSieve {} hook context injected. Read these files first; broad search is blocked until CallSieve context is established.\n\n{}",
-            hook_client_display(client),
+            "{}\n\n{}",
+            hook_context_intro(Some(hook_client_display(client))),
             context_markdown(&context_value, "grep_only_if_context_is_insufficient")
         )
     } else {
         state.context_seen = false;
-        format!(
-            "CallSieve index is missing or stale for {}. Before broad search or repeated file reads, run `callsieve index {}` or `callsieve agent-context {} {:?}`.",
-            root.display(),
-            root.display(),
-            root.display(),
-            prompt
-        )
+        hook_missing_index_message(root, &retrieval_prompt)
     };
 
     save_client_hook_state(root, client, &state)?;
@@ -10126,7 +11209,7 @@ fn client_hook_pre_tool_use(
             codex_hook_trace_event(&input, &command, false),
         )?;
         save_client_hook_state(root, client, &state)?;
-        return Ok(codex_hook_permission_response(
+        return Ok(client_hook_permission_response(
             "PreToolUse",
             "allow",
             "CallSieve context is allowed.",
@@ -10143,7 +11226,7 @@ fn client_hook_pre_tool_use(
             codex_hook_trace_event(&input, &command, true),
         )?;
         save_client_hook_state(root, client, &state)?;
-        return Ok(codex_hook_permission_response(
+        return Ok(client_hook_permission_response(
             "PreToolUse",
             "deny",
             &codex_hook_denial_reason(&command, strict),
@@ -10151,7 +11234,7 @@ fn client_hook_pre_tool_use(
     }
 
     save_client_hook_state(root, client, &state)?;
-    Ok(codex_hook_permission_response(
+    Ok(client_hook_permission_response(
         "PreToolUse",
         "allow",
         "Tool use allowed by CallSieve hook policy.",
@@ -10217,7 +11300,7 @@ fn client_hook_permission_request(
             codex_hook_trace_event(&input, &command, true),
         )?;
         save_client_hook_state(root, client, &state)?;
-        return Ok(codex_hook_permission_response(
+        return Ok(client_hook_permission_response(
             "PermissionRequest",
             "deny",
             &codex_hook_denial_reason(&command, strict),
@@ -10232,22 +11315,9 @@ fn client_hook_permission_request(
     }))
 }
 
-fn client_hook_stop(root: &Path, client: HookClient, strict: bool) -> Result<serde_json::Value> {
-    let input = read_hook_input(hook_client_display(client))?;
-    let session_id = hook_session_id(&input);
-    let mut state = load_client_hook_state(root, client, &session_id);
-    state.strict = strict;
-    let stop_hook_active = hook_bool_field(&input, &["stop_hook_active", "stopHookActive"]);
-    if strict && state.violation_seen && !state.stop_blocked && !stop_hook_active {
-        state.stop_blocked = true;
-        state.updated_at = now_unix_seconds();
-        save_client_hook_state(root, client, &state)?;
-        return Ok(serde_json::json!({
-            "decision": "block",
-            "reason": "CallSieve blocked broad search or file reads before context. Continue from the injected CallSieve read-first context before broad search."
-        }));
-    }
-    save_client_hook_state(root, client, &state)?;
+fn client_hook_stop(_root: &Path, _client: HookClient, _strict: bool) -> Result<serde_json::Value> {
+    let mut input = String::new();
+    let _ = std::io::stdin().read_to_string(&mut input);
     Ok(serde_json::json!({
         "suppressOutput": true,
         "hookSpecificOutput": {
@@ -10301,6 +11371,7 @@ fn install_hook(
             command: "codex-hooks install",
             status: "pass".to_string(),
             root: root_label(root),
+            profile: CODEX_HOOK_PROFILE,
             strict,
             hooks_file,
             trace_dir,
@@ -10367,6 +11438,7 @@ fn install_hook(
 fn hook_doctor(root: &Path) -> HookDoctorOutput {
     let launchers = hook_launcher_paths(root);
     let launchers_installed = launchers.iter().all(|path| path.is_file());
+    let mut integrations = Vec::new();
     let mut checks = vec![enforce_check(
         "hook_launchers",
         launchers_installed,
@@ -10393,38 +11465,110 @@ fn hook_doctor(root: &Path) -> HookDoctorOutput {
         .to_string();
     }
     checks.extend(shim.checks.iter().cloned());
-    let status = if checks.iter().all(|check| check.status == "pass") {
-        "pass"
-    } else {
-        "fail"
-    }
-    .to_string();
 
-    let client_hooks = [
+    if codex_hooks_path(root).is_file() {
+        let doctor = codex_hooks_doctor(root, false);
+        checks.push(enforce_check(
+            "codex_hooks",
+            doctor.status == "pass",
+            if doctor.status == "pass" {
+                "Codex lifecycle hooks are installed"
+            } else {
+                "Codex lifecycle hooks are missing or stale"
+            },
+        ));
+        integrations.push(hook_doctor_integration_summary(
+            "codex",
+            &doctor.status,
+            &doctor.hooks_file,
+            &doctor.checks,
+        ));
+    }
+
+    if claude_hooks_path(root).is_file() {
+        let doctor = claude_hooks_doctor(root, false);
+        checks.push(enforce_check(
+            "claude_hooks",
+            doctor.status == "pass",
+            if doctor.status == "pass" {
+                "Claude Code lifecycle hooks are installed"
+            } else {
+                "Claude Code lifecycle hooks are missing or stale"
+            },
+        ));
+        integrations.push(hook_doctor_integration_summary(
+            "claude",
+            &doctor.status,
+            &doctor.hooks_file,
+            &doctor.checks,
+        ));
+    }
+
+    for client in [
         HookClient::Copilot,
         HookClient::OpenCode,
         HookClient::Antigravity,
         HookClient::Cline,
-    ]
-    .into_iter()
-    .filter(|client| client_hooks_path(root, *client).is_file())
-    .map(|client| client_hooks_doctor(root, client, false))
-    .collect();
+    ] {
+        if client_hooks_path(root, client).is_file() {
+            let doctor = client_hooks_doctor(root, client, false);
+            checks.push(enforce_check(
+                format!("{}_hooks", hook_client_name(client)),
+                doctor.status == "pass",
+                if doctor.status == "pass" {
+                    format!("{} hooks are installed", hook_client_display(client))
+                } else {
+                    format!("{} hooks are missing or stale", hook_client_display(client))
+                },
+            ));
+            integrations.push(hook_doctor_integration_summary(
+                hook_client_name(client),
+                &doctor.status,
+                &doctor.hooks_file,
+                &doctor.checks,
+            ));
+        }
+    }
+
+    let status = status_from_checks(&checks);
 
     HookDoctorOutput {
         command: "hook doctor",
         status,
         root: root_label(root),
         checks,
-        codex_hooks: codex_hooks_path(root)
-            .is_file()
-            .then(|| codex_hooks_doctor(root, false)),
-        claude_hooks: claude_hooks_path(root)
-            .is_file()
-            .then(|| claude_hooks_doctor(root, false)),
-        client_hooks,
-        path_instruction: shim.path_instruction.clone(),
-        shim,
+        integrations,
+    }
+}
+
+fn hook_doctor_integration_summary(
+    client: &str,
+    status: &str,
+    hooks_file: &str,
+    checks: &[EnforceCheck],
+) -> HookDoctorIntegration {
+    let mut events = checks
+        .iter()
+        .filter(|check| check.status == "pass")
+        .filter_map(|check| {
+            check
+                .check
+                .split_once("hook_event:")
+                .map(|(_, event)| event.to_string())
+        })
+        .collect::<Vec<_>>();
+    events.sort();
+    events.dedup();
+    HookDoctorIntegration {
+        client: client.to_string(),
+        status: status.to_string(),
+        profile: if client == "codex" {
+            CODEX_HOOK_PROFILE.to_string()
+        } else {
+            "lifecycle".to_string()
+        },
+        hooks_file: hooks_file.to_string(),
+        events,
     }
 }
 
@@ -10461,21 +11605,11 @@ fn uninstall_hook(root: &Path) -> Result<ShimOutput> {
     Ok(output)
 }
 
-const CODEX_HOOK_EVENTS: &[&str] = &[
-    "UserPromptSubmit",
-    "PreToolUse",
-    "PostToolUse",
-    "PermissionRequest",
-    "Stop",
-];
+const CODEX_HOOK_EVENTS: &[&str] = &["UserPromptSubmit", "PreToolUse", "PermissionRequest"];
 
-const CODEX_HOOK_COMMAND_NAMES: &[&str] = &[
-    "user-prompt-submit",
-    "pre-tool-use",
-    "post-tool-use",
-    "permission-request",
-    "stop",
-];
+const CODEX_HOOK_COMMAND_NAMES: &[&str] =
+    &["user-prompt-submit", "pre-tool-use", "permission-request"];
+const CODEX_HOOK_PROFILE: &str = "slim";
 
 const CLAUDE_HOOK_EVENTS: &[&str] = &[
     "UserPromptSubmit",
@@ -10686,14 +11820,8 @@ fn codex_hooks_json(
             "PreToolUse": [
                 codex_hook_entry(codex_hook_command_config(root, "pre-tool-use", strict, None))
             ],
-            "PostToolUse": [
-                codex_hook_entry(codex_hook_command_config(root, "post-tool-use", strict, None))
-            ],
             "PermissionRequest": [
                 codex_hook_entry(codex_hook_command_config(root, "permission-request", strict, None))
-            ],
-            "Stop": [
-                codex_hook_entry(codex_hook_command_config(root, "stop", strict, None))
             ]
         }
     })
@@ -11282,13 +12410,6 @@ fn hook_json_string_field(input: &serde_json::Value, fields: &[&str]) -> Option<
         .map(str::to_string)
 }
 
-fn hook_bool_field(input: &serde_json::Value, fields: &[&str]) -> bool {
-    fields
-        .iter()
-        .find_map(|field| input.get(*field).and_then(serde_json::Value::as_bool))
-        .unwrap_or(false)
-}
-
 fn load_codex_hook_state(root: &Path, session_id: &str) -> CodexHookState {
     fs::read(codex_hook_state_path(root, session_id))
         .ok()
@@ -11675,6 +12796,35 @@ fn codex_hook_allowed_pre_context_read(command: &str) -> bool {
 
 fn codex_hook_permission_response(event: &str, decision: &str, reason: &str) -> serde_json::Value {
     serde_json::json!({
+        "hookSpecificOutput": {
+            "hookEventName": event,
+            "permissionDecision": decision,
+            "permissionDecisionReason": reason
+        }
+    })
+}
+
+fn codex_hook_noop_response(event: &str) -> serde_json::Value {
+    serde_json::json!({
+        "hookSpecificOutput": {
+            "hookEventName": event
+        }
+    })
+}
+
+fn claude_hook_pre_tool_response(event: &str, decision: &str, reason: &str) -> serde_json::Value {
+    serde_json::json!({
+        "suppressOutput": true,
+        "hookSpecificOutput": {
+            "hookEventName": event,
+            "permissionDecision": decision,
+            "permissionDecisionReason": reason
+        }
+    })
+}
+
+fn client_hook_permission_response(event: &str, decision: &str, reason: &str) -> serde_json::Value {
+    serde_json::json!({
         "suppressOutput": true,
         "hookSpecificOutput": {
             "hookEventName": event,
@@ -11686,9 +12836,9 @@ fn codex_hook_permission_response(event: &str, decision: &str, reason: &str) -> 
 
 fn codex_hook_denial_reason(command: &str, strict: bool) -> String {
     if strict && is_file_read_command_local(command) && !is_broad_search_command_local(command) {
-        "CallSieve strict mode blocks file reads before context. Use the injected CallSieve context or run callsieve agent-context first.".to_string()
+        "CallSieve needs context before file reads in strict mode. Read the context packet first, or run callsieve agent-context, then retry if needed.".to_string()
     } else {
-        "CallSieve blocks broad repository search before context. Use the injected CallSieve context or run callsieve agent-context first.".to_string()
+        "CallSieve needs context before broad repo search. Read the context packet first, or run callsieve agent-context, then retry if needed.".to_string()
     }
 }
 
@@ -12437,9 +13587,11 @@ fn agent_policy_text(client: AgentClient, first_required_command: &str) -> Strin
         "CallSieve policy for {client_name}:\n\
 1. First command for every coding task: `{first_required_command}`.\n\
 2. {mcp_hint}\n\
-3. Read the returned `read_first` files before broad grep, rg, repository-wide search, or repeated file reads.\n\
-4. grep only if the context packet is insufficient, and preserve why it was insufficient in the task notes or trace.\n\
-5. For audited sessions, run `callsieve enforce <repo> --client {client_name} --trace <trace.json> --strict`.\n"
+3. Treat `retrieval_cost.retrieval_model_tokens = 0` as retrieval-only; returned context still counts when read.\n\
+4. Read the returned `read_first` files before broad grep, rg, repository-wide search, or repeated file reads.\n\
+5. Use `callsieve_focus`, `callsieve_related`, or `callsieve_tests` for targeted detail before broad search.\n\
+6. Grep only if the context packet is insufficient, and preserve why it was insufficient in the task notes or trace.\n\
+7. For audited sessions, run `callsieve enforce <repo> --client {client_name} --trace <trace.json> --strict`.\n"
     )
 }
 
@@ -12449,8 +13601,10 @@ fn portable_agent_policy_text(client: AgentClient) -> String {
         "CallSieve policy for {client_name}:\n\
 1. Before broad grep, rg, repository-wide search, or repeated file reads, call the CallSieve MCP `callsieve_context` tool when it is available.\n\
 2. If MCP tools are unavailable, run `callsieve agent-context <repo> \"<task>\"` from this workspace.\n\
-3. Read the returned `read_first` files first.\n\
-4. Grep only if the context packet is insufficient, and record why it was insufficient in task notes or trace.\n"
+3. Treat `retrieval_cost.retrieval_model_tokens = 0` as retrieval-only; returned context still counts when read.\n\
+4. Read the returned `read_first` files first.\n\
+5. Use focused CallSieve follow-up tools before broad search.\n\
+6. Grep only if the context packet is insufficient, and record why it was insufficient in task notes or trace.\n"
     )
 }
 
@@ -13746,11 +14900,96 @@ mod tests {
         assert!(!command.contains("claude -p \""));
     }
 
+    #[test]
+    fn codex_hook_smoke_validation_accepts_codex_permission_schema() {
+        validate_hook_smoke_output(
+            r#"{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"CallSieve needs context before broad repo search."}}"#,
+            HookSmokeExpectation::CodexPermissionDecision {
+                event: "PreToolUse",
+                expected: "deny",
+            },
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn codex_hook_smoke_validation_rejects_allow_decision_for_noop() {
+        validate_hook_smoke_output(
+            r#"{"hookSpecificOutput":{"hookEventName":"PreToolUse"}}"#,
+            HookSmokeExpectation::CodexNoop {
+                event: "PreToolUse",
+            },
+        )
+        .unwrap();
+
+        let error = validate_hook_smoke_output(
+            r#"{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":"allowed"}}"#,
+            HookSmokeExpectation::CodexNoop {
+                event: "PreToolUse",
+            },
+        )
+        .unwrap_err();
+        assert_eq!(
+            error,
+            "unsupported hookSpecificOutput.permissionDecision in Codex PreToolUse no-op response"
+        );
+    }
+
+    #[test]
+    fn codex_hook_smoke_validation_rejects_unsupported_top_level_fields() {
+        let expectation = HookSmokeExpectation::CodexPermissionDecision {
+            event: "PreToolUse",
+            expected: "deny",
+        };
+
+        let suppress = validate_hook_smoke_output(
+            r#"{"suppressOutput":true,"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"blocked"}}"#,
+            expectation,
+        )
+        .unwrap_err();
+        assert_eq!(
+            suppress,
+            "unsupported top-level suppressOutput in Codex PreToolUse response"
+        );
+
+        let decision = validate_hook_smoke_output(
+            r#"{"decision":"deny","hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"blocked"}}"#,
+            expectation,
+        )
+        .unwrap_err();
+        assert_eq!(
+            decision,
+            "unsupported top-level decision in Codex PreToolUse response"
+        );
+
+        let reason = validate_hook_smoke_output(
+            r#"{"reason":"blocked","hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"blocked"}}"#,
+            expectation,
+        )
+        .unwrap_err();
+        assert_eq!(
+            reason,
+            "unsupported top-level reason in Codex PreToolUse response"
+        );
+    }
+
     fn parses_all_commands_inner() {
         Cli::try_parse_from(["callsieve", "index", "."]).unwrap();
         Cli::try_parse_from(["callsieve", "index", ".", "--lsp"]).unwrap();
         Cli::try_parse_from(["callsieve", "symbols", "."]).unwrap();
         Cli::try_parse_from(["callsieve", "symbol", ".", "UserService"]).unwrap();
+        Cli::try_parse_from([
+            "callsieve",
+            "focus",
+            ".",
+            "--file",
+            "src/query/mod.rs",
+            "--symbol",
+            "build_context",
+        ])
+        .unwrap();
+        Cli::try_parse_from(["callsieve", "related", ".", "--file", "src/query/mod.rs"]).unwrap();
+        Cli::try_parse_from(["callsieve", "tests", ".", "--file", "src/query/mod.rs"]).unwrap();
         Cli::try_parse_from(["callsieve", "query", ".", "where is auth handled?"]).unwrap();
         Cli::try_parse_from([
             "callsieve",
@@ -13774,11 +15013,35 @@ mod tests {
             "context",
             ".",
             "change token expiry",
+            "--profile",
+            "skim",
+            "--token-budget",
+            "1200",
+        ])
+        .unwrap();
+        Cli::try_parse_from([
+            "callsieve",
+            "context",
+            ".",
+            "change token expiry",
             "--format",
             "markdown",
         ])
         .unwrap();
         Cli::try_parse_from(["callsieve", "agent-context", ".", "change token expiry"]).unwrap();
+        Cli::try_parse_from([
+            "callsieve",
+            "agent-context",
+            ".",
+            "change token expiry",
+            "--profile",
+            "full",
+            "--snippets-per-file",
+            "1",
+            "--token-budget",
+            "4000",
+        ])
+        .unwrap();
         Cli::try_parse_from([
             "callsieve",
             "agent-context",
@@ -14168,6 +15431,17 @@ mod tests {
         .unwrap();
         Cli::try_parse_from(["callsieve", "codex-hooks", "install", ".", "--strict"]).unwrap();
         Cli::try_parse_from(["callsieve", "codex-hooks", "doctor", ".", "--strict"]).unwrap();
+        Cli::try_parse_from([
+            "callsieve",
+            "codex-hooks",
+            "doctor",
+            ".",
+            "--strict",
+            "--smoke",
+            "--fix",
+        ])
+        .unwrap();
+        Cli::try_parse_from(["callsieve", "codex-hooks", "trust-ack", "."]).unwrap();
         Cli::try_parse_from(["callsieve", "codex-hooks", "uninstall", "."]).unwrap();
         Cli::try_parse_from([
             "callsieve",
@@ -14280,6 +15554,18 @@ mod tests {
             "codex",
             "--trace-out",
             "benchmarks/begin-trace.json",
+        ])
+        .unwrap();
+        Cli::try_parse_from([
+            "callsieve",
+            "begin",
+            ".",
+            "change token expiry",
+            "--client",
+            "codex",
+            "--trace-out",
+            "benchmarks/proof-begin-trace.json",
+            "--proof-trace",
         ])
         .unwrap();
         Cli::try_parse_from([

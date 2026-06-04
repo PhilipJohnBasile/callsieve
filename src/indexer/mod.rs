@@ -264,10 +264,13 @@ fn is_config_file(path: &str) -> bool {
 }
 
 fn content_terms(content: &str, language: Language) -> Vec<String> {
-    if language.is_code() {
-        return Vec::new();
-    }
-
+    let code_content;
+    let content = if language.is_code() {
+        code_content = strip_comment_only_lines(content);
+        code_content.as_str()
+    } else {
+        content
+    };
     let mut counts = BTreeMap::new();
     for token in tokenize_content(content) {
         *counts.entry(token).or_insert(0usize) += 1;
@@ -277,9 +280,23 @@ fn content_terms(content: &str, language: Language) -> Vec<String> {
     ranked_terms.sort_by(|left, right| right.1.cmp(&left.1).then(left.0.cmp(&right.0)));
     ranked_terms
         .into_iter()
-        .take(120)
+        .take(if language.is_code() { 80 } else { 120 })
         .map(|(term, _)| term)
         .collect()
+}
+
+fn strip_comment_only_lines(content: &str) -> String {
+    content
+        .lines()
+        .filter(|line| {
+            let trimmed = line.trim_start();
+            !(trimmed.starts_with("//")
+                || trimmed.starts_with('#')
+                || trimmed.starts_with("/*")
+                || trimmed.starts_with('*'))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn tokenize_content(input: &str) -> Vec<String> {

@@ -52,6 +52,12 @@ fn json_allow_failure(output: &Output) -> Value {
     serde_json::from_slice(&output.stdout).expect("stdout should be valid JSON")
 }
 
+fn assert_no_codex_unsupported_top_level(output: &Value) {
+    assert!(output.get("suppressOutput").is_none());
+    assert!(output.get("decision").is_none());
+    assert!(output.get("reason").is_none());
+}
+
 fn write(path: impl AsRef<Path>, content: &str) {
     let path = path.as_ref();
     if let Some(parent) = path.parent() {
@@ -400,6 +406,108 @@ fn query_ranks_exact_code_context_and_returns_snippet() {
 }
 
 #[test]
+fn query_compacts_related_test_symbols() {
+    let repo = tempfile::tempdir().unwrap();
+    let root = repo.path();
+    write(
+        root.join("src/api.ts"),
+        "export function handleRequest() {\n  return true;\n}\n",
+    );
+    write(
+        root.join("src/api.test.ts"),
+        "import { handleRequest } from './api';\n\
+         function apiCase01() { return handleRequest(); }\n\
+         function apiCase02() { return handleRequest(); }\n\
+         function apiCase03() { return handleRequest(); }\n\
+         function apiCase04() { return handleRequest(); }\n\
+         function apiCase05() { return handleRequest(); }\n\
+         function apiCase06() { return handleRequest(); }\n",
+    );
+    let root = root.to_str().unwrap();
+    json(&run(&["index", root]));
+
+    let query = json(&run(&[
+        "query",
+        root,
+        "where is handleRequest implemented",
+        "--limit",
+        "1",
+        "--no-snippets",
+    ]));
+    let first = &query["matches"][0];
+    assert_eq!(first["file"], "src/api.ts");
+    let related_tests = first["related_tests"].as_array().unwrap();
+    assert_eq!(related_tests.len(), 1);
+    assert!(
+        related_tests[0]["symbols"].as_array().unwrap().len() <= 5,
+        "related test symbols should stay compact: {related_tests:?}"
+    );
+}
+
+#[test]
+fn code_content_terms_help_rank_error_strings() {
+    let repo = tempfile::tempdir().unwrap();
+    let root = repo.path();
+    write(
+        root.join("src/upload.ts"),
+        "export function validateUpload(size: number) {\n  if (size > 10) throw new Error('PAYLOAD_LIMIT_EXCEEDED');\n}\n",
+    );
+    write(
+        root.join("src/noise.ts"),
+        "export function unrelated() {\n  return true;\n}\n// PAYLOAD_LIMIT_EXCEEDED PAYLOAD_LIMIT_EXCEEDED\n",
+    );
+    let root = root.to_str().unwrap();
+    json(&run(&["index", root]));
+
+    let query = json(&run(&[
+        "query",
+        root,
+        "where is PAYLOAD_LIMIT_EXCEEDED handled",
+        "--limit",
+        "3",
+        "--no-snippets",
+    ]));
+
+    assert_eq!(query["matches"][0]["file"], "src/upload.ts");
+}
+
+#[test]
+fn hook_meta_tasks_rank_cli_and_tests_first() {
+    let repo = tempfile::tempdir().unwrap();
+    let root = repo.path();
+    write(
+        root.join("src/cli.rs"),
+        "fn codex_hooks_doctor() {}\nfn codex_hook_pre_tool_use() {}\nfn hook_doctor() {}\n",
+    );
+    write(
+        root.join("tests/cli.rs"),
+        "fn codex_hooks_doctor_smoke_test() {}\n",
+    );
+    write(
+        root.join("src/mcp.rs"),
+        "fn tool_execution_error() {}\n// fix fix fix weak weak\n",
+    );
+    write(
+        root.join("benchmarks/proof-sprint-session-trace.example.json"),
+        r#"{"proof":"trace proof trace proof","events":[{"command":"proof trace"}]}"#,
+    );
+    let root = root.to_str().unwrap();
+    json(&run(&["index", root]));
+
+    let context = json(&run(&[
+        "agent-context",
+        root,
+        "fix codex hook doctor smoke proof trace",
+        "--limit",
+        "3",
+    ]));
+    let files = context["context"]["read_first"].as_array().unwrap();
+
+    assert_eq!(files[0]["file"], "src/cli.rs");
+    assert_eq!(files[1]["file"], "tests/cli.rs");
+}
+
+#[test]
 fn query_and_context_support_why_debug() {
     let repo = fixture_repo();
     let root = repo.path().to_str().unwrap();
@@ -563,9 +671,94 @@ fn agent_context_wraps_context_with_before_grep_guidance() {
         "grep_only_if_context_is_insufficient"
     );
     assert_eq!(
+        output["instruction"]["token_policy"],
+        "zero_ai_model_tokens_for_retrieval; context_packet_tokens_apply_when_read"
+    );
+    assert_eq!(
         output["context"]["read_first"][0]["file"],
         "src/auth/session.ts"
     );
+}
+
+#[test]
+fn agent_context_defaults_to_skim_budgeted_packet_without_snippets() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+    json(&run(&["index", root]));
+
+    let output = json(&run(&[
+        "agent-context",
+        root,
+        "change createSession token behavior",
+    ]));
+    let context = &output["context"];
+    let first = &context["read_first"][0];
+
+    assert_eq!(context["stats"]["profile"], "skim");
+    assert_eq!(context["stats"]["token_budget"], 1200);
+    assert_eq!(context["retrieval_cost"]["retrieval_model_tokens"], 0);
+    assert_eq!(
+        context["retrieval_cost"]["agent_token_cost_scope"],
+        "retrieval_only"
+    );
+    assert!(context["stats"]["estimated_tokens"].as_u64().unwrap() <= 1200);
+    assert!(first.get("snippets").is_none());
+    assert!(first.get("imports").is_none());
+    assert!(first["impact"]["risk"].as_str().is_some());
+    assert!(first["symbols"][0].get("signature").is_none());
+}
+
+#[test]
+fn full_profile_preserves_rich_context_fields() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+    json(&run(&["index", root]));
+
+    let output = json(&run(&[
+        "agent-context",
+        root,
+        "change createSession token behavior",
+        "--profile",
+        "full",
+        "--snippets-per-file",
+        "1",
+        "--token-budget",
+        "10000",
+    ]));
+    let first = &output["context"]["read_first"][0];
+
+    assert_eq!(output["context"]["stats"]["profile"], "full");
+    assert!(
+        first["snippets"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("createSession")
+    );
+    assert!(
+        first["imports"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|file| file == "src/auth/token.ts")
+    );
+    assert!(first["symbols"][0]["signature"].as_str().is_some());
+}
+
+#[test]
+fn pretty_flag_controls_json_formatting() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+    json(&run(&["index", root]));
+
+    let compact = run(&["stats", root]);
+    assert!(compact.status.success());
+    let compact_stdout = String::from_utf8_lossy(&compact.stdout);
+    assert!(!compact_stdout.contains("\n  "));
+
+    let pretty = run(&["--pretty", "stats", root]);
+    assert!(pretty.status.success());
+    let pretty_stdout = String::from_utf8_lossy(&pretty.stdout);
+    assert!(pretty_stdout.contains("\n  "));
 }
 
 #[test]
@@ -598,6 +791,49 @@ fn context_and_agent_context_support_markdown_output() {
     let agent_stdout = String::from_utf8_lossy(&agent.stdout);
     assert!(agent_stdout.contains("# CallSieve Context"));
     assert!(agent_stdout.contains("function `createSession`"));
+}
+
+#[test]
+fn focused_followup_commands_return_targeted_detail() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+    json(&run(&["index", root]));
+
+    let focus = json(&run(&[
+        "focus",
+        root,
+        "--file",
+        "src/auth/session.ts",
+        "--symbol",
+        "createSession",
+    ]));
+    assert_eq!(focus["file"], "src/auth/session.ts");
+    assert_eq!(focus["symbols"][0]["name"], "createSession");
+    assert!(
+        focus["snippets"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("createSession")
+    );
+
+    let related = json(&run(&["related", root, "--file", "src/auth/session.ts"]));
+    assert!(
+        related["imports"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|file| file == "src/auth/token.ts")
+    );
+    assert_eq!(related["blast_radius"]["risk"], "medium");
+
+    let tests = json(&run(&["tests", root, "--file", "src/auth/session.ts"]));
+    assert!(
+        tests["related_tests"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|test| test["file"] == "src/auth/session.test.ts")
+    );
 }
 
 #[test]
@@ -667,13 +903,22 @@ fn mcp_lists_and_calls_context_tool() {
             .unwrap()["description"]
             .as_str()
             .unwrap()
-            .contains("Preferred first tool")
+            .contains("Zero-AI-model-token")
     );
     assert_eq!(responses[2]["result"]["isError"], false);
     assert_eq!(
         responses[2]["result"]["structuredContent"]["read_first"][0]["file"],
         "src/auth/session.ts"
     );
+    assert_eq!(
+        responses[2]["result"]["structuredContent"]["retrieval_cost"]["retrieval_model_tokens"],
+        0
+    );
+    let mcp_text = responses[2]["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap();
+    assert!(mcp_text.contains("zero AI model tokens"));
+    assert!(!mcp_text.contains("\"read_first\""));
     assert_eq!(
         responses[2]["result"]["structuredContent"]["trace_event"]["tool"],
         "callsieve_context"
@@ -830,6 +1075,10 @@ fn benchmark_returns_grep_vs_context_savings_estimate() {
             .unwrap()
             > 0
     );
+    assert_eq!(
+        benchmark["context_payload_reduction"]["retrieval_cost"]["retrieval_model_tokens"],
+        0
+    );
     assert!(
         benchmark["callsieve"]["top_files"]
             .as_array()
@@ -869,6 +1118,10 @@ fn demo_indexes_repo_and_reports_context_reduction() {
         demo["context_payload_reduction"]["label"],
         "context_payload_reduction"
     );
+    assert_eq!(
+        demo["context_payload_reduction"]["retrieval_cost"]["retrieval_model_tokens"],
+        0
+    );
     assert!(
         demo["next_commands"]
             .as_array()
@@ -904,6 +1157,21 @@ fn agent_context_reuses_local_task_memory_hints() {
             .unwrap()
             .iter()
             .any(|file| file == "src/auth/session.ts")
+    );
+
+    let followup = json(&run(&["agent-context", root, "fix 1-5"]));
+    assert!(
+        followup["context"]["task"]
+            .as_str()
+            .unwrap()
+            .contains("Follow-up: fix 1-5")
+    );
+    assert!(
+        followup["context"]["read_first"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|file| file["file"] == "src/auth/session.ts")
     );
 
     let cleared = json(&run(&["memory-clear", root]));
@@ -1292,9 +1560,9 @@ fn observed_session_lifecycle_writes_summary_compatible_trace() {
         trace_path.to_str().unwrap(),
         "--command",
         "callsieve agent-context . \"change createSession token behavior\"",
-        "--files-read",
+        "--context-selected-file",
         "src/auth/session.ts",
-        "--files-read",
+        "--context-selected-file",
         "src/auth/token.ts",
         "--tokens",
         "3000",
@@ -1319,6 +1587,7 @@ fn observed_session_lifecycle_writes_summary_compatible_trace() {
     assert_eq!(summary["controlled_replay_sessions"], 0);
     assert_eq!(summary["token_savings"], 7000);
     assert_eq!(summary["files_still_missed"], 0);
+    assert_eq!(summary["avoided_file_reads"], 1);
 
     let check = json(&run(&[
         "trace-check",
@@ -2266,9 +2535,12 @@ fn callsieve_observed_recording_counts_context_selected_files_without_reads() {
             .unwrap()
             .is_empty()
     );
-    assert_eq!(
-        trace["session"]["callsieve"]["context_selected_files"][0],
-        "src/auth/session.ts"
+    assert!(
+        trace["session"]["callsieve"]["context_selected_files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|file| file == "src/auth/session.ts")
     );
 
     let qa = json(&run(&["pilot-qa", manifest_path.to_str().unwrap()]));
@@ -2580,6 +2852,87 @@ fn proof_report_requires_observed_sessions_and_rejects_mislabeled_replay() {
             .unwrap()
             .iter()
             .any(|failure| failure["check"] == "observed_trace_mislabeled_controlled_replay")
+    );
+
+    write(
+        &trace,
+        r#"{
+  "metadata": {"collection": "codex_hook_trace", "client": "codex", "model": "gpt-5-codex"},
+  "task": "change createSession token behavior",
+  "expected_files": ["src/auth/session.ts"],
+  "baseline": {
+    "grep_commands": 4,
+    "file_reads": 5,
+    "tokens": 10000,
+    "commands": ["rg createSession"],
+    "files_read": ["src/auth/session.ts"]
+  },
+  "callsieve": {
+    "grep_commands": 0,
+    "file_reads": 0,
+    "tokens": 3000,
+    "commands": ["callsieve agent-context . \"change auth\""],
+    "files_read": [],
+    "context_selected_files": ["src/auth/session.ts"]
+  },
+  "policy": {"source": "codex_lifecycle_hooks"},
+  "events": [{"hook_event": "UserPromptSubmit"}]
+}"#,
+    );
+    let hook_trace = json(&run(&[
+        "proof-report",
+        manifest_path.to_str().unwrap(),
+        "--limit",
+        "5",
+    ]));
+    assert_eq!(hook_trace["status"], "fail");
+    assert_eq!(hook_trace["proof"]["observed_sessions"], 0);
+    assert!(
+        hook_trace["failures"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|failure| failure["check"] == "minimum_observed_sessions")
+    );
+
+    write(
+        &trace,
+        r#"{
+  "metadata": {"collection": "observed_session", "client": "codex", "model": "gpt-5-codex"},
+  "task": "change createSession token behavior",
+  "expected_files": ["src/auth/session.ts"],
+  "baseline": {
+    "grep_commands": 4,
+    "file_reads": 5,
+    "tokens": 10000,
+    "commands": ["rg createSession"],
+    "files_read": ["src/auth/session.ts"]
+  },
+  "callsieve": {
+    "grep_commands": 0,
+    "file_reads": 0,
+    "tokens": 3000,
+    "commands": ["callsieve agent-context . \"change auth\""],
+    "files_read": [],
+    "context_selected_files": ["src/auth/session.ts"]
+  },
+  "policy": {"source": "codex_lifecycle_hooks"},
+  "events": [{"hook_event": "UserPromptSubmit"}]
+}"#,
+    );
+    let mislabeled_hook = json(&run(&[
+        "proof-report",
+        manifest_path.to_str().unwrap(),
+        "--limit",
+        "5",
+    ]));
+    assert_eq!(mislabeled_hook["status"], "fail");
+    assert!(
+        mislabeled_hook["failures"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|failure| failure["check"] == "observed_trace_mislabeled_hook_trace")
     );
 }
 
@@ -3374,6 +3727,10 @@ fn benchmark_report_aggregates_two_local_repos() {
     assert_eq!(context_payload["label"], "context_payload_reduction");
     assert_eq!(context_payload["evidence_tier"], "platform_neutral_proxy");
     assert_eq!(context_payload["platform_scope"], "agent_platform_neutral");
+    assert_eq!(
+        context_payload["retrieval_cost"]["retrieval_model_tokens"],
+        0
+    );
     assert!(
         context_payload["warning"]
             .as_str()
@@ -3604,6 +3961,11 @@ fn setup_agent_generates_policy_files() {
             .unwrap()
             .contains("callsieve_context")
     );
+    assert!(
+        fs::read_to_string(repo.path().join(".codex/CALLSIEVE.md"))
+            .unwrap()
+            .contains("retrieval_cost.retrieval_model_tokens = 0")
+    );
 
     let repo = tempfile::tempdir().unwrap();
     let root = repo.path().to_str().unwrap();
@@ -3613,7 +3975,7 @@ fn setup_agent_generates_policy_files() {
     assert!(
         fs::read_to_string(repo.path().join(".roo/rules/callsieve.md"))
             .unwrap()
-            .contains("grep only if the context packet is insufficient")
+            .contains("Grep only if the context packet is insufficient")
     );
 
     let repo = tempfile::tempdir().unwrap();
@@ -4160,7 +4522,9 @@ fn hook_install_doctor_and_uninstall_manage_repo_local_launchers() {
     let doctor = json(&run(&["hook", "doctor", root]));
     assert_eq!(doctor["command"], "hook doctor");
     assert_eq!(doctor["status"], "pass");
-    assert_eq!(doctor["shim"]["status"], "pass");
+    assert!(doctor.get("shim").is_none());
+    assert!(doctor.get("path_instruction").is_none());
+    assert!(doctor.get("codex_hooks").is_none());
     assert!(
         doctor["checks"]
             .as_array()
@@ -4201,24 +4565,27 @@ fn codex_hooks_install_doctor_and_uninstall_manage_lifecycle_hooks() {
     ]));
     assert_eq!(install["command"], "codex-hooks install");
     assert_eq!(install["status"], "pass");
+    assert_eq!(install["profile"], "slim");
     assert!(repo.path().join(".codex/hooks.json").is_file());
     assert!(repo.path().join(".callsieve/codex-hooks").is_dir());
 
     let hooks: Value =
         serde_json::from_str(&fs::read_to_string(repo.path().join(".codex/hooks.json")).unwrap())
             .unwrap();
-    for event in [
-        "UserPromptSubmit",
-        "PreToolUse",
-        "PostToolUse",
-        "PermissionRequest",
-        "Stop",
-    ] {
+    for event in ["UserPromptSubmit", "PreToolUse", "PermissionRequest"] {
         assert!(
             hooks["hooks"][event].as_array().is_some(),
             "{event} hook should be installed"
         );
     }
+    assert!(
+        hooks["hooks"].get("PostToolUse").is_none(),
+        "Codex PostToolUse is intentionally not installed"
+    );
+    assert!(
+        hooks["hooks"].get("Stop").is_none(),
+        "Codex Stop is intentionally not installed"
+    );
     let hooks_text = fs::read_to_string(repo.path().join(".codex/hooks.json")).unwrap();
     assert!(hooks_text.contains("commandWindows"));
     assert!(hooks_text.contains("codex-hook"));
@@ -4226,6 +4593,8 @@ fn codex_hooks_install_doctor_and_uninstall_manage_lifecycle_hooks() {
 
     let doctor = json(&run(&["codex-hooks", "doctor", root, "--strict"]));
     assert_eq!(doctor["status"], "pass");
+    assert_eq!(doctor["profile"], "slim");
+    assert_eq!(doctor["trust"]["status"], "manual_review_required");
     assert!(
         doctor["checks"]
             .as_array()
@@ -4235,6 +4604,82 @@ fn codex_hooks_install_doctor_and_uninstall_manage_lifecycle_hooks() {
                 |check| check["check"] == "codex_hook_command_windows" && check["status"] == "pass"
             )
     );
+
+    let trust_ack = json(&run(&["codex-hooks", "trust-ack", root]));
+    assert_eq!(trust_ack["status"], "pass");
+    assert_eq!(trust_ack["profile"], "slim");
+    assert!(
+        repo.path()
+            .join(".callsieve/codex-hooks/trust-reviewed.json")
+            .is_file()
+    );
+    let trusted_doctor = json(&run(&["codex-hooks", "doctor", root, "--strict"]));
+    assert_eq!(trusted_doctor["trust"]["status"], "reviewed");
+    assert!(
+        trusted_doctor["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|check| { check["check"] == "codex_hook_trust_ack" && check["status"] == "pass" })
+    );
+
+    let smoke = json(&run(&[
+        "codex-hooks",
+        "doctor",
+        root,
+        "--strict",
+        "--smoke",
+    ]));
+    assert_eq!(
+        smoke["status"],
+        "pass",
+        "{}",
+        serde_json::to_string_pretty(&smoke).unwrap()
+    );
+    assert!(smoke["checks"].as_array().unwrap().iter().any(|check| {
+        check["check"] == "codex_hook_smoke:disabled_stop" && check["status"] == "pass"
+    }));
+    let smoke_leftovers = fs::read_dir(repo.path().join(".callsieve/codex-hooks"))
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name.starts_with("callsieve-smoke-"))
+        })
+        .count();
+    assert_eq!(smoke_leftovers, 0);
+
+    write(
+        repo.path().join(".callsieve/codex-hooks/old.state.json"),
+        r#"{"version":1,"session_id":"old","violation_seen":true,"stop_blocked":true}"#,
+    );
+    write(
+        repo.path().join(".callsieve/codex-hooks/old.trace.json"),
+        r#"{"events":[{"hook_event":"PostToolUse"}]}"#,
+    );
+    write(
+        repo.path()
+            .join(".callsieve/codex-hooks/post-smoke.state.json"),
+        r#"{"version":1,"session_id":"post-smoke"}"#,
+    );
+    let fixed = json(&run(&["codex-hooks", "doctor", root, "--fix"]));
+    assert_eq!(fixed["status"], "pass");
+    assert!(fixed["fixes"].as_array().unwrap().len() >= 3);
+    assert!(
+        !repo
+            .path()
+            .join(".callsieve/codex-hooks/old.state.json")
+            .exists()
+    );
+    assert!(
+        !repo
+            .path()
+            .join(".callsieve/codex-hooks/post-smoke.state.json")
+            .exists()
+    );
+    assert!(repo.path().join(".callsieve/codex-hooks/archive").is_dir());
 
     let uninstall = json(&run(&["codex-hooks", "uninstall", root]));
     assert_eq!(uninstall["status"], "pass");
@@ -4269,13 +4714,210 @@ fn codex_hook_user_prompt_submit_injects_callsieve_context() {
     let context = output["hookSpecificOutput"]["additionalContext"]
         .as_str()
         .unwrap();
-    assert!(context.contains("CallSieve hook context injected"));
+    assert!(context.contains("CallSieve context ready"));
+    assert!(context.contains("Use broad search only if this packet is insufficient"));
+    assert!(!context.contains("blocked until CallSieve context is established"));
     assert!(context.contains("src/auth/session.ts"));
+    let trace_path = repo
+        .path()
+        .join(".callsieve/codex-hooks/hook-session.trace.json");
+    assert!(trace_path.is_file());
+    let trace: Value = serde_json::from_str(&fs::read_to_string(trace_path).unwrap()).unwrap();
+    assert_eq!(trace["session"]["callsieve"]["file_reads"], 0);
     assert!(
-        repo.path()
-            .join(".callsieve/codex-hooks/hook-session.trace.json")
+        trace["session"]["callsieve"]["files_read"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        trace["session"]["callsieve"]["context_selected_files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|file| file == "src/auth/session.ts")
+    );
+}
+
+#[test]
+fn user_prompt_hooks_skip_low_signal_acknowledgements() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+    json(&run(&["index", root]));
+
+    let codex = json(&run_with_stdin(
+        &["codex-hook", "user-prompt-submit", root, "--strict"],
+        r#"{
+  "session_id": "codex-skip",
+  "turn_id": "turn-1",
+  "prompt": "i did it"
+}"#,
+    ));
+    assert_eq!(
+        codex["hookSpecificOutput"]["hookEventName"],
+        "UserPromptSubmit"
+    );
+    assert!(
+        codex["hookSpecificOutput"]
+            .get("additionalContext")
+            .is_none()
+    );
+    assert!(
+        !repo
+            .path()
+            .join(".callsieve/codex-hooks/codex-skip.trace.json")
             .is_file()
     );
+
+    let denied = json(&run_with_stdin(
+        &["codex-hook", "pre-tool-use", root, "--strict"],
+        r#"{
+  "session_id": "codex-skip",
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Bash",
+  "tool_input": { "command": "rg createSession" }
+}"#,
+    ));
+    assert_eq!(denied["hookSpecificOutput"]["permissionDecision"], "deny");
+
+    let claude = json(&run_with_stdin(
+        &["claude-hook", "user-prompt-submit", root, "--strict"],
+        r#"{
+  "session_id": "claude-skip",
+  "turn_id": "turn-1",
+  "prompt": "i did it"
+}"#,
+    ));
+    assert!(
+        claude["hookSpecificOutput"]
+            .get("additionalContext")
+            .is_none()
+    );
+    assert!(
+        !repo
+            .path()
+            .join(".callsieve/claude-hooks/claude-skip.trace.json")
+            .is_file()
+    );
+
+    let copilot = json(&run_with_stdin(
+        &["copilot-hook", "user-prompt-submit", root, "--strict"],
+        r#"{
+  "session_id": "copilot-skip",
+  "turn_id": "turn-1",
+  "prompt": "i did it"
+}"#,
+    ));
+    assert!(
+        copilot["hookSpecificOutput"]
+            .get("additionalContext")
+            .is_none()
+    );
+    assert!(
+        !repo
+            .path()
+            .join(".callsieve/copilot-hooks/copilot-skip.trace.json")
+            .is_file()
+    );
+}
+
+#[test]
+fn user_prompt_hooks_reuse_previous_task_for_anaphoric_followups() {
+    let repo = tempfile::tempdir().unwrap();
+    let root_path = repo.path();
+    write(
+        root_path.join("src/cli.rs"),
+        "fn codex_hooks_doctor() {}\nfn codex_hook_pre_tool_use() {}\nfn hook_doctor() {}\n",
+    );
+    write(
+        root_path.join("tests/cli.rs"),
+        "fn codex_hooks_doctor_smoke_test() {}\n",
+    );
+    write(root_path.join("src/mcp.rs"), "fn unrelated() {}\n");
+    let root = root_path.to_str().unwrap();
+    json(&run(&["index", root]));
+
+    let first = json(&run_with_stdin(
+        &[
+            "codex-hook",
+            "user-prompt-submit",
+            root,
+            "--strict",
+            "--limit",
+            "3",
+            "--snippets-per-file",
+            "0",
+        ],
+        r#"{
+  "session_id": "codex-followup",
+  "turn_id": "turn-1",
+  "prompt": "what is broken with the hooks doctor smoke"
+}"#,
+    ));
+    assert!(
+        first["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap()
+            .contains("src/cli.rs")
+    );
+
+    let second = json(&run_with_stdin(
+        &[
+            "codex-hook",
+            "user-prompt-submit",
+            root,
+            "--strict",
+            "--limit",
+            "3",
+            "--snippets-per-file",
+            "0",
+        ],
+        r#"{
+  "session_id": "codex-followup",
+  "turn_id": "turn-2",
+  "prompt": "fix 1-5"
+}"#,
+    ));
+    let context = second["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap();
+    assert!(context.contains("src/cli.rs"));
+    assert!(context.contains("Follow-up: fix 1-5"));
+}
+
+#[test]
+fn user_prompt_hooks_recover_cold_followup_from_task_memory() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+    json(&run(&["index", root]));
+    json(&run(&[
+        "agent-context",
+        root,
+        "change createSession token behavior",
+    ]));
+
+    let output = json(&run_with_stdin(
+        &[
+            "codex-hook",
+            "user-prompt-submit",
+            root,
+            "--strict",
+            "--limit",
+            "6",
+            "--snippets-per-file",
+            "0",
+        ],
+        r#"{
+  "session_id": "codex-cold-followup",
+  "turn_id": "turn-1",
+  "prompt": "do it"
+}"#,
+    ));
+    let context = output["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap();
+    assert!(context.contains("src/auth/session.ts"));
+    assert!(context.contains("Follow-up: do it"));
 }
 
 #[test]
@@ -4295,11 +4937,13 @@ fn codex_pre_tool_hook_blocks_broad_search_before_context() {
     ));
 
     assert_eq!(output["hookSpecificOutput"]["permissionDecision"], "deny");
-    assert!(
+    assert_eq!(output["hookSpecificOutput"]["hookEventName"], "PreToolUse");
+    assert_no_codex_unsupported_top_level(&output);
+    assert_eq!(
         output["hookSpecificOutput"]["permissionDecisionReason"]
             .as_str()
-            .unwrap()
-            .contains("broad repository search")
+            .unwrap(),
+        "CallSieve needs context before broad repo search. Read the context packet first, or run callsieve agent-context, then retry if needed."
     );
 }
 
@@ -4322,7 +4966,110 @@ fn codex_pre_tool_hook_allows_callsieve_context_command() {
         &input,
     ));
 
-    assert_eq!(output["hookSpecificOutput"]["permissionDecision"], "allow");
+    assert_eq!(output["hookSpecificOutput"]["hookEventName"], "PreToolUse");
+    assert_no_codex_unsupported_top_level(&output);
+    assert!(
+        output["hookSpecificOutput"]
+            .get("permissionDecision")
+            .is_none()
+    );
+    assert!(
+        output["hookSpecificOutput"]
+            .get("permissionDecisionReason")
+            .is_none()
+    );
+}
+
+#[test]
+fn codex_permission_request_deny_omits_unsupported_suppress_output() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+
+    let output = json(&run_with_stdin(
+        &["codex-hook", "permission-request", root, "--strict"],
+        r#"{
+  "session_id": "permission-deny",
+  "hook_event_name": "PermissionRequest",
+  "tool_name": "Bash",
+  "tool_input": { "command": "rg createSession" }
+}"#,
+    ));
+
+    assert_eq!(output["hookSpecificOutput"]["permissionDecision"], "deny");
+    assert_eq!(
+        output["hookSpecificOutput"]["hookEventName"],
+        "PermissionRequest"
+    );
+    assert_no_codex_unsupported_top_level(&output);
+    assert_eq!(
+        output["hookSpecificOutput"]["permissionDecisionReason"]
+            .as_str()
+            .unwrap(),
+        "CallSieve needs context before broad repo search. Read the context packet first, or run callsieve agent-context, then retry if needed."
+    );
+}
+
+#[test]
+fn codex_permission_request_noop_omits_unsupported_suppress_output() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+
+    let output = json(&run_with_stdin(
+        &["codex-hook", "permission-request", root, "--strict"],
+        r#"{
+  "session_id": "permission-noop",
+  "hook_event_name": "PermissionRequest",
+  "tool_name": "Bash",
+  "tool_input": { "command": "git status --short" }
+}"#,
+    ));
+
+    assert_eq!(
+        output["hookSpecificOutput"]["hookEventName"],
+        "PermissionRequest"
+    );
+    assert_no_codex_unsupported_top_level(&output);
+    assert!(
+        output["hookSpecificOutput"]
+            .get("permissionDecision")
+            .is_none()
+    );
+    assert!(
+        output["hookSpecificOutput"]
+            .get("permissionDecisionReason")
+            .is_none()
+    );
+}
+
+#[test]
+fn codex_post_tool_hook_is_silent_noop() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+
+    let output = run_with_stdin(
+        &["codex-hook", "post-tool-use", root, "--strict"],
+        r#"{
+  "session_id": "post-disabled",
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Bash",
+  "tool_input": { "command": "sed -n '1,20p' src/cli.rs" }
+}"#,
+    );
+
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+    assert!(
+        !repo
+            .path()
+            .join(".callsieve/codex-hooks/post-disabled.trace.json")
+            .is_file()
+    );
 }
 
 #[test]
@@ -4340,6 +5087,13 @@ fn codex_pre_tool_hook_strict_blocks_file_reads_but_allows_policy_reads() {
 }"#,
     ));
     assert_eq!(denied["hookSpecificOutput"]["permissionDecision"], "deny");
+    assert_eq!(
+        denied["hookSpecificOutput"]["permissionDecisionReason"]
+            .as_str()
+            .unwrap(),
+        "CallSieve needs context before file reads in strict mode. Read the context packet first, or run callsieve agent-context, then retry if needed."
+    );
+    assert_no_codex_unsupported_top_level(&denied);
 
     let allowed = json(&run_with_stdin(
         &["codex-hook", "pre-tool-use", root, "--strict"],
@@ -4350,11 +5104,22 @@ fn codex_pre_tool_hook_strict_blocks_file_reads_but_allows_policy_reads() {
   "tool_input": { "command": "Get-Content AGENTS.md" }
 }"#,
     ));
-    assert_eq!(allowed["hookSpecificOutput"]["permissionDecision"], "allow");
+    assert_eq!(allowed["hookSpecificOutput"]["hookEventName"], "PreToolUse");
+    assert!(
+        allowed["hookSpecificOutput"]
+            .get("permissionDecision")
+            .is_none()
+    );
+    assert!(
+        allowed["hookSpecificOutput"]
+            .get("permissionDecisionReason")
+            .is_none()
+    );
+    assert_no_codex_unsupported_top_level(&allowed);
 }
 
 #[test]
-fn codex_stop_hook_blocks_once_after_strict_violation() {
+fn codex_stop_hook_is_silent_noop() {
     let repo = fixture_repo();
     let root = repo.path().to_str().unwrap();
 
@@ -4370,22 +5135,97 @@ fn codex_stop_hook_blocks_once_after_strict_violation() {
     ));
     assert_eq!(pre["hookSpecificOutput"]["permissionDecision"], "deny");
 
-    let stop_input = r#"{
+    let output = run_with_stdin(
+        &["codex-hook", "stop", root, "--strict"],
+        r#"{
   "session_id": "stop-after-violation",
   "hook_event_name": "Stop",
   "stop_hook_active": false
-}"#;
-    let first = json(&run_with_stdin(
-        &["codex-hook", "stop", root, "--strict"],
-        stop_input,
-    ));
-    assert_eq!(first["decision"], "block");
+}"#,
+    );
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+}
 
-    let second = json(&run_with_stdin(
-        &["codex-hook", "stop", root, "--strict"],
-        stop_input,
+#[test]
+fn claude_stop_hook_is_quiet_after_strict_violation() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+
+    let violation = r#"{
+  "session_id": "claude-stop-after-violation",
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Bash",
+  "tool_input": { "command": "rg createSession" }
+}"#;
+    let pre = json(&run_with_stdin(
+        &["claude-hook", "pre-tool-use", root, "--strict"],
+        violation,
     ));
-    assert!(second.get("decision").is_none());
+    assert_eq!(pre["hookSpecificOutput"]["permissionDecision"], "deny");
+
+    let stop = json(&run_with_stdin(
+        &["claude-hook", "stop", root, "--strict"],
+        r#"{
+  "session_id": "claude-stop-after-violation",
+  "hook_event_name": "Stop",
+  "stop_hook_active": false
+}"#,
+    ));
+    assert_eq!(stop["suppressOutput"], true);
+    assert_eq!(stop["hookSpecificOutput"]["hookEventName"], "Stop");
+    assert!(stop.get("decision").is_none());
+    assert!(stop.get("reason").is_none());
+}
+
+#[test]
+fn client_stop_hooks_are_quiet_after_strict_violation() {
+    for client in ["copilot", "opencode", "antigravity", "cline"] {
+        let repo = fixture_repo();
+        let root = repo.path().to_str().unwrap();
+        let session_id = format!("{client}-stop-after-violation");
+        let violation = format!(
+            r#"{{
+  "session_id": "{session_id}",
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Bash",
+  "tool_input": {{ "command": "rg createSession" }}
+}}"#
+        );
+        let pre = json(&run_with_stdin(
+            &[&format!("{client}-hook"), "pre-tool-use", root, "--strict"],
+            &violation,
+        ));
+        assert_eq!(
+            pre["hookSpecificOutput"]["permissionDecision"], "deny",
+            "{client}"
+        );
+
+        let stop_input = format!(
+            r#"{{
+  "session_id": "{session_id}",
+  "hook_event_name": "Stop",
+  "stop_hook_active": false
+}}"#
+        );
+        let stop = json(&run_with_stdin(
+            &[&format!("{client}-hook"), "stop", root, "--strict"],
+            &stop_input,
+        ));
+        assert_eq!(stop["suppressOutput"], true, "{client}");
+        assert_eq!(
+            stop["hookSpecificOutput"]["hookEventName"], "Stop",
+            "{client}"
+        );
+        assert!(stop.get("decision").is_none(), "{client}");
+        assert!(stop.get("reason").is_none(), "{client}");
+    }
 }
 
 #[test]
@@ -4415,6 +5255,28 @@ fn codex_hook_install_and_enforce_require_lifecycle_hooks() {
             .iter()
             .any(|check| { check["check"] == "codex_hooks" && check["status"] == "pass" })
     );
+
+    let doctor = json(&run(&["hook", "doctor", root]));
+    assert_eq!(doctor["status"], "pass");
+    assert!(
+        doctor["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|check| { check["check"] == "codex_hooks" && check["status"] == "pass" })
+    );
+    assert_eq!(doctor["integrations"][0]["client"], "codex");
+    assert_eq!(doctor["integrations"][0]["status"], "pass");
+    assert_eq!(doctor["integrations"][0]["profile"], "slim");
+    assert_eq!(
+        doctor["integrations"][0]["events"]
+            .as_array()
+            .unwrap()
+            .len(),
+        3
+    );
+    assert!(doctor.get("codex_hooks").is_none());
+    assert!(doctor.get("shim").is_none());
 
     fs::remove_file(repo.path().join(".codex/hooks.json")).unwrap();
     let failed = json(&run(&["enforce", root, "--client", "codex", "--strict"]));
@@ -4522,12 +5384,28 @@ fn claude_hook_user_prompt_submit_injects_callsieve_context() {
     let context = output["hookSpecificOutput"]["additionalContext"]
         .as_str()
         .unwrap();
-    assert!(context.contains("CallSieve Claude hook context injected"));
+    assert!(context.contains("CallSieve context ready for Claude"));
+    assert!(context.contains("Use broad search only if this packet is insufficient"));
+    assert!(!context.contains("blocked until CallSieve context is established"));
     assert!(context.contains("src/auth/session.ts"));
+    let trace_path = repo
+        .path()
+        .join(".callsieve/claude-hooks/claude-hook-session.trace.json");
+    assert!(trace_path.is_file());
+    let trace: Value = serde_json::from_str(&fs::read_to_string(trace_path).unwrap()).unwrap();
+    assert_eq!(trace["session"]["callsieve"]["file_reads"], 0);
     assert!(
-        repo.path()
-            .join(".callsieve/claude-hooks/claude-hook-session.trace.json")
-            .is_file()
+        trace["session"]["callsieve"]["files_read"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        trace["session"]["callsieve"]["context_selected_files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|file| file == "src/auth/session.ts")
     );
 }
 
@@ -4546,6 +5424,8 @@ fn claude_pre_tool_hook_blocks_broad_search_before_context() {
 }"#,
     ));
     assert_eq!(bash["hookSpecificOutput"]["permissionDecision"], "deny");
+    assert_eq!(bash["suppressOutput"], true);
+    assert_eq!(bash["hookSpecificOutput"]["hookEventName"], "PreToolUse");
 
     let grep = json(&run_with_stdin(
         &["claude-hook", "pre-tool-use", root, "--strict"],
@@ -4557,6 +5437,8 @@ fn claude_pre_tool_hook_blocks_broad_search_before_context() {
 }"#,
     ));
     assert_eq!(grep["hookSpecificOutput"]["permissionDecision"], "deny");
+    assert_eq!(grep["suppressOutput"], true);
+    assert_eq!(grep["hookSpecificOutput"]["hookEventName"], "PreToolUse");
 }
 
 #[test]
@@ -4574,12 +5456,22 @@ fn claude_permission_request_uses_claude_decision_shape() {
 }"#,
     ));
 
+    assert_eq!(output["suppressOutput"], true);
+    assert_eq!(
+        output["hookSpecificOutput"]["hookEventName"],
+        "PermissionRequest"
+    );
     assert_eq!(output["hookSpecificOutput"]["decision"]["behavior"], "deny");
+    assert!(
+        output["hookSpecificOutput"]
+            .get("permissionDecision")
+            .is_none()
+    );
     assert!(
         output["hookSpecificOutput"]["decision"]["message"]
             .as_str()
             .unwrap()
-            .contains("broad repository search")
+            .contains("broad repo search")
     );
 }
 
@@ -4718,11 +5610,34 @@ fn new_client_hook_handlers_inject_context_block_search_and_trace() {
             .as_str()
             .unwrap();
         assert!(context.contains("CallSieve"), "{client}");
-        assert!(context.contains("src/auth/session.ts"), "{client}");
         assert!(
-            repo.path()
-                .join(format!(".callsieve/{client}-hooks/{session_id}.trace.json"))
-                .is_file(),
+            context.contains("Use broad search only if this packet is insufficient"),
+            "{client}"
+        );
+        assert!(
+            !context.contains("blocked until CallSieve context is established"),
+            "{client}"
+        );
+        assert!(context.contains("src/auth/session.ts"), "{client}");
+        let trace_path = repo
+            .path()
+            .join(format!(".callsieve/{client}-hooks/{session_id}.trace.json"));
+        assert!(trace_path.is_file(), "{client}");
+        let trace: Value = serde_json::from_str(&fs::read_to_string(trace_path).unwrap()).unwrap();
+        assert_eq!(trace["session"]["callsieve"]["file_reads"], 0, "{client}");
+        assert!(
+            trace["session"]["callsieve"]["files_read"]
+                .as_array()
+                .unwrap()
+                .is_empty(),
+            "{client}"
+        );
+        assert!(
+            trace["session"]["callsieve"]["context_selected_files"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|file| file == "src/auth/session.ts"),
             "{client}"
         );
 
@@ -4742,6 +5657,11 @@ fn new_client_hook_handlers_inject_context_block_search_and_trace() {
             denied["hookSpecificOutput"]["permissionDecision"], "deny",
             "{client}"
         );
+        assert_eq!(denied["suppressOutput"], true, "{client}");
+        assert_eq!(
+            denied["hookSpecificOutput"]["hookEventName"], "PreToolUse",
+            "{client}"
+        );
 
         let allowed_input = format!(
             r#"{{
@@ -4757,6 +5677,51 @@ fn new_client_hook_handlers_inject_context_block_search_and_trace() {
         ));
         assert_eq!(
             allowed["hookSpecificOutput"]["permissionDecision"], "allow",
+            "{client}"
+        );
+        assert_eq!(allowed["suppressOutput"], true, "{client}");
+        assert_eq!(
+            allowed["hookSpecificOutput"]["hookEventName"], "PreToolUse",
+            "{client}"
+        );
+    }
+}
+
+#[test]
+fn new_client_permission_request_preserves_suppressed_output() {
+    for client in ["copilot", "opencode", "antigravity", "cline"] {
+        let repo = fixture_repo();
+        let root = repo.path().to_str().unwrap();
+
+        let denied_input = r#"{
+  "session_id": "client-permission-deny",
+  "hook_event_name": "PermissionRequest",
+  "tool_name": "Bash",
+  "tool_input": { "command": "rg createSession" }
+}"#;
+        let denied = json(&run_with_stdin(
+            &[
+                &format!("{client}-hook"),
+                "permission-request",
+                root,
+                "--strict",
+            ],
+            denied_input,
+        ));
+        assert_eq!(denied["suppressOutput"], true, "{client}");
+        assert_eq!(
+            denied["hookSpecificOutput"]["hookEventName"], "PermissionRequest",
+            "{client}"
+        );
+        assert_eq!(
+            denied["hookSpecificOutput"]["permissionDecision"], "deny",
+            "{client}"
+        );
+        assert!(
+            denied["hookSpecificOutput"]["permissionDecisionReason"]
+                .as_str()
+                .unwrap()
+                .contains("broad repo search"),
             "{client}"
         );
     }
@@ -4968,11 +5933,39 @@ fn begin_returns_context_and_writes_clean_trace_event() {
 
     assert_eq!(output["command"], "begin");
     assert_eq!(output["trace_event"]["classification"], "callsieve_context");
+    assert!(
+        output["trace_event"]["files_read"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        output["trace_event"]["context_selected_files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|file| file == "src/auth/session.ts")
+    );
     assert_eq!(
         output["context"]["read_first"][0]["file"],
         "src/auth/session.ts"
     );
     assert!(trace_path.is_file());
+    let trace: Value = serde_json::from_str(&fs::read_to_string(&trace_path).unwrap()).unwrap();
+    assert_eq!(trace["session"]["callsieve"]["file_reads"], 0);
+    assert!(
+        trace["session"]["callsieve"]["files_read"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        trace["session"]["callsieve"]["context_selected_files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|file| file == "src/auth/session.ts")
+    );
 
     let check = json(&run(&[
         "trace-check",
@@ -4980,6 +5973,90 @@ fn begin_returns_context_and_writes_clean_trace_event() {
         "--strict",
     ]));
     assert_eq!(check["status"], "pass");
+}
+
+#[test]
+fn begin_proof_trace_labels_explicit_trace_source() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+    json(&run(&["index", root]));
+    let trace_path = repo.path().join("proof-begin-trace.json");
+
+    let output = json(&run(&[
+        "begin",
+        root,
+        "change createSession token behavior",
+        "--client",
+        "codex",
+        "--trace-out",
+        trace_path.to_str().unwrap(),
+        "--proof-trace",
+    ]));
+
+    assert_eq!(output["command"], "begin");
+    assert!(
+        output["next_step"]
+            .as_str()
+            .unwrap()
+            .contains("append explicit session-event records")
+    );
+    let trace: Value = serde_json::from_str(&fs::read_to_string(&trace_path).unwrap()).unwrap();
+    assert_eq!(
+        trace["metadata"]["proof_trace_source"],
+        "explicit_callsieve_begin"
+    );
+    assert_eq!(trace["policy"]["proof_mode"], true);
+    assert_eq!(trace["policy"]["post_tool_hook_required"], false);
+    assert_eq!(trace["policy"]["event_source"], "explicit_session_events");
+    assert!(
+        output["proof_next_commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|command| command.as_str().unwrap().contains("--tokens"))
+    );
+    assert!(
+        output["proof_next_commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|command| command
+                .as_str()
+                .unwrap()
+                .contains("--context-selected-file"))
+    );
+
+    let missing_tokens = run(&[
+        "session-event",
+        trace_path.to_str().unwrap(),
+        "--command",
+        "cat src/auth/session.ts",
+        "--phase",
+        "callsieve",
+        "--files-read",
+        "src/auth/session.ts",
+    ]);
+    assert!(!missing_tokens.status.success());
+    assert!(
+        String::from_utf8_lossy(&missing_tokens.stdout)
+            .contains("proof-mode traces require --tokens")
+    );
+
+    let missing_phase = run(&[
+        "session-event",
+        trace_path.to_str().unwrap(),
+        "--command",
+        "cat src/auth/session.ts",
+        "--tokens",
+        "44",
+        "--files-read",
+        "src/auth/session.ts",
+    ]);
+    assert!(!missing_phase.status.success());
+    assert!(
+        String::from_utf8_lossy(&missing_phase.stdout)
+            .contains("proof-mode traces require explicit --phase")
+    );
 }
 
 #[test]
