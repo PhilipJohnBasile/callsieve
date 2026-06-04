@@ -2,7 +2,7 @@
 
 This guide is for humans installing CallSieve and adding it to AI coding tools.
 
-CallSieve is local-first. It indexes code on your machine, runs as a CLI, stdio MCP server, or repo-local hook layer, and does not require API keys or cloud services.
+CallSieve is local-first. It indexes code on your machine, runs as a CLI, stdio MCP server, or repo-local hook layer, and does not require API keys or cloud services. Retrieval spends zero AI model tokens because ranking runs against the local index; returned context still counts when an agent reads it.
 
 ## Prerequisites
 
@@ -42,7 +42,7 @@ callsieve --help
 callsieve demo /path/to/repo --task "find where login sessions are created"
 ```
 
-`demo` builds the local index, returns the first files an agent should read, and reports platform-neutral `context_payload_reduction` so you can verify the core loop before configuring an AI tool.
+`demo` builds the local index, returns the first files an agent should read, exposes `retrieval_cost.retrieval_model_tokens = 0`, and reports platform-neutral `context_payload_reduction` so you can verify the core loop before configuring an AI tool.
 
 ## Install From Source
 
@@ -147,7 +147,8 @@ Hook-first Codex setup:
 
 ```bash
 callsieve codex-hooks install /path/to/repo --strict --force
-callsieve codex-hooks doctor /path/to/repo --strict
+callsieve codex-hooks doctor /path/to/repo --strict --smoke
+callsieve codex-hooks trust-ack /path/to/repo
 ```
 
 Generated files include:
@@ -165,7 +166,7 @@ The project `.codex/config.toml` points Codex at:
 callsieve mcp
 ```
 
-The Codex policy tells the agent to use `callsieve_context` before broad grep or repeated file reads. The project `.codex/hooks.json` runs local `callsieve codex-hook ...` handlers. `UserPromptSubmit` injects compact CallSieve context, `PreToolUse` blocks broad search before context, `PostToolUse` records trace events, `PermissionRequest` denies escalated pre-context search, and `Stop` can ask Codex to continue after a strict violation. Review and trust project hooks in Codex with `/hooks` before relying on enforcement.
+The Codex policy tells the agent to use `callsieve_context` before broad grep or repeated file reads. Codex hooks use the `slim` profile. The project `.codex/hooks.json` runs local `callsieve codex-hook ...` handlers. `UserPromptSubmit` injects compact CallSieve context, `PreToolUse` blocks broad search before context, and `PermissionRequest` denies escalated pre-context search. Codex `PostToolUse` and `Stop` are intentionally not installed because pre-tool hooks enforce the policy and post-tool or stop-time prompts are optional. Run `codex-hooks doctor --strict --smoke` to validate the local handler contract. Add `--fix` to archive stale hook state or trace files under `.callsieve/codex-hooks/archive/`. Review and trust project hooks in Codex with `/hooks`, then run `codex-hooks trust-ack /path/to/repo` to record a local marker tied to the current hook file hash.
 
 ## Claude Code
 
@@ -199,7 +200,7 @@ Manual MCP equivalent:
 claude mcp add --transport stdio callsieve -- callsieve mcp
 ```
 
-Claude should call `callsieve_context` first for codebase discovery tasks. The generated `.claude/settings.local.json` preserves unrelated local settings and adds `callsieve claude-hook ...` handlers. `UserPromptSubmit` injects compact CallSieve context, `PreToolUse` blocks `Bash`, `Read`, `Grep`, and `Glob` before context in strict mode, `PostToolUse` records trace events, `PermissionRequest` denies escalated pre-context search, and `Stop` can ask Claude Code to continue after a strict violation. Review and trust project hooks in Claude Code with `/hooks` before relying on enforcement.
+Claude should call `callsieve_context` first for codebase discovery tasks. The generated `.claude/settings.local.json` preserves unrelated local settings and adds `callsieve claude-hook ...` handlers. `UserPromptSubmit` injects compact CallSieve context, `PreToolUse` blocks `Bash`, `Read`, `Grep`, and `Glob` before context in strict mode, `PostToolUse` records guardrail trace events, `PermissionRequest` denies escalated pre-context search, and `Stop` stays quiet with a suppressed acknowledgement. Review and trust project hooks in Claude Code with `/hooks` before relying on enforcement.
 
 ## Claude Desktop
 
@@ -390,10 +391,11 @@ If the tool does not support MCP, add this policy to its project instructions:
 
 ```text
 Before broad search or repeated file reads, run:
-callsieve agent-context <repo> "<task>" --limit 8 --snippets-per-file 2
+callsieve agent-context <repo> "<task>"
 
 Read the returned read_first files and snippets first.
 Use grep only when that packet is insufficient.
+Treat retrieval_cost.retrieval_model_tokens = 0 as retrieval-only; returned context still counts when read.
 When reporting savings, call context_payload_reduction an estimated context payload reduction, not observed session token savings.
 ```
 
@@ -464,7 +466,7 @@ Smoke test the agent-facing command:
 
 ```bash
 callsieve demo /path/to/repo --task "find where login sessions are created"
-callsieve agent-context /path/to/repo "find where login sessions are created" --limit 8 --snippets-per-file 2
+callsieve agent-context /path/to/repo "find where login sessions are created"
 callsieve mcp-config /path/to/repo --format json
 callsieve mcp-registry-manifest --out server.json
 ```

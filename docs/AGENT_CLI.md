@@ -4,6 +4,8 @@ This document is for AI coding agents, AI CLIs, wrappers, and schedulers that ru
 
 CallSieve is the local codebase context layer. Its job is to select the right files, symbols, snippets, tests, and blast-radius hints before an agent spends tokens on broad search or repeated file reads.
 
+CallSieve retrieval uses zero AI model tokens because it ranks against a local deterministic index. The context packet it returns still consumes agent context tokens when read.
+
 Humans installing CallSieve or adding it to Codex, Claude Code, GitHub Copilot, OpenCode, Antigravity CLI, Cursor, VS Code, Windsurf, Continue, Zed, Junie, JetBrains AI Assistant, Amp, Goose, Warp, Cline, Zoo Code, the deprecated Roo alias, or another stdio MCP tool should start with [INSTALL.md](INSTALL.md).
 
 ## Core Contract
@@ -13,15 +15,22 @@ Before broad repository search, repeated file reads, or speculative exploration,
 Required first command for a coding task:
 
 ```bash
-callsieve agent-context <repo> "<task>" --limit 8 --snippets-per-file 2
+callsieve agent-context <repo> "<task>"
 ```
 
 Use `--format markdown` when the agent should read a compact text packet instead of parsing JSON. JSON remains the default for tooling.
+The default packet is `--profile skim --token-budget 1200` and intentionally omits snippets. Ask for more only when needed:
+
+```bash
+callsieve focus <repo> --file <file> [--symbol <symbol>]
+callsieve related <repo> --file <file>
+callsieve tests <repo> --file <file>
+```
 
 If CallSieve is being run from this Rust source checkout instead of an installed binary, use:
 
 ```bash
-cargo run -- agent-context <repo> "<task>" --limit 8 --snippets-per-file 2
+cargo run -- agent-context <repo> "<task>"
 ```
 
 MCP equivalent:
@@ -33,7 +42,7 @@ MCP equivalent:
     "path": "<repo>",
     "task": "<task>",
     "limit": 8,
-    "snippets_per_file": 2
+    "snippets_per_file": 0
   }
 }
 ```
@@ -76,20 +85,21 @@ For MCP, `callsieve_context` can rebuild a missing or stale index before returni
 
 1. Run `callsieve agent-context <repo> "<task>"`.
 2. Parse `instruction.action`. It should be `read_first_before_grep`.
-3. Parse `context.read_first[]`.
-4. Read the returned snippets first.
-5. Read full files only for the returned `read_first[].file` paths that are needed for the edit.
-6. Use `callsieve symbol` or `callsieve query` for narrower follow-up lookups.
-7. Use broad grep only if the context packet is insufficient.
-8. If broad grep is needed, keep it focused and explain why the CallSieve packet was insufficient.
+3. Parse `instruction.token_policy` and `context.retrieval_cost`.
+4. Parse `context.read_first[]`.
+5. Read the returned snippets first.
+6. Read full files only for the returned `read_first[].file` paths that are needed for the edit.
+7. Use `callsieve symbol` or `callsieve query` for narrower follow-up lookups.
+8. Use broad grep only if the context packet is insufficient.
+9. If broad grep is needed, keep it focused and explain why the CallSieve packet was insufficient.
 
 Useful follow-up commands:
 
 ```bash
 callsieve symbol <repo> <symbol_name> --limit 20
 callsieve query <repo> "<question>" --limit 10
-callsieve context <repo> "<task>" --limit 8 --snippets-per-file 2 --why-debug
-callsieve agent-context <repo> "<task>" --limit 8 --snippets-per-file 2 --format markdown
+callsieve context <repo> "<task>" --limit 8 --snippets-per-file 1 --why-debug
+callsieve agent-context <repo> "<task>" --format markdown
 ```
 
 Use `--why-debug` only when diagnosing ranking behavior. It adds scoring detail and costs more context.
@@ -103,7 +113,8 @@ Use `--why-debug` only when diagnosing ranking behavior. It adds scoring detail 
   "instruction": {
     "action": "read_first_before_grep",
     "guidance": "Read these files first; grep only if insufficient.",
-    "grep_policy": "grep_only_if_context_is_insufficient"
+    "grep_policy": "grep_only_if_context_is_insufficient",
+    "token_policy": "zero_ai_model_tokens_for_retrieval; context_packet_tokens_apply_when_read"
   },
   "memory": {
     "cache_hit": false,
@@ -115,6 +126,12 @@ Use `--why-debug` only when diagnosing ranking behavior. It adds scoring detail 
   "context": {
     "task": "...",
     "root": "...",
+    "retrieval_cost": {
+      "retrieval_model_tokens": 0,
+      "retrieval_method": "deterministic_local_index",
+      "agent_token_cost_scope": "retrieval_only",
+      "note": "CallSieve spends zero AI model tokens on local retrieval. Only the returned context packet consumes agent context tokens when read."
+    },
     "read_first": [],
     "stats": {},
     "timing": {},
@@ -176,7 +193,8 @@ Safe local repair commands:
 ```bash
 callsieve index <repo> --lsp
 callsieve codex-hooks install <repo> --strict --force
-callsieve codex-hooks doctor <repo> --strict
+callsieve codex-hooks doctor <repo> --strict --smoke
+callsieve codex-hooks trust-ack <repo>
 callsieve claude-hooks install <repo> --strict --force
 callsieve claude-hooks doctor <repo> --strict
 callsieve copilot-hooks install <repo> --strict --force
@@ -196,6 +214,8 @@ callsieve mcp-registry-manifest --out server.json
 callsieve proof-rehearsal --preflight
 callsieve proof-rehearsal --fix --resume
 ```
+
+For Codex, `codex-hooks doctor --strict --smoke` validates the `slim` hook profile with local handler smoke tests. Add `--fix` when stale hook state or trace files need to be archived under `.callsieve/codex-hooks/archive/`. After a human reviews project hooks in Codex with `/hooks`, `codex-hooks trust-ack <repo>` records a local marker tied to the current hook file hash.
 
 `proof-rehearsal --fix` is intentionally limited. It can create ignored local evidence directories, rebuild local indexes, and regenerate missing controlled replay traces. It does not clone repos, install tools, delete evidence, record observed sessions, or run claim proof.
 
@@ -261,6 +281,12 @@ Rules for observed sessions:
 
 CallSieve reports two different kinds of savings evidence.
 
+`retrieval_cost`:
+
+- Scope: local CallSieve retrieval only.
+- `retrieval_model_tokens` is `0` because ranking runs against `.callsieve/index.json`.
+- The returned context packet, later full-file reads, and the rest of the agent session still consume agent context tokens.
+
 `context_payload_reduction`:
 
 - Platform-neutral proxy.
@@ -284,9 +310,10 @@ Use this block in an AI CLI or agent policy:
 
 ```text
 For every codebase-discovery task, run CallSieve before broad search or repeated file reads.
-Use `callsieve agent-context <repo> "<task>" --limit 8 --snippets-per-file 2`.
-Read the returned `context.read_first` snippets and files first.
-Use broad grep only when the CallSieve packet is insufficient, and keep it focused.
+Use `callsieve agent-context <repo> "<task>"`.
+Read the returned `context.read_first` files, symbols, and line ranges first.
+Use `focus`, `related`, or `tests` for detail when the CallSieve packet is insufficient, and keep any broad grep focused.
+Treat `retrieval_cost.retrieval_model_tokens = 0` as retrieval-only.
 When reporting savings, call `context_payload_reduction` an estimated context payload reduction, not observed whole-session token savings.
 Run `proof-report` only after the claim-counted manifest passes `pilot-qa`.
 Do not send proprietary code to remote services for CallSieve operations.
@@ -298,7 +325,7 @@ If `agent-context` fails because the index is missing:
 
 ```bash
 callsieve index <repo> --lsp
-callsieve agent-context <repo> "<task>" --limit 8 --snippets-per-file 2
+callsieve agent-context <repo> "<task>"
 ```
 
 If an MCP client needs config:

@@ -4,6 +4,9 @@
 
 - `callsieve_context`
 - `callsieve_symbol`
+- `callsieve_focus`
+- `callsieve_related`
+- `callsieve_tests`
 - `callsieve_stats`
 - `callsieve_status`
 - `callsieve_trace_check`
@@ -12,6 +15,8 @@
 For human installation and client setup, start with [INSTALL.md](INSTALL.md). For AI CLI behavior and automation rules, see [AGENT_CLI.md](AGENT_CLI.md).
 
 The MCP server is one integration surface for agents. It does not replace the CLI: indexing, lifecycle hooks or plugins, hook launchers, Markdown or JSON context output, watching, daemon refresh, evidence collection, proof reports, and enterprise-proof reports still run through `callsieve` commands.
+
+`callsieve_context` is zero-AI-model-token retrieval: ranking runs against the local index before the prompt exists. The returned packet still consumes agent context tokens when the MCP client reads it, so the default response stays compact.
 
 Build or install CallSieve first. You can index each repository up front, or let the first `callsieve_context` call rebuild a missing or stale local index:
 
@@ -27,7 +32,7 @@ For higher-confidence reference edges, index with local LSP enrichment before st
 callsieve index /path/to/repo --lsp
 ```
 
-`callsieve_context` checks freshness before ranking. If `.callsieve/index.json` is missing or stale, it rebuilds and saves the local index, then returns the context packet. The response includes `freshness.initial_fresh`, `freshness.refreshed`, `freshness.final_fresh`, `freshness.index_generation`, `freshness.stale_files`, and `freshness.fix_command`, plus timing fields such as `freshness_check_ms`, `index_rebuild_ms`, and `mcp_total_ms`.
+`callsieve_context` checks freshness before ranking. If `.callsieve/index.json` is missing or stale, it rebuilds and saves the local index, then returns the context packet. The default MCP context packet is `profile = "skim"` with `token_budget = 1200`, so agents get compact files, symbols, reasons, tests, and risk hints before asking for more. The response includes `retrieval_cost.retrieval_model_tokens = 0`, `freshness.initial_fresh`, `freshness.refreshed`, `freshness.final_fresh`, `freshness.index_generation`, `freshness.stale_files`, and `freshness.fix_command`, plus timing fields such as `freshness_check_ms`, `index_rebuild_ms`, and `mcp_total_ms`.
 
 The MCP server does not install language servers, install grep shims, mutate client config, mutate traces, start the daemon, or send code to a remote service. If an MCP rebuild fails, the tool response returns the exact CLI repair command in `structuredContent.error.fix_command`, for example:
 
@@ -123,10 +128,11 @@ For enforcement in Codex, prefer lifecycle hooks over MCP alone:
 
 ```bash
 callsieve codex-hooks install /path/to/repo --strict --force
-callsieve codex-hooks doctor /path/to/repo --strict
+callsieve codex-hooks doctor /path/to/repo --strict --smoke
+callsieve codex-hooks trust-ack /path/to/repo
 ```
 
-The generated `.codex/hooks.json` injects context at prompt submit, blocks broad search before context, records local hook traces, and asks Codex to continue after strict violations. Review and trust project hooks in Codex with `/hooks`.
+The generated `.codex/hooks.json` uses the `slim` profile: it injects context at prompt submit, blocks broad search before context, and denies escalated pre-context search. Codex `PostToolUse` and `Stop` are intentionally not installed. Run `codex-hooks doctor --strict --smoke` for local handler smoke tests, and add `--fix` to archive stale hook state or trace files under `.callsieve/codex-hooks/archive/`. Review and trust project hooks in Codex with `/hooks`, then run `codex-hooks trust-ack /path/to/repo` to record a local marker tied to the current hook file hash.
 
 Reference: https://developers.openai.com/codex/mcp
 
@@ -307,17 +313,33 @@ Generated files include `.roo/mcp.json`, `.roo/rules/callsieve.md`, and `.roo/ru
 
 For coding tasks, agents should:
 
-1. Call `callsieve_context` with `{ "path": "/path/to/repo", "task": "..." }`, or run `callsieve begin /path/to/repo "<task>" --client <client> --trace-out /path/to/repo/.callsieve/session-trace.json` before any broad search.
+1. Call `callsieve_context` with `{ "path": "/path/to/repo", "task": "..." }`, or run `callsieve begin /path/to/repo "<task>" --client <client> --trace-out /path/to/repo/.callsieve/session-trace.json --proof-trace` before any broad search.
 2. Call `callsieve_status` if freshness or LSP enrichment state is uncertain.
 3. Read the returned `read_first` snippets and files.
 4. Use `callsieve_symbol` for named symbols when needed.
 5. Grep only when the context packet is insufficient.
 
-The `callsieve_context` tool metadata marks it as the preferred first tool for codebase discovery. Its practical instruction is: read these files first; grep only if insufficient.
+The `callsieve_context` tool metadata marks it as zero-AI-model-token local retrieval and the preferred first tool for codebase discovery. Its practical instruction is: read these files first; call `callsieve_focus`, `callsieve_related`, or `callsieve_tests` for targeted detail; grep only if insufficient.
+
+### Optional `ownership` field on `read_first` entries
+
+When the repository contains a `CODEOWNERS` file, `callsieve_context` adds an optional `ownership` object to each `read_first` entry whose path matches a CODEOWNERS rule:
+
+```json
+{
+  "file": "src/auth/session.ts",
+  "ownership": {
+    "owners": ["@alice", "security@example.com"],
+    "teams": ["@acme/platform"]
+  }
+}
+```
+
+CallSieve searches `.github/CODEOWNERS`, `CODEOWNERS`, `docs/CODEOWNERS`, then `.gitlab/CODEOWNERS`. Last matching pattern wins. The field is omitted when no CODEOWNERS file exists or no rule matches; this is an additive schema change and older clients can ignore it.
 
 Use `callsieve_trace_check` on captured trace JSON to detect sessions that ran grep before CallSieve. Pass `"strict": true` to also fail common file reads before `callsieve_context`.
 
-For proof work, pair MCP usage with CLI trace collection. The agent should call `callsieve_context` first, then the operator should record the exact commands, files read, client, model, and token counts in observed-session traces.
+For proof work, pair MCP usage with CLI trace collection. `begin --proof-trace` labels the trace as explicit session events and does not depend on Codex `PostToolUse`. After a proof trace starts, every added `session-event` must include `--tokens` and explicit `--phase baseline|callsieve`. The agent should call `callsieve_context` first, then the operator should record the exact commands, files read, client, model, and token counts in observed-session traces.
 
 ## Hook Launchers
 

@@ -4,6 +4,8 @@
 
 CallSieve is the local codebase filter for AI coding agents.
 
+It spends zero AI model tokens on retrieval by ranking against a local deterministic index, then returns the smallest useful context packet for the agent to read.
+
 ## Problem
 
 Agentic coding tools waste massive context and cost rediscovering codebases through repeated grep, ripgrep, file reads, directory scans, and duplicate exploration.
@@ -28,6 +30,7 @@ The distinction matters:
 - CallSieve solves finding information.
 - Sparse attention solves reasoning over information already found.
 - If the relevant function is not in the prompt, sparse attention cannot find it.
+- CallSieve retrieval is zero-token from the model's point of view; only the returned context packet consumes prompt context when the agent reads it.
 
 Agents should not ask:
 
@@ -78,11 +81,18 @@ The current app includes:
 - optional local LSP enrichment when language servers are already installed
 - deterministic query and `agent-context` ranking with optional scoring debug output and Markdown output for direct agent reading
 - local task-memory hints for repeated task families
-- MCP tools for context, symbols, stats, status, trace checks, and benchmark estimates
-- portable MCP config output for generic AI CLIs
+- MCP tools for context, symbols, focused file detail, related files, related tests, stats, status, trace checks, and benchmark estimates
+- portable MCP config output for 19 named client targets plus generic AI CLIs
 - watcher and daemon paths for index freshness
 - first-class adoption automation with `bootstrap`, `doctor`, `begin`, agent setup, Codex bootstrap, repo-local hook launchers, editor hooks, and opt-in grep shims
 - benchmark, retrieval-eval, perf-report, observed trace, pilot, evidence-pack, proof-report, and enterprise-proof-report workflows
+
+## Positioning Pillars
+
+- Slim architecture: local Rust CLI, local JSON index, deterministic ranking, no hosted service, no API key, no vector database, and no auth surface.
+- Agent-agnostic setup: Codex, Claude Code, GitHub Copilot, OpenCode, Antigravity CLI, Cursor, VS Code, Windsurf, Continue, Zed, Junie, JetBrains AI Assistant, Amp, Goose, Warp, Cline, Zoo Code, Roo, and generic stdio MCP.
+- Proof posture: benchmark, eval, trace, pilot, proof report, enterprise proof report, and evidence pack workflows with observed sessions kept separate from controlled replay.
+- Token-saving posture: read these files first, grep only if needed. `retrieval_cost.retrieval_model_tokens` is `0`; context packet token estimates are reported separately.
 
 ## Distribution Model
 
@@ -91,7 +101,7 @@ CallSieve's local core is open source under the MIT License. The public project 
 The commercial model is paid adoption and proof work:
 
 - local setup for real teams and repositories
-- agent and MCP integration across Codex, Claude, Cursor, Cline, Roo, and local agents
+- agent and MCP integration across Codex, Claude Code, GitHub Copilot, OpenCode, Antigravity CLI, Cursor, VS Code, Windsurf, Continue, Zed, Junie, JetBrains AI Assistant, Amp, Goose, Warp, Cline, Zoo Code, Roo, generic MCP, and local agents
 - paired baseline versus CallSieve session collection
 - anonymized evidence packs and proof reports
 - custom retrieval tuning, workflow support, and enterprise-readiness reporting
@@ -131,6 +141,8 @@ CallSieve now has three evidence tiers:
 - claim-counted evidence from real paired Codex sessions with transcript token accounting, transcript-backed files read, strict trace policy, and `pilot-qa` passing before `proof-report`
 
 `context_payload_reduction` is the cross-agent proxy metric. It estimates the repo context payload CallSieve avoids versus deterministic grep/read replay, and can be compared across Codex, Claude, Gemini, Kimi, Cursor, Cline, Roo, and local agents. It is not observed whole-session token savings.
+
+Every context packet and context-payload report should preserve the scope distinction: local retrieval costs zero AI model tokens, while returned context and later file reads still count against the agent session.
 
 The rehearsal layer should be self-healing for local-safe issues: rebuild indexes, regenerate controlled traces, resume passed steps, retry transient process failures, and emit scheduler-friendly JSON. Claim-counted proof should stay gated on real transcript evidence.
 

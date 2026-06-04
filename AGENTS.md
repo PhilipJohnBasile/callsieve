@@ -10,6 +10,9 @@ Developers are wasting huge percentages of agent context windows on grep, ripgre
 The product promise:
 Stop paying AI agents to grep your repo.
 
+The token promise:
+CallSieve spends zero AI model tokens on retrieval by ranking against a local index. The returned context packet still consumes agent context tokens when read, so keep it compact by default.
+
 The product should give coding agents precise, compact, structured answers about:
 - symbols
 - files
@@ -30,7 +33,13 @@ Tagline:
 The codebase filter for AI coding agents.
 
 Longer pitch:
-CallSieve gives Claude, Codex, Cursor, Cline, Roo, and local coding agents the exact symbols, call paths, files, tests, and snippets they need without wasting tokens on grep.
+CallSieve gives Codex, Claude, Copilot, OpenCode, Antigravity, Cursor, VS Code, Windsurf, Continue, Zed, Junie, JetBrains, Amp, Goose, Warp, Cline, Zoo, Roo, and generic local coding agents the exact symbols, call paths, files, tests, and snippets they need without wasting tokens on grep.
+
+Positioning pillars:
+- Slimmest architecture: Rust CLI, local JSON index, deterministic ranking, no cloud service, no API key, no vector DB, and no web dashboard.
+- Best agent-agnostic setup story: Codex, Claude, Copilot, OpenCode, Antigravity, Cursor, VS Code, Windsurf, Continue, Zed, Junie, JetBrains, Amp, Goose, Warp, Cline, Zoo, Roo, and generic MCP.
+- Strongest proof posture: benchmark, eval, trace, pilot, proof-report, enterprise-proof-report, and evidence-pack.
+- Strongest token-saving positioning: read these files first, grep only if needed.
 
 ## Current Product Scope
 
@@ -141,6 +150,7 @@ User question
 The product solves upstream selection. Sparse attention models solve downstream computation.
 If the right code never reaches the prompt, sparse attention cannot recover it.
 CallSieve should make sure the right code is selected before an agent spends tokens reasoning.
+Expose `retrieval_cost.retrieval_model_tokens = 0` in context-bearing outputs, and keep context packet token estimates separate from observed whole-session token savings.
 
 Prefer semantic code units over arbitrary token blocks:
 

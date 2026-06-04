@@ -4,6 +4,8 @@ This protocol is for proving observed whole-session token savings across real de
 
 Use this protocol when making claims about real token savings. Do not use benchmark estimates, controlled replay, local rehearsal, or `context_payload_reduction` as observed whole-session proof.
 
+CallSieve retrieval itself has `retrieval_cost.retrieval_model_tokens = 0` because ranking runs locally. Observed-session claims still require transcript token accounting for the returned packet, file reads, reasoning, tool output, and final answer.
+
 ## Claim Gate
 
 The first serious public claim should be:
@@ -21,11 +23,14 @@ A claim-counted session must have:
 - a preregistered task id, repo, task text, expected files, and critical files
 - one baseline phase without CallSieve-first context
 - one CallSieve phase using `callsieve agent-context`, MCP `callsieve_context`, `begin`, `guard`, or hook launcher context first
+- the CallSieve phase records local retrieval as zero AI model tokens only when the output includes `retrieval_cost.retrieval_model_tokens = 0`
 - transcript context token counts copied from the real agent transcript, platform UI, or audited Claude Code JSON usage output
-- files actually read by the agent, copied from the transcript or tool log
+- proof-mode traces created with `begin --proof-trace` must add later events with `--tokens` and explicit `--phase baseline|callsieve`
+- `files_read` values are files actually read by the agent, copied from the transcript or tool log
 - for CallSieve phases, files selected into the compact context packet recorded as `context_selected_files` when the agent can answer from context without whole-file reads
 - exact command or tool summary for each phase
 - `metadata.collection = "observed_session"`
+- lifecycle hook collections such as `codex_hook_trace`, `claude_hook_trace`, and `<client>_hook_trace` are guardrail telemetry and are excluded from observed proof gates
 - `token_accounting.source = "transcript_context_tokens"`
 - `pilot-qa` passing before `pilot-finalize` or `proof-report`
 
@@ -106,7 +111,7 @@ CallSieve phase:
 
 ```bash
 callsieve agent-context <repo> "<task>"
-callsieve begin <repo> "<task>" --client codex --trace-out <trace.json>
+callsieve begin <repo> "<task>" --client codex --trace-out <trace.json> --proof-trace
 callsieve hook install <repo> --client codex --strict --force --lsp
 ```
 

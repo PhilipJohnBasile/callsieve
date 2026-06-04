@@ -11,12 +11,12 @@ cargo run -- index .
 cargo run -- benchmark-suite . benchmarks/callsieve-real-repo.json
 cargo run -- eval-retrieval benchmarks/retrieval-fixtures.json
 cargo run -- perf-report . --iterations 5
-cargo run -- begin . "change the read-first context packet ranking" --client generic --trace-out .callsieve/session-trace.json
+cargo run -- begin . "change the read-first context packet ranking" --client generic --trace-out .callsieve/session-trace.json --proof-trace
 cargo run -- trace-check .callsieve/session-trace.json --strict
 cargo run -- trace-replay . benchmarks/callsieve-real-repo.json benchmarks/session-trace.local.json --limit 20
 cargo run -- trace-summary benchmarks/session-trace.example.json
 cargo run -- session-start . "change the read-first context packet ranking" --client codex --model gpt-5-codex --trace .callsieve/observed-session.json
-cargo run -- session-event .callsieve/observed-session.json --command "callsieve agent-context . \"change the read-first context packet ranking\"" --tokens 3000 --phase callsieve
+cargo run -- session-event .callsieve/observed-session.json --command "callsieve agent-context . \"change the read-first context packet ranking\"" --context-selected-file src/query/mod.rs --tokens 3000 --phase callsieve
 cargo run -- session-finish .callsieve/observed-session.json --out .callsieve/observed-summary.json
 cargo run -- trace-check benchmarks/session-trace.example.json --strict
 cargo run -- benchmark-doctor benchmarks/report-manifest.example.json
@@ -45,6 +45,8 @@ CallSieve evidence is intentionally split into three tiers:
 
 For cross-agent comparison, use `context_payload_reduction`. It is a platform-neutral proxy that estimates the repo context payload CallSieve avoids versus deterministic grep/read replay. It applies across Codex, Claude Code, GitHub Copilot, OpenCode, Antigravity CLI, Cursor, VS Code, Windsurf, Continue, Zed, Junie, JetBrains AI Assistant, Amp, Goose, Warp, Cline, Zoo Code, the deprecated Roo alias, generic stdio MCP tools, and local agents because it does not depend on vendor transcript telemetry. It is not observed whole-session token savings.
 
+`context_payload_reduction.retrieval_cost.retrieval_model_tokens` is always `0` for CallSieve retrieval. That field describes local retrieval only. It does not mean the returned context packet, later full-file reads, or the rest of the agent session are free.
+
 Latest local run on this repository:
 
 - expected-file recall: `16/16` (`100%`)
@@ -59,6 +61,7 @@ The suite output includes:
 - `total_estimated_token_savings`: estimated tokens avoided versus a naive grep/read loop
 - `total_estimated_avoided_grep_commands`: estimated grep commands avoided
 - `total_estimated_avoided_file_reads`: estimated file reads avoided
+- `context_payload_reduction.retrieval_cost`: local retrieval token scope and zero-model-token cost
 - `misses`: per-task missing expected files with likely failure reasons
 - `observed_session`: optional aggregate metrics from real agent traces
 
@@ -87,11 +90,11 @@ The suite output includes:
 Use `begin` as the lightweight task-session entrypoint when you want a context-first packet plus an auditable trace stub in one command:
 
 ```bash
-cargo run -- begin <repo> "<task>" --client generic --trace-out <trace.json>
+cargo run -- begin <repo> "<task>" --client generic --trace-out <trace.json> --proof-trace
 cargo run -- trace-check <trace.json> --strict
 ```
 
-`begin` writes the first CallSieve context event into the trace and records the selected `read_first` files and estimated context tokens. Later session events can add actual grep, read, and token details. Because the first event is CallSieve context, the resulting stub is ready for `trace-check --strict`, which will fail later broad grep or common file reads that happen before context.
+`begin` writes the first CallSieve context event into the trace with `files_read: []`, `context_selected_files` set to the selected `read_first` files, and estimated context tokens. With `--proof-trace`, it labels the trace as explicit session events and does not depend on Codex `PostToolUse`. Later session events can add actual grep, read, selected-context, and token details, but proof-mode traces require `--tokens` and explicit `--phase baseline|callsieve` on every added `session-event`. Because the first event is CallSieve context, the resulting stub is ready for `trace-check --strict`, which will fail later broad grep or common file reads that happen before context.
 
 Use `session` when you have actual baseline and CallSieve-assisted agent trace numbers. `observed` is still accepted as a backward-compatible alias.
 
@@ -139,7 +142,7 @@ cargo run -- trace-replay <repo> <suite.json> <trace.json> --limit 20
 
 `trace-replay` writes the same `tasks[].session.baseline/callsieve` JSON shape accepted by `trace-summary`, `benchmark-report`, `pilot-report`, and `proof-report`. It is tagged as `metadata.collection = "controlled_replay"` and is not human telemetry. It deterministically simulates the baseline as task-term grep plus full reads of every matched indexed file, then counts CallSieve as the serialized context packet plus full reads of the selected `read_first` files.
 
-For real observed sessions, use `session-start`, `session-event`, and `session-finish`. These traces are tagged as `metadata.collection = "observed_session"` and store ordered `events[]` with command classification, phase, files read, and optional token counts. Baseline events contribute comparison metrics; CallSieve-phase events are used for strict before-grep policy checks. Codex, ChatGPT, MCP/rules/template clients, and local-agent/Ollama runs can be recorded, but claim-counted runs must satisfy the same paired trace schema and transcript-token accounting.
+For real observed sessions, use `session-start`, `session-event`, and `session-finish`. These traces are tagged as `metadata.collection = "observed_session"` and store ordered `events[]` with command classification, phase, actual files read, selected context files, and optional token counts. Baseline events contribute comparison metrics; CallSieve-phase events are used for strict before-grep policy checks. `files_read` means actual file-read tool or command paths, while `context_selected_files` means files selected into a CallSieve packet. Lifecycle hook traces such as `codex_hook_trace`, `claude_hook_trace`, and `<client>_hook_trace` are setup and guardrail telemetry, not observed proof. Codex, ChatGPT, MCP/rules/template clients, and local-agent/Ollama runs can be recorded, but claim-counted runs must satisfy the same paired trace schema and transcript-token accounting.
 
 Audit before-grep policy with:
 

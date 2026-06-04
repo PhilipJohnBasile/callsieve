@@ -2,6 +2,8 @@
 
 CallSieve's core local CLI and MCP server are open source under the MIT License. The commercial offer is paid adoption and proof work for teams that want to reduce agent grep, repeated reads, and context waste without sending proprietary code to a cloud service.
 
+The retrieval step itself spends zero AI model tokens because CallSieve ranks locally. Pilot reports must still account for the context packet and all later agent session tokens separately.
+
 ## What Is Open Source
 
 The public repo includes:
@@ -23,6 +25,7 @@ A paid pilot should sell the outcome, not access to the source code:
 - install CallSieve locally on selected repositories
 - configure Codex, Claude Code, GitHub Copilot, OpenCode, Antigravity CLI, Cursor, VS Code, Windsurf, Continue, Zed, Junie, JetBrains AI Assistant, Amp, Goose, Warp, Cline, Zoo Code, the deprecated Roo alias, or a generic MCP client
 - establish the first-command policy: `callsieve agent-context <repo> "<task>"`
+- explain the token boundary: zero AI model tokens for local retrieval, measured context tokens for returned packets and sessions
 - record paired baseline and CallSieve-assisted sessions
 - measure grep commands, file reads, selected files, critical misses, and token counts
 - produce a shareable evidence pack with anonymized aggregate metrics when needed
@@ -39,6 +42,7 @@ Use concrete gates instead of broad language:
 - critical-file misses are `0`
 - observed token reduction is measured from real paired transcript context token counts
 - `context_payload_reduction` is described as an estimate, not observed whole-session savings
+- `retrieval_cost.retrieval_model_tokens = 0` is described as retrieval-only, not whole-session savings
 
 Use `enterprise-proof-report` only for broad developer-session claims. Until that report passes, avoid phrases like "almost all developer sessions" or broad enterprise-scale guarantees.
 

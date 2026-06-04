@@ -4,17 +4,30 @@ CallSieve is the local codebase filter for AI coding agents.
 
 It indexes a repository and returns compact, structured context so agents can spend fewer tokens on blind grep, file discovery, repeated reads, and rediscovering project structure.
 
+Retrieval itself spends zero AI model tokens: CallSieve ranks against a local index before the prompt exists. The returned context packet still consumes agent context tokens when read, so every packet is compact by default.
+
 ## Product Promise
 
 Stop paying AI agents to grep your repo.
 
 CallSieve is not another coding agent. It is the context and retrieval layer underneath coding agents.
 
+## Competitive Posture
+
+CallSieve is built to stay slim while making the strongest practical token-saving case:
+
+- Slimmest architecture: Rust CLI, local `.callsieve/index.json`, deterministic ranking, no cloud service, no API key, no vector database, and no web dashboard.
+- Best agent-agnostic setup story: Codex, Claude Code, GitHub Copilot, OpenCode, Antigravity CLI, Cursor, VS Code, Windsurf, Continue, Zed, Junie, JetBrains AI Assistant, Amp, Goose, Warp, Cline, Zoo Code, Roo, and generic stdio MCP clients.
+- Strongest proof posture: `benchmark`, `eval-retrieval`, `trace-check`, `trace-replay`, `pilot-*`, `proof-report`, `enterprise-proof-report`, and `evidence-pack`.
+- Strongest token-saving positioning: read these files first, grep only if needed. CallSieve retrieval costs zero AI model tokens; the compact packet is the only token-bearing artifact agents need to read first.
+
 ## Open Source And Commercial Model
 
 CallSieve's core local engine is open source under the [MIT License](LICENSE).
 
 The public repo includes the local CLI, MCP server, repository indexer, deterministic retrieval, agent-context workflow, benchmark harness, proof reports, docs, and tests. The commercial motion is not selling access to the code. It is selling outcomes around it: paid pilots, local installation, agent integration, evidence collection, retrieval tuning, private workflow support, and enterprise proof reporting.
+
+For productized commercial options and placeholder pricing, see [commercial/PRICING.md](commercial/PRICING.md).
 
 Keep broad claims gated. Use `context_payload_reduction` for estimated prompt-payload savings, and use observed token reduction only when real paired transcripts provide audited token counts.
 
@@ -43,6 +56,10 @@ callsieve claude-hooks install /path/to/repo --strict --force
 
 `demo` proves the retrieval loop without configuring an agent. `hook install` creates repo-local launchers and search shims under `.callsieve/` so testers can start an agent with CallSieve-first guardrails without changing global PATH or shell profiles. Hook-capable clients also get local project hooks or plugins that inject CallSieve context and block pre-context broad search after they are trusted.
 
+`agent-context` defaults to a budgeted `skim` packet: compact file, symbol, reason, related-test, and risk hints with no snippets. Output includes `retrieval_cost.retrieval_model_tokens = 0` so agents can distinguish zero-token local retrieval from the context tokens spent reading the returned packet. Use `--profile normal`, `--profile full`, `--snippets-per-file`, or the focused `focus`, `related`, and `tests` commands to reveal more detail only after the first packet is insufficient.
+
+JSON output is compact by default for agent token savings. Add global `--pretty` for human-readable formatting.
+
 ## Current CLI Surface
 
 ```bash
@@ -50,17 +67,20 @@ callsieve index <path> [--lsp]
 callsieve symbols <path>
 callsieve symbol <path> <symbol_name>
 callsieve query <path> "<question>" [--why-debug]
-callsieve context <path> "<task>" [--limit <n>] [--snippets-per-file <n>] [--no-snippets] [--why-debug] [--format json|markdown]
-callsieve agent-context <path> "<task>" [--limit <n>] [--snippets-per-file <n>] [--why-debug] [--format json|markdown]
+callsieve context <path> "<task>" [--limit <n>] [--snippets-per-file <n>] [--no-snippets] [--profile skim|normal|full] [--token-budget <n>] [--why-debug] [--format json|markdown]
+callsieve agent-context <path> "<task>" [--limit <n>] [--snippets-per-file <n>] [--profile skim|normal|full] [--token-budget <n>] [--why-debug] [--format json|markdown]
+callsieve focus <path> --file <file> [--symbol <symbol>]
+callsieve related <path> --file <file>
+callsieve tests <path> --file <file>
 callsieve demo <path> [--task "<task>"] [--lsp]
 callsieve memory-clear <path>
-callsieve benchmark <path> "<task>" [--limit <n>] [--snippets-per-file <n>] [--no-snippets]
-callsieve benchmark-suite <path> <tasks.json> [--limit <n>] [--snippets-per-file <n>] [--no-snippets]
-callsieve eval-retrieval <manifest.json> [--limit <n>] [--snippets-per-file <n>] [--no-snippets] [--json]
+callsieve benchmark <path> "<task>" [--limit <n>] [--snippets-per-file <n>] [--no-snippets] [--profile skim|normal|full] [--token-budget <n>]
+callsieve benchmark-suite <path> <tasks.json> [--limit <n>] [--snippets-per-file <n>] [--no-snippets] [--profile skim|normal|full] [--token-budget <n>]
+callsieve eval-retrieval <manifest.json> [--limit <n>] [--snippets-per-file <n>] [--no-snippets] [--profile skim|normal|full] [--token-budget <n>] [--json]
 callsieve perf-report <path> [--tasks <manifest.json>] [--iterations <n>] [--json]
 callsieve trace-summary <trace.json>
 callsieve session-start <path> "<task>" --client codex --model <name> --trace <trace.json> [--expected-file <path>] [--critical-file <path>]
-callsieve session-event <trace.json> --command <cmd> [--files-read <path>...] [--tokens <n>] [--phase baseline|callsieve]
+callsieve session-event <trace.json> --command <cmd> [--files-read <path>...] [--context-selected-file <path>...] [--tokens <n>] [--phase baseline|callsieve]
 callsieve session-finish <trace.json> --out <summary.json>
 callsieve trace-replay <path> <tasks.json> <trace.json> [--limit <n>] [--snippets-per-file <n>] [--no-snippets]
 callsieve trace-check <trace.json> [--strict]
@@ -94,7 +114,8 @@ callsieve bootstrap <path> --client <codex|claude|copilot|opencode|antigravity|c
 callsieve doctor <path> --client <codex|claude|copilot|opencode|antigravity|cursor|vscode|windsurf|continue|zed|junie|jetbrains|amp|goose|warp|cline|zoo|roo|generic> [--fix] [--strict]
 callsieve codex-bootstrap <path> --model <name> [--force]
 callsieve codex-hooks install <path> [--strict] [--force] [--limit <n>] [--snippets-per-file <n>] [--lsp]
-callsieve codex-hooks doctor <path> [--strict]
+callsieve codex-hooks doctor <path> [--strict] [--smoke] [--fix]
+callsieve codex-hooks trust-ack <path>
 callsieve codex-hooks uninstall <path>
 callsieve claude-hooks install <path> [--strict] [--force] [--limit <n>] [--snippets-per-file <n>] [--lsp]
 callsieve claude-hooks doctor <path> [--strict]
@@ -107,7 +128,7 @@ callsieve hook install <path> --client <codex|claude|copilot|opencode|antigravit
 callsieve hook doctor <path>
 callsieve hook uninstall <path>
 callsieve guard <path> "<task>" [--trace-out <trace.json>]
-callsieve begin <path> "<task>" --client <codex|claude|copilot|opencode|antigravity|cursor|vscode|windsurf|continue|zed|junie|jetbrains|amp|goose|warp|cline|zoo|roo|generic> [--trace-out <trace.json>]
+callsieve begin <path> "<task>" --client <codex|claude|copilot|opencode|antigravity|cursor|vscode|windsurf|continue|zed|junie|jetbrains|amp|goose|warp|cline|zoo|roo|generic> [--trace-out <trace.json>] [--proof-trace]
 callsieve codex-session <path> "<task>" --trace-out <trace.json> [--model <name>] [--expected-file <path>]
 callsieve enforce <path> --client <codex|claude|copilot|opencode|antigravity|cursor|vscode|windsurf|continue|zed|junie|jetbrains|amp|goose|warp|cline|zoo|roo|generic> [--trace <trace.json>] [--strict] [--require-shim]
 callsieve shim install <path> [--force] [--strict]
@@ -136,7 +157,7 @@ cargo run -- perf-report . --iterations 5
 cargo run -- proof-rehearsal --fix --resume
 cargo run -- trace-summary benchmarks/session-trace.example.json
 cargo run -- session-start . "change login token expiry behavior" --client codex --model gpt-5-codex --trace .callsieve/observed-session.json
-cargo run -- session-event .callsieve/observed-session.json --command "callsieve agent-context . \"change login token expiry behavior\"" --files-read src/auth/session.ts --tokens 3000 --phase callsieve
+cargo run -- session-event .callsieve/observed-session.json --command "callsieve agent-context . \"change login token expiry behavior\"" --context-selected-file src/auth/session.ts --tokens 3000 --phase callsieve
 cargo run -- session-finish .callsieve/observed-session.json --out .callsieve/observed-summary.json
 cargo run -- trace-replay . benchmarks/callsieve-real-repo.json benchmarks/session-trace.local.json --limit 20
 cargo run -- trace-check benchmarks/session-trace.example.json --strict
@@ -173,7 +194,8 @@ cargo run -- doctor . --client generic --strict
 cargo run -- doctor . --client generic --fix --strict
 cargo run -- codex-bootstrap . --model gpt-5-codex --force
 cargo run -- codex-hooks install . --strict --force
-cargo run -- codex-hooks doctor . --strict
+cargo run -- codex-hooks doctor . --strict --smoke
+cargo run -- codex-hooks trust-ack .
 cargo run -- hook install . --client claude --strict --force --lsp
 cargo run -- claude-hooks doctor . --strict
 cargo run -- editor-hook . --editor cursor --force
@@ -181,7 +203,7 @@ cargo run -- hook install . --client generic --strict --force --lsp
 cargo run -- hook doctor .
 cargo run -- hook uninstall .
 cargo run -- guard . "change login token expiry behavior" --trace-out .callsieve/session-trace.json
-cargo run -- begin . "change login token expiry behavior" --client generic --trace-out .callsieve/session-trace.json
+cargo run -- begin . "change login token expiry behavior" --client generic --trace-out .callsieve/session-trace.json --proof-trace
 cargo run -- codex-session . "change login token expiry behavior" --trace-out .callsieve/codex-session.json --model gpt-5-codex
 cargo run -- enforce . --client codex --trace .callsieve/session-trace.json --strict
 cargo run -- shim install . --force --strict
@@ -409,7 +431,9 @@ The Rust rehearsal command is self-healing for local-safe issues. `--preflight` 
 
 `trace-replay` generates deterministic baseline versus CallSieve trace JSON from a suite. It is tagged with `metadata.collection = "controlled_replay"` and is useful before real observed session evidence exists.
 
-Use `session-start`, `session-event`, and `session-finish` for real observed agent sessions across hook-capable and MCP-capable clients, including Codex, Claude Code, GitHub Copilot, OpenCode, Antigravity CLI, Cursor, VS Code, Windsurf, Continue, Zed, Junie, JetBrains AI Assistant, Amp, Goose, Warp, Cline, Zoo Code, and local agents. These traces are tagged with `metadata.collection = "observed_session"` and keep ordered events with command classification, files read, optional token counts, and phase (`baseline` or `callsieve`).
+Use `session-start`, `session-event`, and `session-finish` for real observed agent sessions across hook-capable and MCP-capable clients, including Codex, Claude Code, GitHub Copilot, OpenCode, Antigravity CLI, Cursor, VS Code, Windsurf, Continue, Zed, Junie, JetBrains AI Assistant, Amp, Goose, Warp, Cline, Zoo Code, and local agents. These traces are tagged with `metadata.collection = "observed_session"` and keep ordered events with command classification, actual files read, CallSieve-selected context files, optional token counts, and phase (`baseline` or `callsieve`).
+
+`files_read` means actual file-read tool or command paths. Use `context_selected_files` or `--context-selected-file` for files selected into a CallSieve read-first packet when no whole-file read happened. Only `metadata.collection = "observed_session"` is counted as observed proof. Lifecycle collections such as `codex_hook_trace`, `claude_hook_trace`, and `<client>_hook_trace` are guardrail telemetry and are excluded from observed proof gates.
 
 See [docs/BENCHMARKS.md](docs/BENCHMARKS.md) for the real-repo benchmark pack, session trace format, replay traces, and miss analysis fields.
 
@@ -525,9 +549,11 @@ cargo run -- doctor . --client generic --fix --strict
 Use `begin` as the lightweight entrypoint for a task session. It returns the normal read-first context packet and, with `--trace-out`, writes the first context event so `trace-check --strict` can audit later grep or file reads:
 
 ```bash
-cargo run -- begin . "change login token expiry behavior" --client generic --trace-out .callsieve/session-trace.json
+cargo run -- begin . "change login token expiry behavior" --client generic --trace-out .callsieve/session-trace.json --proof-trace
 cargo run -- trace-check .callsieve/session-trace.json --strict
 ```
+
+Add `--proof-trace` when the trace is used as claim evidence. It labels the trace as explicit session events and does not depend on Codex `PostToolUse`. After a proof trace starts, every added `session-event` must include `--tokens` and explicit `--phase baseline|callsieve`.
 
 Use `agent-setup` when you only need local MCP config plus a short CallSieve-first policy file for Codex, Claude, Copilot, OpenCode, Antigravity, Cursor, VS Code, Windsurf, Continue, Zed, Junie, JetBrains AI Assistant, Amp, Goose, Warp, Cline, Zoo, Roo alias, or generic MCP clients:
 
@@ -554,10 +580,11 @@ For Codex, lifecycle hooks are the primary enforcement path:
 
 ```bash
 cargo run -- codex-hooks install . --strict --force
-cargo run -- codex-hooks doctor . --strict
+cargo run -- codex-hooks doctor . --strict --smoke
+cargo run -- codex-hooks trust-ack .
 ```
 
-The generated `.codex/hooks.json` runs local `callsieve codex-hook ...` handlers. `UserPromptSubmit` injects compact CallSieve context, `PreToolUse` blocks broad search before context, `PostToolUse` records trace events, `PermissionRequest` denies escalated pre-context search, and `Stop` can ask Codex to continue after a strict violation. Review and trust project hooks in Codex with `/hooks`.
+Codex hooks use the `slim` profile. The generated `.codex/hooks.json` runs local `callsieve codex-hook ...` handlers. `UserPromptSubmit` injects compact CallSieve context, `PreToolUse` blocks broad search before context, and `PermissionRequest` denies escalated pre-context search. Codex `PostToolUse` and `Stop` are intentionally not installed because pre-tool hooks enforce the policy and post-tool or stop-time prompts are optional. Run `codex-hooks doctor --strict --smoke` for local handler smoke tests, and add `--fix` to archive stale hook state or trace files under `.callsieve/codex-hooks/archive/`. Review and trust project hooks in Codex with `/hooks`, then run `codex-hooks trust-ack .` to record a local marker tied to the current hook file hash.
 
 For Claude Code, `hook install --client claude` gives all three local layers: hooks, shims, and MCP:
 
@@ -608,7 +635,7 @@ Run the same task with different `--model` labels when comparing available Codex
 
 ```bash
 cargo run -- session-start . "change login token expiry behavior" --client codex --model gpt-5-codex --trace .callsieve/observed-session.json
-cargo run -- session-event .callsieve/observed-session.json --command "callsieve agent-context . \"change login token expiry behavior\"" --files-read src/auth/session.ts --tokens 3000 --phase callsieve
+cargo run -- session-event .callsieve/observed-session.json --command "callsieve agent-context . \"change login token expiry behavior\"" --context-selected-file src/auth/session.ts --tokens 3000 --phase callsieve
 cargo run -- session-finish .callsieve/observed-session.json --out .callsieve/observed-summary.json
 ```
 
@@ -687,8 +714,11 @@ If a server is missing or fails, CallSieve keeps the tree-sitter and heuristic g
 
 `callsieve mcp` runs a stdio JSON-RPC server with these tools:
 
-- `callsieve_context`: preferred first tool for codebase discovery; build the compact read-first packet for a coding task before grep
+- `callsieve_context`: zero-AI-model-token local retrieval; build the compact read-first packet for a coding task before grep
 - `callsieve_symbol`: find indexed symbols with import and reference hints
+- `callsieve_focus`: reveal targeted symbols and snippets for one selected file
+- `callsieve_related`: reveal imports, callers, callees, and blast-radius hints for one selected file
+- `callsieve_tests`: reveal tests likely related to one selected file
 - `callsieve_stats`: inspect index coverage
 - `callsieve_status`: inspect freshness, watch, schema, and LSP enrichment state
 - `callsieve_trace_check`: audit whether a session grepped before CallSieve

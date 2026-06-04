@@ -7,7 +7,7 @@ Use this runbook when CallSieve is tested by CallSieve, Codex, Claude Code, GitH
 Reduce repeated repo discovery by making the first codebase-discovery command:
 
 ```bash
-callsieve agent-context <repo> "<task>" --limit 8 --snippets-per-file 2
+callsieve agent-context <repo> "<task>"
 ```
 
 For MCP clients, the equivalent first tool is `callsieve_context`.
@@ -22,6 +22,8 @@ callsieve agent-context <repo> "find where CLI commands are defined"
 ```
 
 `demo` verifies the full local loop: index, read-first files, and platform-neutral `context_payload_reduction`.
+
+`agent-context` and MCP `callsieve_context` include `retrieval_cost.retrieval_model_tokens = 0`. Treat that as local retrieval cost only. The returned packet and any follow-up file reads still consume agent context tokens.
 
 ## Repeated Task Families
 
@@ -62,6 +64,8 @@ callsieve proof-rehearsal --fix --resume
 
 Use the phrase `estimated context payload reduction` for `context_payload_reduction`. This applies across AI platforms because it measures the prompt payload avoided versus deterministic grep/read replay.
 
+Use the phrase `zero AI model tokens for retrieval` only for the local ranking step. Do not describe whole agent sessions as zero-token unless the transcript evidence actually says so.
+
 For observed whole-session token savings, record real paired sessions only:
 
 ```bash
@@ -93,8 +97,9 @@ Use this as the compact AI policy:
 
 ```text
 For codebase discovery, call CallSieve before broad search.
-Use MCP `callsieve_context` when available. Otherwise run `callsieve agent-context <repo> "<task>" --limit 8 --snippets-per-file 2`.
+Use MCP `callsieve_context` when available. Otherwise run `callsieve agent-context <repo> "<task>"`.
 Read `context.read_first` first. Use `memory.recommended_files` only as local hints.
+Remember `retrieval_cost.retrieval_model_tokens = 0` applies to retrieval only; returned context still counts when read.
 Use broad grep only if the packet is insufficient, then keep it focused and explain why.
 Report `context_payload_reduction` only as estimated context payload reduction.
 Run `proof-report` only after the claim-counted manifest passes `pilot-qa`.
