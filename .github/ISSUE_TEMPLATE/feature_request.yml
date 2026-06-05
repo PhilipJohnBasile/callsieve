@@ -1,0 +1,57 @@
+name: Feature request
+description: Suggest a focused improvement to CallSieve.
+title: "Feature: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        CallSieve is a local-first CLI and context layer for AI coding agents. Feature requests should preserve compact deterministic retrieval, local ownership of code, and agent-friendly setup.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What user pain or workflow gap should this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe the smallest useful version.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Retrieval ranking
+        - Indexing or parsing
+        - References or call paths
+        - Tests or blast-radius hints
+        - MCP or agent setup
+        - Hooks or enforcement
+        - Trace, pilot, or proof workflow
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What simpler or local-first alternatives did you consider?
+    validations:
+      required: false
+  - type: checkboxes
+    id: fit
+    attributes:
+      label: Project fit
+      options:
+        - label: This can work without a cloud service, API key, hosted dashboard, or vector database requirement.
+          required: true
+        - label: This should keep agent-facing output compact by default.
+          required: true
+        - label: I have not included proprietary code, private traces, secrets, API keys, or customer data.
+          required: true

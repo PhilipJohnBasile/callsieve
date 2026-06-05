@@ -1,0 +1,79 @@
+name: Bug report
+description: Report a reproducible CallSieve bug.
+title: "Bug: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve CallSieve. Do not include proprietary code, private traces, secrets, API keys, or customer data.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What happened?
+      placeholder: Briefly describe the bug.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      placeholder: v0.2.1 or git SHA
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include OS, shell, Rust version, agent or MCP client, and repository language if relevant.
+      placeholder: macOS 15, zsh, rustc 1.xx, Codex CLI, Rust repo
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: Command
+      description: Paste the exact command or workflow that failed.
+      render: bash
+      placeholder: cargo run -- agent-context . "find where ranking is handled"
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      placeholder: |
+        1. Run ...
+        2. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant output
+      description: Redact paths, source snippets, secrets, and private traces as needed.
+      render: text
+    validations:
+      required: false
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety check
+      options:
+        - label: I have not included proprietary code, private traces, secrets, API keys, or customer data.
+          required: true
+        - label: This is not a security vulnerability with exploitable details.
+          required: true
