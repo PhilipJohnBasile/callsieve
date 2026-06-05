@@ -12,12 +12,15 @@
 //!      top-K file list and selected_files_count.
 //!   5. Aggregates across entries and writes a JSON report.
 //!
-//! No LLM is invoked. No network calls are made.
+//! No LLM is invoked. `bench-public` makes no network calls. `bench-run` is an
+//! explicit opt-in orchestrator that runs one documented `git clone` per
+//! distinct repo and then evaluates pinned local checkouts.
 
 use std::{
     collections::BTreeSet,
     fs,
     path::{Path, PathBuf},
+    process::Command as ProcessCommand,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -386,6 +389,271 @@ pub fn run_compare_with_embedder(
     })
 }
 
+/// Clone/checkout runner for Mode A. Unlike `run_with_options`, this prepares
+/// each pinned commit before evaluating it.
+pub fn run_bench(
+    manifest_path: &Path,
+    workdir: &Path,
+    k_override: Option<usize>,
+    limit: Option<usize>,
+) -> Result<ModeAReport> {
+    run_bench_with_options(
+        manifest_path,
+        workdir,
+        k_override,
+        limit,
+        RunOptions::default(),
+    )
+}
+
+pub fn run_bench_with_options(
+    manifest_path: &Path,
+    workdir: &Path,
+    k_override: Option<usize>,
+    limit: Option<usize>,
+    options: RunOptions<'_>,
+) -> Result<ModeAReport> {
+    let manifest = load_manifest(manifest_path)?;
+    let k = benchmark_k(&manifest, k_override);
+    let selected_count = selected_issue_count(&manifest, limit);
+    let selected = &manifest.issues[..selected_count];
+
+    prepare_bench_repos(selected, workdir)?;
+
+    let mut issues = Vec::with_capacity(selected.len());
+    for (offset, issue) in selected.iter().enumerate() {
+        checkout_issue(workdir, issue)?;
+        eprintln!(
+            "bench-run: evaluating {}/{} {} at {}",
+            offset + 1,
+            selected_count,
+            issue.id,
+            short_commit(&issue.base_commit)
+        );
+        issues.push(evaluate_issue(issue, workdir, k, options)?);
+    }
+
+    let aggregate = aggregate(&issues);
+    let (now, iso_date) = report_clock();
+
+    Ok(ModeAReport {
+        mode: "A",
+        schema_version: 1,
+        generated_at_unix: now,
+        generated_at_iso_date: iso_date,
+        manifest: manifest_summary(manifest_path, &manifest),
+        k,
+        aggregate,
+        issues,
+    })
+}
+
+#[cfg(feature = "embed")]
+pub fn run_bench_compare(
+    manifest_path: &Path,
+    workdir: &Path,
+    k_override: Option<usize>,
+    limit: Option<usize>,
+) -> Result<CompareReport> {
+    let embedder = query::embed::FastembedEmbedder::new_default()?;
+    run_bench_compare_with_embedder(manifest_path, workdir, k_override, limit, &embedder)
+}
+
+#[cfg(not(feature = "embed"))]
+pub fn run_bench_compare(
+    _manifest_path: &Path,
+    _workdir: &Path,
+    _k_override: Option<usize>,
+    _limit: Option<usize>,
+) -> Result<CompareReport> {
+    bail!("bench-run --compare requires building with --features embed");
+}
+
+#[cfg(feature = "embed")]
+pub fn run_bench_compare_with_embedder(
+    manifest_path: &Path,
+    workdir: &Path,
+    k_override: Option<usize>,
+    limit: Option<usize>,
+    embedder: &dyn query::embed::LocalEmbedder,
+) -> Result<CompareReport> {
+    let manifest = load_manifest(manifest_path)?;
+    let k = benchmark_k(&manifest, k_override);
+    let selected_count = selected_issue_count(&manifest, limit);
+    let selected = &manifest.issues[..selected_count];
+
+    prepare_bench_repos(selected, workdir)?;
+
+    let mut issues = Vec::with_capacity(selected.len());
+    for (offset, issue) in selected.iter().enumerate() {
+        checkout_issue(workdir, issue)?;
+        eprintln!(
+            "bench-run: comparing {}/{} {} at {}",
+            offset + 1,
+            selected_count,
+            issue.id,
+            short_commit(&issue.base_commit)
+        );
+        issues.push(evaluate_issue_compare(issue, workdir, k, embedder)?);
+    }
+
+    let aggregate = aggregate_compare(&issues);
+    let (now, iso_date) = report_clock();
+
+    Ok(CompareReport {
+        mode: "A/B",
+        schema_version: 1,
+        generated_at_unix: now,
+        generated_at_iso_date: iso_date,
+        manifest: manifest_summary(manifest_path, &manifest),
+        k,
+        aggregate,
+        issues,
+    })
+}
+
+fn load_manifest(manifest_path: &Path) -> Result<Manifest> {
+    let manifest_json = fs::read_to_string(manifest_path).with_context(|| {
+        format!(
+            "failed to read benchmark manifest: {}",
+            manifest_path.display()
+        )
+    })?;
+    Manifest::from_str(&manifest_json)
+}
+
+fn benchmark_k(manifest: &Manifest, k_override: Option<usize>) -> usize {
+    k_override
+        .or(manifest.default_k)
+        .unwrap_or(DEFAULT_K)
+        .max(1)
+}
+
+fn selected_issue_count(manifest: &Manifest, limit: Option<usize>) -> usize {
+    limit
+        .unwrap_or(manifest.issues.len())
+        .min(manifest.issues.len())
+}
+
+fn manifest_summary(manifest_path: &Path, manifest: &Manifest) -> ManifestSummary {
+    ManifestSummary {
+        path: manifest_path.display().to_string(),
+        schema_version: manifest.schema_version,
+        mode: manifest.mode.clone(),
+        description: manifest.description.clone(),
+        issue_count: manifest.issues.len(),
+    }
+}
+
+fn report_clock() -> (u64, String) {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    (now, unix_seconds_to_iso_date(now))
+}
+
+fn prepare_bench_repos(issues: &[Issue], workdir: &Path) -> Result<()> {
+    let mut repos = BTreeSet::new();
+    for issue in issues {
+        repos.insert(issue.repo.as_str());
+    }
+    for repo in repos {
+        ensure_repo_clone(workdir, repo)?;
+    }
+    Ok(())
+}
+
+fn ensure_repo_clone(workdir: &Path, repo: &str) -> Result<PathBuf> {
+    let (owner, name) = repo_parts(repo)?;
+    let dest = workdir.join(owner).join(name);
+    if dest.exists() {
+        return Ok(dest);
+    }
+    let parent = dest
+        .parent()
+        .ok_or_else(|| anyhow!("invalid clone destination {}", dest.display()))?;
+    fs::create_dir_all(parent)
+        .with_context(|| format!("failed to create benchmark workdir {}", parent.display()))?;
+
+    let url = format!("https://github.com/{owner}/{name}.git");
+    eprintln!("bench-run: cloning {repo} into {}", dest.display());
+    let mut command = ProcessCommand::new("git");
+    command
+        .arg("clone")
+        .arg("--filter=blob:none")
+        .arg(&url)
+        .arg(&dest);
+    run_command(command, format!("git clone {repo}"))?;
+    Ok(dest)
+}
+
+fn checkout_issue(workdir: &Path, issue: &Issue) -> Result<PathBuf> {
+    let repo_path = repo_path(workdir, &issue.repo)?;
+    let mut command = ProcessCommand::new("git");
+    command
+        .arg("-C")
+        .arg(&repo_path)
+        .arg("checkout")
+        .arg("-f")
+        .arg(&issue.base_commit);
+    run_command(
+        command,
+        format!(
+            "git checkout {} for {}",
+            short_commit(&issue.base_commit),
+            issue.id
+        ),
+    )?;
+    Ok(repo_path)
+}
+
+fn repo_path(workdir: &Path, repo: &str) -> Result<PathBuf> {
+    let (owner, name) = repo_parts(repo)?;
+    Ok(workdir.join(owner).join(name))
+}
+
+fn repo_parts(repo: &str) -> Result<(&str, &str)> {
+    let (owner, name) = repo
+        .split_once('/')
+        .ok_or_else(|| anyhow!("invalid repo slug `{repo}` (expected `<owner>/<name>`)"))?;
+    if !valid_repo_part(owner) || !valid_repo_part(name) {
+        bail!("invalid repo slug `{repo}`");
+    }
+    Ok((owner, name))
+}
+
+fn valid_repo_part(part: &str) -> bool {
+    !part.is_empty()
+        && part != "."
+        && part != ".."
+        && !part.contains("..")
+        && part
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+}
+
+fn run_command(mut command: ProcessCommand, description: String) -> Result<()> {
+    let output = command
+        .output()
+        .with_context(|| format!("failed to run {description}"))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    bail!(
+        "{description} failed with status {}\nstdout:\n{}\nstderr:\n{}",
+        output.status,
+        stdout.trim(),
+        stderr.trim()
+    );
+}
+
+fn short_commit(commit: &str) -> &str {
+    commit.get(..12).unwrap_or(commit)
+}
+
 /// Evaluate a single issue. Indexes the repo at `<repos_dir>/<owner>/<name>`
 /// and runs agent-context.
 fn evaluate_issue(
@@ -406,9 +674,23 @@ fn evaluate_issue(
         ));
     }
 
+    eprintln!(
+        "bench-run: indexing {} from {}",
+        issue.id,
+        repo_path.display()
+    );
     let index = indexer::build_index(&repo_path)
         .with_context(|| format!("failed to index {}", repo_path.display()))?;
+    eprintln!(
+        "bench-run: indexed {} files and {} symbols for {}",
+        index.files.len(),
+        index.symbols.len(),
+        issue.id
+    );
     build_embeddings_if_requested(&repo_path, &index, options)?;
+    if options.embeddings {
+        eprintln!("bench-run: wrote embeddings for {}", issue.id);
+    }
     let context = query::build_context_with(
         &repo_path,
         &index,
@@ -422,6 +704,7 @@ fn evaluate_issue(
         },
     )
     .with_context(|| format!("failed to build context for {}", issue.id))?;
+    eprintln!("bench-run: scored context for {}", issue.id);
     let read_first = read_first_files(&context)?;
     let selected_files_count = read_first.len();
     let top_k: Vec<String> = read_first.into_iter().take(k).collect();
@@ -472,9 +755,21 @@ fn evaluate_issue_compare(
         ));
     }
 
+    eprintln!(
+        "bench-run: indexing {} from {}",
+        issue.id,
+        repo_path.display()
+    );
     let index = indexer::build_index(&repo_path)
         .with_context(|| format!("failed to index {}", repo_path.display()))?;
+    eprintln!(
+        "bench-run: indexed {} files and {} symbols for {}",
+        index.files.len(),
+        index.symbols.len(),
+        issue.id
+    );
     query::embed_build::build_and_write_embeds(&repo_path, &index, embedder, true)?;
+    eprintln!("bench-run: wrote embeddings for {}", issue.id);
     let lexical_context = query::build_context(
         &repo_path,
         &index,
@@ -497,6 +792,10 @@ fn evaluate_issue_compare(
         },
     )
     .with_context(|| format!("failed to build hybrid context for {}", issue.id))?;
+    eprintln!(
+        "bench-run: scored lexical and hybrid context for {}",
+        issue.id
+    );
 
     let lexical = compare_arm_from_context(&lexical_context, issue, k)?;
     let hybrid = compare_arm_from_context(&hybrid_context, issue, k)?;
@@ -819,8 +1118,17 @@ pub struct SummaryOutput {
 
 impl SummaryOutput {
     pub fn new(manifest_path: &Path, out_path: &Path, report: &ModeAReport) -> Self {
+        Self::new_for_command("bench-public", manifest_path, out_path, report)
+    }
+
+    pub fn new_for_command(
+        command: &'static str,
+        manifest_path: &Path,
+        out_path: &Path,
+        report: &ModeAReport,
+    ) -> Self {
         Self {
-            command: "bench-public",
+            command,
             mode: report.mode,
             manifest: manifest_path.display().to_string(),
             report: out_path.display().to_string(),
@@ -842,8 +1150,17 @@ pub struct CompareSummaryOutput {
 
 impl CompareSummaryOutput {
     pub fn new(manifest_path: &Path, out_path: &Path, report: &CompareReport) -> Self {
+        Self::new_for_command("bench-public", manifest_path, out_path, report)
+    }
+
+    pub fn new_for_command(
+        command: &'static str,
+        manifest_path: &Path,
+        out_path: &Path,
+        report: &CompareReport,
+    ) -> Self {
         Self {
-            command: "bench-public",
+            command,
             mode: report.mode,
             manifest: manifest_path.display().to_string(),
             report: out_path.display().to_string(),
@@ -1237,5 +1554,92 @@ mod tests {
         assert_eq!(report.aggregate.wins, 1);
         assert_eq!(report.aggregate.losses, 1);
         assert_eq!(report.aggregate.ties, 0);
+    }
+
+    #[cfg(feature = "embed")]
+    fn git(repo: &Path, args: &[&str]) -> String {
+        let output = ProcessCommand::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(args)
+            .output()
+            .unwrap_or_else(|error| panic!("failed to run git {args:?}: {error}"));
+        assert!(
+            output.status.success(),
+            "git {args:?} failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    }
+
+    #[cfg(feature = "embed")]
+    fn git_commit(repo: &Path, message: &str) -> String {
+        git(repo, &["add", "."]);
+        git(
+            repo,
+            &[
+                "-c",
+                "user.name=CallSieve Tests",
+                "-c",
+                "user.email=callsieve-tests@example.invalid",
+                "commit",
+                "-m",
+                message,
+            ],
+        );
+        git(repo, &["rev-parse", "HEAD"])
+    }
+
+    #[cfg(feature = "embed")]
+    #[test]
+    fn bench_run_compare_checks_out_each_issue_and_aggregates() {
+        let tmp = tempfile::tempdir().unwrap();
+        let workdir = tmp.path().join("work");
+        let repo = workdir.join("owner/name");
+        std::fs::create_dir_all(repo.join("src")).unwrap();
+        git(&repo, &["init"]);
+        std::fs::write(repo.join("src/a.rs"), "pub fn alpha() {}\n").unwrap();
+        std::fs::write(repo.join("src/b.rs"), "pub fn beta() {}\n").unwrap();
+        let first_commit = git_commit(&repo, "initial");
+        std::fs::write(repo.join("src/b.rs"), "pub fn beta_delta() {}\n").unwrap();
+        let second_commit = git_commit(&repo, "change b");
+
+        let manifest_path = tmp.path().join("manifest.json");
+        std::fs::write(
+            &manifest_path,
+            format!(
+                r#"{{
+                    "default_k": 1,
+                    "issues": [
+                        {{
+                            "id": "win",
+                            "repo": "owner/name",
+                            "base_commit": "{first_commit}",
+                            "task": "change alpha beta behavior",
+                            "ground_truth_files": ["src/b.rs"]
+                        }},
+                        {{
+                            "id": "loss",
+                            "repo": "owner/name",
+                            "base_commit": "{second_commit}",
+                            "task": "change alpha beta behavior",
+                            "ground_truth_files": ["src/a.rs"]
+                        }}
+                    ]
+                }}"#
+            ),
+        )
+        .unwrap();
+
+        let report =
+            run_bench_compare_with_embedder(&manifest_path, &workdir, Some(1), None, &FakeEmbedder)
+                .unwrap();
+
+        assert_eq!(report.aggregate.evaluated, 2);
+        assert_eq!(report.aggregate.wins, 1);
+        assert_eq!(report.aggregate.losses, 1);
+        assert_eq!(report.aggregate.ties, 0);
+        assert_eq!(git(&repo, &["rev-parse", "HEAD"]), second_commit);
     }
 }

@@ -1185,6 +1185,33 @@ pub enum Command {
         #[arg(long)]
         compare: bool,
     },
+
+    /// Clone pinned public benchmark repos and run retrieval evaluation.
+    #[command(name = "bench-run")]
+    BenchRun {
+        /// Path to a public benchmark manifest.
+        manifest: PathBuf,
+
+        /// Work directory for benchmark clones under <owner>/<repo>.
+        #[arg(long)]
+        workdir: PathBuf,
+
+        /// Run lexical-vs-hybrid A/B comparison.
+        #[arg(long)]
+        compare: bool,
+
+        /// K for first_correct_file_rate_at_k.
+        #[arg(long)]
+        k: Option<usize>,
+
+        /// Limit issues evaluated, useful for smoke runs.
+        #[arg(long)]
+        limit: Option<usize>,
+
+        /// Where to write the results JSON.
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -3984,6 +4011,41 @@ pub fn run() -> Result<()> {
                 output::json::print(&summary)?;
             }
         }
+        Command::BenchRun {
+            manifest,
+            workdir,
+            compare,
+            k,
+            limit,
+            out,
+        } => {
+            ensure_bench_run_supported()?;
+            if compare {
+                let report = bench_public::run_bench_compare(&manifest, &workdir, k, limit)?;
+                let out_path =
+                    bench_public::resolve_compare_output_path(&manifest, out.as_deref(), &report)?;
+                bench_public::write_compare_report(&out_path, &report)?;
+                let summary = bench_public::CompareSummaryOutput::new_for_command(
+                    "bench-run",
+                    &manifest,
+                    &out_path,
+                    &report,
+                );
+                output::json::print(&summary)?;
+            } else {
+                let report = bench_public::run_bench(&manifest, &workdir, k, limit)?;
+                let out_path =
+                    bench_public::resolve_output_path(&manifest, out.as_deref(), &report)?;
+                bench_public::write_report(&out_path, &report)?;
+                let summary = bench_public::SummaryOutput::new_for_command(
+                    "bench-run",
+                    &manifest,
+                    &out_path,
+                    &report,
+                );
+                output::json::print(&summary)?;
+            }
+        }
     }
 
     Ok(())
@@ -4003,6 +4065,16 @@ fn ensure_embeddings_supported() -> Result<()> {
 #[cfg(not(feature = "embed"))]
 fn ensure_embeddings_supported() -> Result<()> {
     bail!("--embeddings requires building with --features embed");
+}
+
+#[cfg(feature = "embed")]
+fn ensure_bench_run_supported() -> Result<()> {
+    Ok(())
+}
+
+#[cfg(not(feature = "embed"))]
+fn ensure_bench_run_supported() -> Result<()> {
+    bail!("bench-run requires building with --features embed");
 }
 
 #[cfg(feature = "embed")]
@@ -15417,6 +15489,29 @@ mod tests {
         Cli::try_parse_from(["callsieve", "benchmark", ".", "change token expiry"]).unwrap();
         Cli::try_parse_from(["callsieve", "benchmark-suite", ".", "benchmarks/tasks.json"])
             .unwrap();
+        Cli::try_parse_from([
+            "callsieve",
+            "bench-public",
+            "benchmarks/public/manifest.json",
+            "benchmarks/public/repos",
+            "--compare",
+            "--k",
+            "5",
+        ])
+        .unwrap();
+        Cli::try_parse_from([
+            "callsieve",
+            "bench-run",
+            "benchmarks/public/manifest-50.json",
+            "--workdir",
+            "/tmp/csbench",
+            "--compare",
+            "--limit",
+            "8",
+            "--out",
+            "benchmarks/public/results/compare-50.json",
+        ])
+        .unwrap();
         Cli::try_parse_from([
             "callsieve",
             "eval-retrieval",
