@@ -24,6 +24,9 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+#[cfg(feature = "embed")]
+use std::{cell::RefCell, collections::BTreeMap};
+
 use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 
@@ -329,6 +332,7 @@ pub fn run_compare(
     k_override: Option<usize>,
 ) -> Result<CompareReport> {
     let embedder = query::embed::FastembedEmbedder::new_default()?;
+    let embedder = MemoizingEmbedder::new(&embedder);
     run_compare_with_embedder(manifest_path, repos_dir, k_override, &embedder)
 }
 
@@ -456,6 +460,7 @@ pub fn run_bench_compare(
     limit: Option<usize>,
 ) -> Result<CompareReport> {
     let embedder = query::embed::FastembedEmbedder::new_default()?;
+    let embedder = MemoizingEmbedder::new(&embedder);
     run_bench_compare_with_embedder(manifest_path, workdir, k_override, limit, &embedder)
 }
 
@@ -510,6 +515,70 @@ pub fn run_bench_compare_with_embedder(
         aggregate,
         issues,
     })
+}
+
+#[cfg(feature = "embed")]
+struct MemoizingEmbedder<'a> {
+    inner: &'a dyn query::embed::LocalEmbedder,
+    cache: RefCell<BTreeMap<String, Vec<f32>>>,
+}
+
+#[cfg(feature = "embed")]
+impl<'a> MemoizingEmbedder<'a> {
+    fn new(inner: &'a dyn query::embed::LocalEmbedder) -> Self {
+        Self {
+            inner,
+            cache: RefCell::new(BTreeMap::new()),
+        }
+    }
+}
+
+#[cfg(feature = "embed")]
+impl query::embed::LocalEmbedder for MemoizingEmbedder<'_> {
+    fn id(&self) -> query::embed::EmbedderId {
+        self.inner.id()
+    }
+
+    fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
+        let mut output = vec![None; texts.len()];
+        let mut missing_indices = Vec::new();
+        let mut missing_texts = Vec::new();
+
+        {
+            let cache = self.cache.borrow();
+            for (index, text) in texts.iter().enumerate() {
+                if let Some(vector) = cache.get(*text) {
+                    output[index] = Some(vector.clone());
+                } else {
+                    missing_indices.push(index);
+                    missing_texts.push(*text);
+                }
+            }
+        }
+
+        if !missing_texts.is_empty() {
+            let embedded = self.inner.embed(&missing_texts)?;
+            if embedded.len() != missing_texts.len() {
+                bail!(
+                    "embedder returned {} vectors for {} inputs",
+                    embedded.len(),
+                    missing_texts.len()
+                );
+            }
+            let mut cache = self.cache.borrow_mut();
+            for ((index, text), vector) in
+                missing_indices.into_iter().zip(missing_texts).zip(embedded)
+            {
+                cache.insert(text.to_string(), vector.clone());
+                output[index] = Some(vector);
+            }
+        }
+
+        output
+            .into_iter()
+            .map(|vector| vector.ok_or_else(|| anyhow!("internal: missing embedding output")))
+            .collect()
+    }
 }
 
 fn load_manifest(manifest_path: &Path) -> Result<Manifest> {
