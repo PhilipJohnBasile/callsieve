@@ -55,16 +55,16 @@ fn extract_references_fallback(
             continue;
         }
 
-        for name in candidate_names {
-            if name.len() < 3 || is_definition_line(line, name) {
+        for name in candidate_names_in_line(line, candidate_names) {
+            if is_definition_line(line, name) {
                 continue;
             }
 
             if let Some(kind) = reference_kind(line, name) {
                 let line_number = line_index + 1;
-                if seen.insert((line_number, name.clone(), kind.clone())) {
+                if seen.insert((line_number, name.to_string(), kind.clone())) {
                     references.push(RawReference {
-                        target_name: name.clone(),
+                        target_name: name.to_string(),
                         kind,
                         line: line_number,
                         edge_source: "heuristic".to_string(),
@@ -76,6 +76,41 @@ fn extract_references_fallback(
     }
 
     references
+}
+
+fn candidate_names_in_line<'a>(line: &str, candidate_names: &'a BTreeSet<String>) -> Vec<&'a str> {
+    let mut names = Vec::new();
+    let mut seen = BTreeSet::new();
+    let mut token_start = None;
+
+    for (index, character) in line
+        .char_indices()
+        .chain(std::iter::once((line.len(), ' ')))
+    {
+        if is_identifier_character(character) {
+            token_start.get_or_insert(index);
+            continue;
+        }
+
+        let Some(start) = token_start.take() else {
+            continue;
+        };
+        let token = &line[start..index];
+        if token.len() < 3 {
+            continue;
+        }
+        if let Some(candidate) = candidate_names.get(token)
+            && seen.insert(candidate.as_str())
+        {
+            names.push(candidate.as_str());
+        }
+    }
+
+    names
+}
+
+fn is_identifier_character(character: char) -> bool {
+    character.is_ascii_alphanumeric() || character == '_' || character == '$'
 }
 
 fn extract_tree_sitter_references(
@@ -504,5 +539,39 @@ mod tests {
         assert_eq!(references.len(), 1);
         assert_eq!(references[0].line, 3);
         assert_eq!(references[0].kind, "call");
+    }
+
+    #[test]
+    fn fallback_reference_scan_prefilters_line_candidates() {
+        let names = BTreeSet::from([
+            "create_session".to_string(),
+            "create".to_string(),
+            "unused_symbol".to_string(),
+        ]);
+        let references = extract_references(
+            "create_session(user);\ncreate_session create_session;\nrecreate_session(user);\n",
+            Language::C,
+            &names,
+        );
+
+        assert_eq!(
+            references
+                .iter()
+                .filter(|reference| reference.target_name == "create_session")
+                .count(),
+            2
+        );
+        assert!(
+            references
+                .iter()
+                .any(|reference| reference.target_name == "create_session"
+                    && reference.kind == "call"
+                    && reference.line == 1)
+        );
+        assert!(
+            !references
+                .iter()
+                .any(|reference| reference.target_name == "unused_symbol")
+        );
     }
 }
