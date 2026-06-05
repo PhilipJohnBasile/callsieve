@@ -229,7 +229,7 @@ fn now_unix_seconds() -> u64 {
         .unwrap_or_default()
 }
 
-fn stable_content_hash(bytes: &[u8]) -> String {
+pub(crate) fn stable_content_hash(bytes: &[u8]) -> String {
     let mut hash = 0xcbf29ce484222325_u64;
     for byte in bytes {
         hash ^= u64::from(*byte);
@@ -556,24 +556,22 @@ fn build_references(
         )
         .collect();
     let mut references = Vec::new();
+    let resolver = ReferenceResolver::new(files, symbols, imports);
 
     for (file_id, path, language, content) in file_contents {
         for raw in references::extract_references(content, *language, &candidate_names) {
-            let target =
-                resolve_reference_target(file_id, path, &raw.target_name, files, symbols, imports);
+            let target = resolver.resolve_reference_target(file_id, path, &raw.target_name);
             references.push(ReferenceRecord {
                 file_id: file_id.clone(),
                 source_path: path.clone(),
-                source_symbol_id: source_symbol_for_line(file_id, raw.line, symbols)
+                source_symbol_id: resolver
+                    .source_symbol_for_line(file_id, raw.line)
                     .map(|symbol| symbol.id.clone()),
                 target_name: raw.target_name,
                 target_symbol_id: target.map(|symbol| symbol.id.clone()),
-                target_path: target.and_then(|symbol| {
-                    files
-                        .iter()
-                        .find(|file| file.id == symbol.file_id)
-                        .map(|file| file.path.clone())
-                }),
+                target_path: target
+                    .and_then(|symbol| resolver.file_for_id(&symbol.file_id))
+                    .map(|file| file.path.clone()),
                 kind: raw.kind,
                 line: raw.line,
                 edge_source: raw.edge_source,
@@ -588,86 +586,145 @@ fn build_references(
     references
 }
 
-fn source_symbol_for_line<'a>(
-    file_id: &str,
-    line: usize,
-    symbols: &'a [SymbolRecord],
-) -> Option<&'a SymbolRecord> {
-    symbols
-        .iter()
-        .filter(|symbol| {
-            symbol.file_id == file_id && symbol.start_line <= line && symbol.end_line >= line
-        })
-        .min_by_key(|symbol| symbol.end_line.saturating_sub(symbol.start_line))
+struct ReferenceResolver<'a> {
+    files_by_id: BTreeMap<&'a str, &'a FileRecord>,
+    symbols_by_file: BTreeMap<&'a str, Vec<&'a SymbolRecord>>,
+    symbols_by_file_and_name: BTreeMap<(&'a str, &'a str), Vec<&'a SymbolRecord>>,
+    symbols_by_name: BTreeMap<&'a str, Vec<&'a SymbolRecord>>,
+    imports_by_source_path: BTreeMap<&'a str, Vec<&'a ImportRecord>>,
 }
 
-fn resolve_reference_target<'a>(
-    file_id: &str,
-    source_path: &str,
-    target_name: &str,
-    files: &[FileRecord],
-    symbols: &'a [SymbolRecord],
-    imports: &[ImportRecord],
-) -> Option<&'a SymbolRecord> {
-    let same_file: Vec<&SymbolRecord> = symbols
-        .iter()
-        .filter(|symbol| symbol.file_id == file_id && symbol.name == target_name)
-        .collect();
-    if same_file.len() == 1 {
-        return same_file.first().copied();
-    }
+impl<'a> ReferenceResolver<'a> {
+    fn new(
+        files: &'a [FileRecord],
+        symbols: &'a [SymbolRecord],
+        imports: &'a [ImportRecord],
+    ) -> Self {
+        let mut files_by_id = BTreeMap::new();
+        for file in files {
+            files_by_id.insert(file.id.as_str(), file);
+        }
 
-    let source_imports: Vec<&ImportRecord> = imports
-        .iter()
-        .filter(|import| import.source_path == source_path)
-        .collect();
-    for import in &source_imports {
-        for alias in &import.aliases {
-            if alias.local == target_name
-                && let Some(imported_path) = import.resolved_path.as_deref()
-            {
-                let imported_name = import_alias_target_name(&alias.imported, target_name);
-                let imported_symbols: Vec<&SymbolRecord> = symbols
-                    .iter()
-                    .filter(|symbol| {
-                        symbol.name == imported_name
-                            && files
-                                .iter()
-                                .find(|file| file.id == symbol.file_id)
-                                .is_some_and(|file| file.path == imported_path)
-                    })
-                    .collect();
-                if imported_symbols.len() == 1 {
-                    return imported_symbols.first().copied();
-                }
-            }
+        let mut symbols_by_file: BTreeMap<&str, Vec<&SymbolRecord>> = BTreeMap::new();
+        let mut symbols_by_file_and_name: BTreeMap<(&str, &str), Vec<&SymbolRecord>> =
+            BTreeMap::new();
+        let mut symbols_by_name: BTreeMap<&str, Vec<&SymbolRecord>> = BTreeMap::new();
+        for symbol in symbols {
+            symbols_by_file
+                .entry(symbol.file_id.as_str())
+                .or_default()
+                .push(symbol);
+            symbols_by_file_and_name
+                .entry((symbol.file_id.as_str(), symbol.name.as_str()))
+                .or_default()
+                .push(symbol);
+            symbols_by_name
+                .entry(symbol.name.as_str())
+                .or_default()
+                .push(symbol);
+        }
+
+        let mut imports_by_source_path: BTreeMap<&str, Vec<&ImportRecord>> = BTreeMap::new();
+        for import in imports {
+            imports_by_source_path
+                .entry(import.source_path.as_str())
+                .or_default()
+                .push(import);
+        }
+
+        Self {
+            files_by_id,
+            symbols_by_file,
+            symbols_by_file_and_name,
+            symbols_by_name,
+            imports_by_source_path,
         }
     }
 
-    let imported_paths: std::collections::BTreeSet<&str> = imports
-        .iter()
-        .filter(|import| import.source_path == source_path)
-        .filter_map(|import| import.resolved_path.as_deref())
-        .collect();
-    let imported_symbols: Vec<&SymbolRecord> = symbols
-        .iter()
-        .filter(|symbol| {
-            symbol.name == target_name
-                && files
-                    .iter()
-                    .find(|file| file.id == symbol.file_id)
-                    .is_some_and(|file| imported_paths.contains(file.path.as_str()))
-        })
-        .collect();
-    if imported_symbols.len() == 1 {
-        return imported_symbols.first().copied();
+    fn file_for_id(&self, file_id: &str) -> Option<&'a FileRecord> {
+        self.files_by_id.get(file_id).copied()
     }
 
-    let global_symbols: Vec<&SymbolRecord> = symbols
-        .iter()
-        .filter(|symbol| symbol.name == target_name)
-        .collect();
-    (global_symbols.len() == 1).then(|| global_symbols[0])
+    fn source_symbol_for_line(&self, file_id: &str, line: usize) -> Option<&'a SymbolRecord> {
+        self.symbols_by_file
+            .get(file_id)
+            .into_iter()
+            .flatten()
+            .filter(|symbol| symbol.start_line <= line && symbol.end_line >= line)
+            .min_by_key(|symbol| symbol.end_line.saturating_sub(symbol.start_line))
+            .copied()
+    }
+
+    fn resolve_reference_target(
+        &self,
+        file_id: &str,
+        source_path: &str,
+        target_name: &str,
+    ) -> Option<&'a SymbolRecord> {
+        let same_file = self
+            .symbols_by_file_and_name
+            .get(&(file_id, target_name))
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        if same_file.len() == 1 {
+            return same_file.first().copied();
+        }
+
+        if let Some(source_imports) = self.imports_by_source_path.get(source_path) {
+            for import in source_imports {
+                for alias in &import.aliases {
+                    if alias.local == target_name
+                        && let Some(imported_path) = import.resolved_path.as_deref()
+                    {
+                        let imported_name = import_alias_target_name(&alias.imported, target_name);
+                        let imported_symbols: Vec<&SymbolRecord> = self
+                            .symbols_by_name
+                            .get(imported_name)
+                            .into_iter()
+                            .flatten()
+                            .filter(|symbol| {
+                                self.file_for_id(&symbol.file_id)
+                                    .is_some_and(|file| file.path == imported_path)
+                            })
+                            .copied()
+                            .collect();
+                        if imported_symbols.len() == 1 {
+                            return imported_symbols.first().copied();
+                        }
+                    }
+                }
+            }
+        }
+
+        let imported_paths: std::collections::BTreeSet<&str> = self
+            .imports_by_source_path
+            .get(source_path)
+            .into_iter()
+            .flatten()
+            .filter_map(|import| import.resolved_path.as_deref())
+            .collect();
+        let imported_symbols: Vec<&SymbolRecord> = self
+            .symbols_by_name
+            .get(target_name)
+            .into_iter()
+            .flatten()
+            .filter(|symbol| {
+                self.file_for_id(&symbol.file_id)
+                    .is_some_and(|file| imported_paths.contains(file.path.as_str()))
+            })
+            .copied()
+            .collect();
+        if imported_symbols.len() == 1 {
+            return imported_symbols.first().copied();
+        }
+
+        let global_symbols = self
+            .symbols_by_name
+            .get(target_name)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        (global_symbols.len() == 1).then(|| global_symbols[0])
+    }
 }
 
 fn import_alias_target_name<'a>(imported: &'a str, fallback: &'a str) -> &'a str {

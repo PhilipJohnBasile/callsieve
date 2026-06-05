@@ -9,6 +9,8 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+#[cfg(not(feature = "embed"))]
+use anyhow::bail;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
@@ -95,6 +97,10 @@ pub enum Command {
         /// Enrich reference edges with installed Language Server Protocol servers.
         #[arg(long)]
         lsp: bool,
+
+        /// Build the optional local embeddings cache after indexing.
+        #[arg(long)]
+        embeddings: bool,
     },
 
     /// List indexed symbols.
@@ -211,6 +217,10 @@ pub enum Command {
 
         #[arg(long, value_enum, default_value_t = AgentOutputFormat::Json)]
         format: AgentOutputFormat,
+
+        /// Opt into local hybrid retrieval when built with --features embed.
+        #[arg(long)]
+        embeddings: bool,
     },
 
     /// Build an index, return a sample context packet, and report context reduction.
@@ -1164,6 +1174,41 @@ pub enum Command {
         k: Option<usize>,
 
         /// Where to write the aggregated results JSON.
+        #[arg(long)]
+        out: Option<PathBuf>,
+
+        /// Opt into local hybrid retrieval when built with --features embed.
+        #[arg(long)]
+        embeddings: bool,
+
+        /// Run lexical-vs-hybrid A/B comparison.
+        #[arg(long)]
+        compare: bool,
+    },
+
+    /// Clone pinned public benchmark repos and run retrieval evaluation.
+    #[command(name = "bench-run")]
+    BenchRun {
+        /// Path to a public benchmark manifest.
+        manifest: PathBuf,
+
+        /// Work directory for benchmark clones under <owner>/<repo>.
+        #[arg(long)]
+        workdir: PathBuf,
+
+        /// Run lexical-vs-hybrid A/B comparison.
+        #[arg(long)]
+        compare: bool,
+
+        /// K for first_correct_file_rate_at_k.
+        #[arg(long)]
+        k: Option<usize>,
+
+        /// Limit issues evaluated, useful for smoke runs.
+        #[arg(long)]
+        limit: Option<usize>,
+
+        /// Where to write the results JSON.
         #[arg(long)]
         out: Option<PathBuf>,
     },
@@ -2677,7 +2722,15 @@ pub fn run() -> Result<()> {
     output::json::set_pretty(cli.pretty);
 
     match cli.command {
-        Command::Index { path, lsp, .. } => {
+        Command::Index {
+            path,
+            lsp,
+            embeddings,
+            ..
+        } => {
+            if embeddings {
+                ensure_embeddings_supported()?;
+            }
             let index = if lsp {
                 indexer::build_index_with_options(
                     &path,
@@ -2690,6 +2743,11 @@ pub fn run() -> Result<()> {
                 indexer::build_index(&path)?
             };
             let index_path = store::json_store::save_index(&path, &index)?;
+            if embeddings {
+                build_embeddings_cache(&path, &index)?;
+            } else {
+                remove_embeddings_cache_if_present(&path)?;
+            }
             let output = IndexOutput {
                 command: "index",
                 root: root_label(&path),
@@ -2794,17 +2852,25 @@ pub fn run() -> Result<()> {
             profile,
             token_budget,
             format,
+            embeddings,
         } => {
+            let embeddings = embeddings || embeddings_env_enabled();
+            if embeddings {
+                ensure_embeddings_supported()?;
+            }
             let retrieval_task = effective_task_for_retrieval(&path, &task);
             let (index, index_load_ms) = load_index_timed(&path)?;
-            let mut context = query::build_context_with_options(
+            let mut context = query::build_context_with(
                 &path,
                 &index,
                 &retrieval_task,
-                limit,
-                snippets_per_file,
-                true,
-                why_debug,
+                query::ContextOptions {
+                    limit,
+                    snippets_per_file,
+                    include_snippets: true,
+                    why_debug,
+                    hybrid: query::HybridOptions::embeddings(embeddings),
+                },
             )?;
             context.add_index_load_time(index_load_ms);
             let memory = query::task_memory_for_context(&path, &context, now_unix_seconds())?;
@@ -3917,16 +3983,118 @@ pub fn run() -> Result<()> {
             repos_dir,
             k,
             out,
+            embeddings,
+            compare,
         } => {
-            let report = bench_public::run(&manifest, &repos_dir, k)?;
-            let out_path = bench_public::resolve_output_path(&manifest, out.as_deref(), &report)?;
-            bench_public::write_report(&out_path, &report)?;
-            let summary = bench_public::SummaryOutput::new(&manifest, &out_path, &report);
-            output::json::print(&summary)?;
+            if embeddings || compare {
+                ensure_embeddings_supported()?;
+            }
+            if compare {
+                let report = bench_public::run_compare(&manifest, &repos_dir, k)?;
+                let out_path =
+                    bench_public::resolve_compare_output_path(&manifest, out.as_deref(), &report)?;
+                bench_public::write_compare_report(&out_path, &report)?;
+                let summary =
+                    bench_public::CompareSummaryOutput::new(&manifest, &out_path, &report);
+                output::json::print(&summary)?;
+            } else {
+                let report = bench_public::run_with_options(
+                    &manifest,
+                    &repos_dir,
+                    k,
+                    bench_public::RunOptions::embeddings(embeddings),
+                )?;
+                let out_path =
+                    bench_public::resolve_output_path(&manifest, out.as_deref(), &report)?;
+                bench_public::write_report(&out_path, &report)?;
+                let summary = bench_public::SummaryOutput::new(&manifest, &out_path, &report);
+                output::json::print(&summary)?;
+            }
+        }
+        Command::BenchRun {
+            manifest,
+            workdir,
+            compare,
+            k,
+            limit,
+            out,
+        } => {
+            ensure_bench_run_supported()?;
+            if compare {
+                let report = bench_public::run_bench_compare(&manifest, &workdir, k, limit)?;
+                let out_path =
+                    bench_public::resolve_compare_output_path(&manifest, out.as_deref(), &report)?;
+                bench_public::write_compare_report(&out_path, &report)?;
+                let summary = bench_public::CompareSummaryOutput::new_for_command(
+                    "bench-run",
+                    &manifest,
+                    &out_path,
+                    &report,
+                );
+                output::json::print(&summary)?;
+            } else {
+                let report = bench_public::run_bench(&manifest, &workdir, k, limit)?;
+                let out_path =
+                    bench_public::resolve_output_path(&manifest, out.as_deref(), &report)?;
+                bench_public::write_report(&out_path, &report)?;
+                let summary = bench_public::SummaryOutput::new_for_command(
+                    "bench-run",
+                    &manifest,
+                    &out_path,
+                    &report,
+                );
+                output::json::print(&summary)?;
+            }
         }
     }
 
     Ok(())
+}
+
+fn embeddings_env_enabled() -> bool {
+    env::var("CALLSIEVE_EMBEDDINGS")
+        .ok()
+        .is_some_and(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "on"))
+}
+
+#[cfg(feature = "embed")]
+fn ensure_embeddings_supported() -> Result<()> {
+    Ok(())
+}
+
+#[cfg(not(feature = "embed"))]
+fn ensure_embeddings_supported() -> Result<()> {
+    bail!("--embeddings requires building with --features embed");
+}
+
+#[cfg(feature = "embed")]
+fn ensure_bench_run_supported() -> Result<()> {
+    Ok(())
+}
+
+#[cfg(not(feature = "embed"))]
+fn ensure_bench_run_supported() -> Result<()> {
+    bail!("bench-run requires building with --features embed");
+}
+
+#[cfg(feature = "embed")]
+fn build_embeddings_cache(root: &Path, index: &store::CodeIndex) -> Result<PathBuf> {
+    let embedder = query::embed::FastembedEmbedder::new_default()?;
+    query::embed_build::build_and_write_embeds(root, index, &embedder, true)
+}
+
+#[cfg(not(feature = "embed"))]
+fn build_embeddings_cache(_root: &Path, _index: &store::CodeIndex) -> Result<PathBuf> {
+    bail!("--embeddings requires building with --features embed");
+}
+
+fn remove_embeddings_cache_if_present(root: &Path) -> Result<()> {
+    let path = root.join(".callsieve").join("embeds.bin");
+    match fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).with_context(|| format!("failed to remove {}", path.display())),
+    }
 }
 
 fn run_client_hooks_command(client: HookClient, command: ClientHooksCommand) -> Result<()> {
@@ -15321,6 +15489,29 @@ mod tests {
         Cli::try_parse_from(["callsieve", "benchmark", ".", "change token expiry"]).unwrap();
         Cli::try_parse_from(["callsieve", "benchmark-suite", ".", "benchmarks/tasks.json"])
             .unwrap();
+        Cli::try_parse_from([
+            "callsieve",
+            "bench-public",
+            "benchmarks/public/manifest.json",
+            "benchmarks/public/repos",
+            "--compare",
+            "--k",
+            "5",
+        ])
+        .unwrap();
+        Cli::try_parse_from([
+            "callsieve",
+            "bench-run",
+            "benchmarks/public/manifest-50.json",
+            "--workdir",
+            "/tmp/csbench",
+            "--compare",
+            "--limit",
+            "8",
+            "--out",
+            "benchmarks/public/results/compare-50.json",
+        ])
+        .unwrap();
         Cli::try_parse_from([
             "callsieve",
             "eval-retrieval",
