@@ -48,6 +48,8 @@ Keep broad claims gated. Use `context_payload_reduction` for estimated prompt-pa
 
 CallSieve is now an open-source local Rust CLI with a JSON index, deterministic retrieval, optional LSP reference enrichment, lifecycle hooks for Codex, Claude Code, GitHub Copilot, OpenCode, Antigravity CLI, and Cline, MCP/rule/template setup for Cursor, VS Code, Windsurf, Continue, Zed, Junie, JetBrains AI Assistant, Amp, Goose, Warp, and Zoo Code, context-first guardrails, daemon/watch freshness support, benchmark reports, observed-session traces, and gated proof reports.
 
+Public hybrid A/B result: on the 50-issue SWE-bench Lite subset in `benchmarks/public/manifest-50.json`, lexical and opt-in hybrid retrieval both scored `56.0%` first-correct-file@5 (`+0.0 pp`, 0 wins, 0 losses, 50 ties), so hybrid is currently proven wired and non-regressing, not quality-lifting.
+
 For human installation and client setup, see [docs/INSTALL.md](docs/INSTALL.md). For AI CLI and wrapper behavior, see [docs/AGENT_CLI.md](docs/AGENT_CLI.md). For observed whole-session proof collection, see [docs/OBSERVED_SESSIONS.md](docs/OBSERVED_SESSIONS.md). For dogfooding and less-grep measurement, see [docs/DOGFOOD.md](docs/DOGFOOD.md). For paid pilot packaging, see [docs/PILOTS.md](docs/PILOTS.md).
 
 The core workflow is:

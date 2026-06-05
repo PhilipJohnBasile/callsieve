@@ -67,6 +67,25 @@ The suite output includes:
 
 `callsieve status <repo>` records whether the current index has `"lsp_enriched": true` and which local LSP commands were available during indexing.
 
+## Public Hybrid A/B
+
+CallSieve includes a 50-issue public retrieval benchmark at `benchmarks/public/manifest-50.json`. The manifest uses public SWE-bench Lite issues from `astropy/astropy` and `django/django`, pinned to each issue's `base_commit`; `ground_truth_files` are derived from the gold patch diff headers. The runner clones each distinct repo once under `--workdir`, checks out each pinned commit locally, builds a fresh CallSieve index, and compares lexical retrieval against opt-in hybrid retrieval.
+
+Run it with the embed feature:
+
+```bash
+cargo build --release --features embed
+target/release/callsieve bench-run benchmarks/public/manifest-50.json --workdir /tmp/csbench --compare --out benchmarks/public/results/compare-50.json
+```
+
+Latest local A/B run, generated June 5, 2026:
+
+| Dataset | K | Issues | Skipped | Lexical first-correct-file rate | Hybrid first-correct-file rate | Delta | Wins | Losses | Ties |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| SWE-bench Lite public subset | 5 | 50 | 0 | `56.0%` | `56.0%` | `+0.0 pp` | 0 | 0 | 50 |
+
+This run proves the hybrid path is wired and non-regressing on this benchmark, but it does not support a quality-lift claim. Treat the current public number as parity until a benchmark shows positive wins over lexical retrieval.
+
 ## Task Format
 
 ```json
