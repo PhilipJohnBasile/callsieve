@@ -82,6 +82,7 @@ coverage/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.fastembed_cache/
 __pycache__/
 *.py[cod]
 .venv/
