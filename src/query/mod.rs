@@ -1,5 +1,9 @@
 #[cfg(feature = "embed")]
+pub mod classify;
+#[cfg(feature = "embed")]
 pub mod embed;
+#[cfg(feature = "embed")]
+pub mod embed_build;
 pub mod formatter;
 pub mod ranker;
 
@@ -57,6 +61,66 @@ impl ContextProfile {
 pub struct ContextViewOptions {
     pub profile: ContextProfile,
     pub token_budget: Option<usize>,
+}
+
+#[derive(Clone, Copy)]
+pub struct ContextOptions<'a> {
+    pub limit: usize,
+    pub snippets_per_file: usize,
+    pub include_snippets: bool,
+    pub why_debug: bool,
+    pub hybrid: HybridOptions<'a>,
+}
+
+#[derive(Clone, Copy)]
+pub struct HybridOptions<'a> {
+    pub embeddings: bool,
+    #[cfg(feature = "embed")]
+    pub embedder: Option<&'a dyn embed::LocalEmbedder>,
+    _marker: std::marker::PhantomData<&'a ()>,
+}
+
+impl Default for ContextOptions<'_> {
+    fn default() -> Self {
+        Self {
+            limit: 8,
+            snippets_per_file: 2,
+            include_snippets: true,
+            why_debug: false,
+            hybrid: HybridOptions::default(),
+        }
+    }
+}
+
+impl Default for HybridOptions<'_> {
+    fn default() -> Self {
+        Self {
+            embeddings: false,
+            #[cfg(feature = "embed")]
+            embedder: None,
+            _marker: std::marker::PhantomData,
+        }
+    }
+}
+
+impl<'a> HybridOptions<'a> {
+    pub fn embeddings(embeddings: bool) -> Self {
+        Self {
+            embeddings,
+            #[cfg(feature = "embed")]
+            embedder: None,
+            _marker: std::marker::PhantomData,
+        }
+    }
+
+    #[cfg(feature = "embed")]
+    pub fn with_embedder(embeddings: bool, embedder: &'a dyn embed::LocalEmbedder) -> Self {
+        Self {
+            embeddings,
+            embedder: Some(embedder),
+            _marker: std::marker::PhantomData,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -1245,6 +1309,17 @@ impl ContextCandidate {
             self.why_debug.push(component);
         }
     }
+
+    #[cfg(feature = "embed")]
+    fn push_debug_front(&mut self, component: ranker::ScoreComponent) {
+        let key = format!(
+            "{}:{}:{}",
+            component.name, component.points, component.detail
+        );
+        if self.seen_debug.insert(key) {
+            self.why_debug.insert(0, component);
+        }
+    }
 }
 
 struct IndexLookup<'a> {
@@ -1837,11 +1912,34 @@ pub fn build_context_with_options(
     include_snippets: bool,
     why_debug: bool,
 ) -> Result<ContextOutput> {
+    build_context_with(
+        root,
+        index,
+        task,
+        ContextOptions {
+            limit,
+            snippets_per_file,
+            include_snippets,
+            why_debug,
+            hybrid: HybridOptions::default(),
+        },
+    )
+}
+
+pub fn build_context_with(
+    root: &Path,
+    index: &CodeIndex,
+    task: &str,
+    options: ContextOptions<'_>,
+) -> Result<ContextOutput> {
     let total_start = Instant::now();
-    let candidate_limit = if limit == 0 {
+    let candidate_limit = if options.limit == 0 {
         0
     } else {
-        limit.saturating_mul(16).max(MIN_CONTEXT_CANDIDATE_MATCHES)
+        options
+            .limit
+            .saturating_mul(16)
+            .max(MIN_CONTEXT_CANDIDATE_MATCHES)
     };
     let lookup = IndexLookup::new(index);
     let ranking_start = Instant::now();
@@ -1884,23 +1982,27 @@ pub fn build_context_with_options(
         }
     }
 
-    candidates.sort_by(|left, right| {
-        right
-            .score()
-            .cmp(&left.score())
-            .then_with(|| right.graph_confidence.total_cmp(&left.graph_confidence))
-            .then(left.first_rank.cmp(&right.first_rank))
-            .then(left.file_id.cmp(&right.file_id))
-    });
-    promote_implementation_companion(&lookup, &mut candidates, limit, &query_tokens);
-    promote_task_specific_test_companion(&lookup, &mut candidates, limit, &query_tokens);
+    let mut warnings = stale_warnings(root, index);
+    sort_candidates_lexical(&mut candidates, &lookup, &query_tokens);
+    apply_hybrid_ranking(
+        root,
+        index,
+        task,
+        &query_tokens,
+        &lookup,
+        &mut candidates,
+        options.hybrid,
+        &mut warnings,
+    )?;
+    promote_implementation_companion(&lookup, &mut candidates, options.limit, &query_tokens);
+    promote_task_specific_test_companion(&lookup, &mut candidates, options.limit, &query_tokens);
 
     let mut selected_symbols = 0;
     let mut selected_related_tests = 0;
     let mut snippet_elapsed = Duration::ZERO;
     let read_first: Vec<ContextFile> = candidates
         .into_iter()
-        .take(limit)
+        .take(options.limit)
         .enumerate()
         .filter_map(|(rank_index, candidate)| {
             let file = lookup.file_by_id(&candidate.file_id)?;
@@ -1934,8 +2036,8 @@ pub fn build_context_with_options(
                 root,
                 file,
                 &symbol_records,
-                snippets_per_file,
-                include_snippets,
+                options.snippets_per_file,
+                options.include_snippets,
             );
             snippet_elapsed += snippet_start.elapsed();
             let related_tests_all = related_tests(&lookup, file);
@@ -1963,7 +2065,7 @@ pub fn build_context_with_options(
             let related_tests = compact_related_tests(related_tests_all);
             let score = candidate.score();
             let why = take_strings(candidate.why, MAX_CONTEXT_WHY);
-            let debug = if why_debug {
+            let debug = if options.why_debug {
                 candidate.why_debug.into_iter().take(16).collect()
             } else {
                 Vec::new()
@@ -2010,7 +2112,7 @@ pub fn build_context_with_options(
             total_ms: elapsed_ms(total_start.elapsed()),
         },
         read_first,
-        warnings: stale_warnings(root, index),
+        warnings,
     })
 }
 
@@ -2020,6 +2122,266 @@ pub fn context_read_first_files(context: &ContextOutput) -> Vec<String> {
         .iter()
         .map(|file| file.file.clone())
         .collect()
+}
+
+fn sort_candidates_lexical(
+    candidates: &mut [ContextCandidate],
+    lookup: &IndexLookup<'_>,
+    query_tokens: &[String],
+) {
+    candidates.sort_by(|left, right| {
+        right
+            .score()
+            .cmp(&left.score())
+            .then_with(|| right.graph_confidence.total_cmp(&left.graph_confidence))
+            .then_with(|| {
+                ownership_rank(right, query_tokens, lookup).cmp(&ownership_rank(
+                    left,
+                    query_tokens,
+                    lookup,
+                ))
+            })
+            .then(left.first_rank.cmp(&right.first_rank))
+            .then(left.file_id.cmp(&right.file_id))
+    });
+}
+
+#[cfg(feature = "embed")]
+#[allow(clippy::too_many_arguments)]
+fn apply_hybrid_ranking(
+    root: &Path,
+    index: &CodeIndex,
+    task: &str,
+    query_tokens: &[String],
+    lookup: &IndexLookup<'_>,
+    candidates: &mut [ContextCandidate],
+    hybrid: HybridOptions<'_>,
+    warnings: &mut Vec<String>,
+) -> Result<()> {
+    use embed::{ExpectedCache, FastembedEmbedder, LocalEmbedder};
+
+    if !hybrid.embeddings || candidates.is_empty() {
+        return Ok(());
+    }
+
+    let embedder_id = hybrid
+        .embedder
+        .map(|embedder| embedder.id())
+        .unwrap_or_else(FastembedEmbedder::default_id);
+    let fingerprint = embed::index_fingerprint(index);
+    let expected = ExpectedCache {
+        embedder: &embedder_id,
+        index_schema_version: SCHEMA_VERSION,
+        fingerprint: &fingerprint,
+        expected_count: index.files.len(),
+    };
+    let Some(cache) = embed::read_embeds(root, &expected)? else {
+        warnings.push(
+            "--embeddings requested but .callsieve/embeds.bin is missing or stale; using lexical ranking"
+                .to_string(),
+        );
+        return Ok(());
+    };
+
+    let owned_embedder;
+    let embedder: &dyn LocalEmbedder = if let Some(embedder) = hybrid.embedder {
+        embedder
+    } else {
+        owned_embedder = FastembedEmbedder::new_default()?;
+        &owned_embedder
+    };
+    let query_vectors = embedder.embed(&[task])?;
+    let Some(query_vector) = query_vectors.first() else {
+        warnings.push("--embeddings produced no query vector; using lexical ranking".to_string());
+        return Ok(());
+    };
+    if query_vector.len() != cache.dim {
+        warnings.push(format!(
+            "--embeddings query dim {} does not match cache dim {}; using lexical ranking",
+            query_vector.len(),
+            cache.dim
+        ));
+        return Ok(());
+    }
+    let Some(query_unit) = normalize_vector(query_vector) else {
+        warnings.push("--embeddings query vector has zero norm; using lexical ranking".to_string());
+        return Ok(());
+    };
+
+    let file_vectors: BTreeMap<&str, &[f32]> = index
+        .files
+        .iter()
+        .zip(cache.vectors.iter())
+        .map(|(file, vector)| (file.id.as_str(), vector.as_slice()))
+        .collect();
+    let min_score = candidates
+        .iter()
+        .map(ContextCandidate::score)
+        .min()
+        .unwrap_or(0);
+    let max_score = candidates
+        .iter()
+        .map(ContextCandidate::score)
+        .max()
+        .unwrap_or(0);
+    let query_kind = classify::query_kind(task, query_tokens);
+    let (lex_weight, semantic_weight) = query_kind.weights();
+    let mut order_keys = BTreeMap::new();
+
+    for candidate in candidates.iter_mut() {
+        let lex_norm = normalized_lexical_score(candidate.score(), min_score, max_score);
+        let (semantic, detail) = if let Some(vector) = file_vectors.get(candidate.file_id.as_str())
+        {
+            let cosine = cosine_with_unit_query(&query_unit, vector).unwrap_or(0.0);
+            let semantic = ((cosine as f64 + 1.0) / 2.0).clamp(0.0, 1.0);
+            (
+                semantic,
+                format!(
+                    "query_kind={}, lex_norm={:.3}, sem={:.3}, cosine={:.3}",
+                    query_kind.as_str(),
+                    lex_norm,
+                    semantic,
+                    cosine
+                ),
+            )
+        } else {
+            let why = "semantic embedding missing; neutral semantic score used".to_string();
+            if candidate.seen_why.insert(why.clone()) {
+                candidate.why.push(why.clone());
+            }
+            (
+                0.5,
+                format!(
+                    "query_kind={}, lex_norm={:.3}, sem=0.500, missing_vector=true",
+                    query_kind.as_str(),
+                    lex_norm
+                ),
+            )
+        };
+        let order_key = (lex_weight * lex_norm) + (semantic_weight * semantic);
+        candidate.push_debug_front(ranker::ScoreComponent {
+            name: "semantic_embedding".to_string(),
+            points: (order_key * 1000.0).round() as i32,
+            detail,
+        });
+        order_keys.insert(candidate.file_id.clone(), order_key);
+    }
+
+    candidates.sort_by(|left, right| {
+        order_keys
+            .get(&right.file_id)
+            .copied()
+            .unwrap_or_default()
+            .total_cmp(&order_keys.get(&left.file_id).copied().unwrap_or_default())
+            .then_with(|| right.graph_confidence.total_cmp(&left.graph_confidence))
+            .then_with(|| {
+                ownership_rank(right, query_tokens, lookup).cmp(&ownership_rank(
+                    left,
+                    query_tokens,
+                    lookup,
+                ))
+            })
+            .then(left.first_rank.cmp(&right.first_rank))
+            .then(left.file_id.cmp(&right.file_id))
+    });
+
+    Ok(())
+}
+
+#[cfg(not(feature = "embed"))]
+#[allow(clippy::too_many_arguments)]
+fn apply_hybrid_ranking(
+    _root: &Path,
+    _index: &CodeIndex,
+    _task: &str,
+    _query_tokens: &[String],
+    _lookup: &IndexLookup<'_>,
+    _candidates: &mut [ContextCandidate],
+    hybrid: HybridOptions<'_>,
+    warnings: &mut Vec<String>,
+) -> Result<()> {
+    if hybrid.embeddings {
+        warnings.push(
+            "--embeddings requires building with --features embed; using lexical ranking"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+#[cfg(feature = "embed")]
+fn normalized_lexical_score(score: i32, min_score: i32, max_score: i32) -> f64 {
+    if max_score == min_score {
+        1.0
+    } else {
+        f64::from(score - min_score) / f64::from(max_score - min_score)
+    }
+}
+
+#[cfg(feature = "embed")]
+fn normalize_vector(vector: &[f32]) -> Option<Vec<f32>> {
+    let norm = vector
+        .iter()
+        .map(|value| f64::from(*value) * f64::from(*value))
+        .sum::<f64>()
+        .sqrt();
+    if norm <= f64::EPSILON {
+        return None;
+    }
+    Some(
+        vector
+            .iter()
+            .map(|value| (*value as f64 / norm) as f32)
+            .collect(),
+    )
+}
+
+#[cfg(feature = "embed")]
+fn cosine_with_unit_query(query_unit: &[f32], vector: &[f32]) -> Option<f32> {
+    if query_unit.len() != vector.len() {
+        return None;
+    }
+    let vector_unit = normalize_vector(vector)?;
+    Some(
+        query_unit
+            .iter()
+            .zip(vector_unit.iter())
+            .map(|(left, right)| left * right)
+            .sum::<f32>()
+            .clamp(-1.0, 1.0),
+    )
+}
+
+fn ownership_rank(
+    candidate: &ContextCandidate,
+    query_tokens: &[String],
+    lookup: &IndexLookup<'_>,
+) -> u8 {
+    let Some(file) = lookup.file_by_id(&candidate.file_id) else {
+        return 0;
+    };
+    let Some(ownership) = file.ownership.as_ref() else {
+        return 0;
+    };
+    if ownership.is_empty() {
+        return 0;
+    }
+    let mut owner_terms = BTreeSet::new();
+    for owner in ownership.owners.iter().chain(ownership.teams.iter()) {
+        let normalized = owner
+            .trim_start_matches('@')
+            .replace(['@', '/', '.', '-', '_'], " ")
+            .to_ascii_lowercase();
+        owner_terms.extend(formatter::tokenize(&normalized));
+    }
+    if query_tokens
+        .iter()
+        .any(|token| owner_terms.contains(token.as_str()))
+    {
+        2
+    } else {
+        1
+    }
 }
 
 pub fn context_value(context: &ContextOutput, options: ContextViewOptions) -> Result<Value> {
@@ -6101,6 +6463,208 @@ mod tests {
 
         let index = indexer::build_index(temp.path()).unwrap();
         (temp, index)
+    }
+
+    fn minimal_file(id: &str, path: &str) -> FileRecord {
+        FileRecord {
+            id: id.to_string(),
+            path: path.to_string(),
+            language: Language::Rust,
+            size_bytes: 0,
+            line_count: 0,
+            mtime: 0,
+            content_hash: format!("fnv1a64:{id}"),
+            is_test: false,
+            is_config: false,
+            module_path: "src".to_string(),
+            content_terms: Vec::new(),
+            ownership: None,
+        }
+    }
+
+    fn minimal_index(files: Vec<FileRecord>) -> CodeIndex {
+        CodeIndex {
+            schema_version: SCHEMA_VERSION,
+            root: ".".to_string(),
+            metadata: Default::default(),
+            files,
+            symbols: Vec::new(),
+            imports: Vec::new(),
+            references: Vec::new(),
+            warnings: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn ownership_tie_break_prefers_matching_owner() {
+        let mut owned = minimal_file("a", "src/a.rs");
+        owned.ownership = Some(Ownership {
+            owners: Vec::new(),
+            teams: vec!["@org/payments".to_string()],
+        });
+        let unowned = minimal_file("b", "src/b.rs");
+        let index = minimal_index(vec![unowned, owned]);
+        let lookup = IndexLookup::new(&index);
+        let query_tokens = ranker::query_tokens("payments behavior");
+        let mut candidates = vec![
+            ContextCandidate::new("b".to_string(), 10, 0),
+            ContextCandidate::new("a".to_string(), 10, 1),
+        ];
+
+        sort_candidates_lexical(&mut candidates, &lookup, &query_tokens);
+
+        assert_eq!(candidates[0].file_id, "a");
+    }
+
+    #[test]
+    fn ownership_tie_break_preserves_unowned_order() {
+        let index = minimal_index(vec![
+            minimal_file("a", "src/a.rs"),
+            minimal_file("b", "src/b.rs"),
+        ]);
+        let lookup = IndexLookup::new(&index);
+        let query_tokens = ranker::query_tokens("behavior");
+        let mut candidates = vec![
+            ContextCandidate::new("b".to_string(), 10, 0),
+            ContextCandidate::new("a".to_string(), 10, 1),
+        ];
+
+        sort_candidates_lexical(&mut candidates, &lookup, &query_tokens);
+
+        assert_eq!(candidates[0].file_id, "b");
+        assert_eq!(candidates[1].file_id, "a");
+    }
+
+    #[cfg(feature = "embed")]
+    struct FakeEmbedder;
+
+    #[cfg(feature = "embed")]
+    impl embed::LocalEmbedder for FakeEmbedder {
+        fn id(&self) -> embed::EmbedderId {
+            embed::EmbedderId::new("fake-hybrid", "v1")
+        }
+
+        fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
+            Ok(texts
+                .iter()
+                .map(|text| {
+                    if text.contains("relative") {
+                        vec![0.0, 1.0]
+                    } else {
+                        vec![1.0, 0.0]
+                    }
+                })
+                .collect())
+        }
+    }
+
+    #[cfg(feature = "embed")]
+    fn write_fake_cache(root: &Path, index: &CodeIndex, embedder: &FakeEmbedder) {
+        let cache = embed::EmbedCache {
+            embedder: embed::LocalEmbedder::id(embedder),
+            index_schema_version: SCHEMA_VERSION,
+            fingerprint: embed::index_fingerprint(index),
+            dim: 2,
+            vectors: vec![vec![0.0, -1.0], vec![0.0, 1.0]],
+        };
+        embed::write_embeds(root, &cache, false).unwrap();
+    }
+
+    #[cfg(feature = "embed")]
+    #[test]
+    fn hybrid_blend_uses_query_kind_weights() {
+        let temp = tempfile::tempdir().unwrap();
+        let index = minimal_index(vec![
+            minimal_file("lex", "src/lex.rs"),
+            minimal_file("sem", "src/sem.rs"),
+        ]);
+        let lookup = IndexLookup::new(&index);
+        let embedder = FakeEmbedder;
+        write_fake_cache(temp.path(), &index, &embedder);
+
+        let natural_tokens = ranker::query_tokens("fix relative location header");
+        let mut natural_candidates = vec![
+            ContextCandidate::new("lex".to_string(), 100, 0),
+            ContextCandidate::new("sem".to_string(), 90, 1),
+        ];
+        let mut warnings = Vec::new();
+        apply_hybrid_ranking(
+            temp.path(),
+            &index,
+            "fix relative location header",
+            &natural_tokens,
+            &lookup,
+            &mut natural_candidates,
+            HybridOptions::with_embedder(true, &embedder),
+            &mut warnings,
+        )
+        .unwrap();
+        assert!(warnings.is_empty());
+        assert_eq!(natural_candidates[0].file_id, "sem");
+
+        let identifier_tokens = ranker::query_tokens("fix RelativeLocationHeader");
+        let mut identifier_candidates = vec![
+            ContextCandidate::new("lex".to_string(), 100, 0),
+            ContextCandidate::new("sem".to_string(), 90, 1),
+        ];
+        apply_hybrid_ranking(
+            temp.path(),
+            &index,
+            "fix RelativeLocationHeader",
+            &identifier_tokens,
+            &lookup,
+            &mut identifier_candidates,
+            HybridOptions::with_embedder(true, &embedder),
+            &mut Vec::new(),
+        )
+        .unwrap();
+        assert_eq!(identifier_candidates[0].file_id, "lex");
+    }
+
+    #[cfg(feature = "embed")]
+    #[test]
+    fn hybrid_blend_is_deterministic() {
+        let temp = tempfile::tempdir().unwrap();
+        let index = minimal_index(vec![
+            minimal_file("lex", "src/lex.rs"),
+            minimal_file("sem", "src/sem.rs"),
+        ]);
+        let lookup = IndexLookup::new(&index);
+        let embedder = FakeEmbedder;
+        write_fake_cache(temp.path(), &index, &embedder);
+        let tokens = ranker::query_tokens("fix relative location header");
+
+        let mut first = vec![
+            ContextCandidate::new("lex".to_string(), 100, 0),
+            ContextCandidate::new("sem".to_string(), 90, 1),
+        ];
+        let mut second = vec![
+            ContextCandidate::new("lex".to_string(), 100, 0),
+            ContextCandidate::new("sem".to_string(), 90, 1),
+        ];
+        for candidates in [&mut first, &mut second] {
+            apply_hybrid_ranking(
+                temp.path(),
+                &index,
+                "fix relative location header",
+                &tokens,
+                &lookup,
+                candidates,
+                HybridOptions::with_embedder(true, &embedder),
+                &mut Vec::new(),
+            )
+            .unwrap();
+        }
+
+        let first_order: Vec<&str> = first
+            .iter()
+            .map(|candidate| candidate.file_id.as_str())
+            .collect();
+        let second_order: Vec<&str> = second
+            .iter()
+            .map(|candidate| candidate.file_id.as_str())
+            .collect();
+        assert_eq!(first_order, second_order);
     }
 
     #[test]

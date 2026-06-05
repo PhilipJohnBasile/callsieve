@@ -229,7 +229,7 @@ fn now_unix_seconds() -> u64 {
         .unwrap_or_default()
 }
 
-fn stable_content_hash(bytes: &[u8]) -> String {
+pub(crate) fn stable_content_hash(bytes: &[u8]) -> String {
     let mut hash = 0xcbf29ce484222325_u64;
     for byte in bytes {
         hash ^= u64::from(*byte);

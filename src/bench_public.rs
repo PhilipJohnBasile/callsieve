@@ -34,6 +34,36 @@ pub const DEFAULT_K: usize = 5;
 const CONTEXT_LIMIT: usize = 8;
 const SNIPPETS_PER_FILE: usize = 1;
 
+#[derive(Clone, Copy)]
+pub struct RunOptions<'a> {
+    pub embeddings: bool,
+    #[cfg(feature = "embed")]
+    pub embedder: Option<&'a dyn query::embed::LocalEmbedder>,
+    _marker: std::marker::PhantomData<&'a ()>,
+}
+
+impl Default for RunOptions<'_> {
+    fn default() -> Self {
+        Self {
+            embeddings: false,
+            #[cfg(feature = "embed")]
+            embedder: None,
+            _marker: std::marker::PhantomData,
+        }
+    }
+}
+
+impl<'a> RunOptions<'a> {
+    pub fn embeddings(embeddings: bool) -> Self {
+        Self {
+            embeddings,
+            #[cfg(feature = "embed")]
+            embedder: None,
+            _marker: std::marker::PhantomData,
+        }
+    }
+}
+
 /// Parsed manifest.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Manifest {
@@ -154,6 +184,57 @@ pub struct ModeAReport {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct CompareReport {
+    pub mode: &'static str,
+    pub schema_version: u32,
+    pub generated_at_unix: u64,
+    pub generated_at_iso_date: String,
+    pub manifest: ManifestSummary,
+    pub k: usize,
+    pub aggregate: CompareAggregate,
+    pub issues: Vec<CompareIssueResult>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CompareIssueResult {
+    pub id: String,
+    pub repo: String,
+    pub base_commit: String,
+    pub task: String,
+    pub ground_truth_files: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolving_pr: Option<u64>,
+    pub k: usize,
+    pub lexical: CompareArmResult,
+    pub hybrid: CompareArmResult,
+    pub delta: f64,
+    pub outcome: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skipped: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CompareArmResult {
+    pub top_k_files: Vec<String>,
+    pub selected_files_count: usize,
+    pub first_correct_file_rate_at_k: f64,
+    pub matched_files: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CompareAggregate {
+    pub evaluated: usize,
+    pub skipped: usize,
+    pub total: usize,
+    pub lexical_first_correct_file_rate_at_k: f64,
+    pub hybrid_first_correct_file_rate_at_k: f64,
+    pub delta: f64,
+    pub wins: usize,
+    pub losses: usize,
+    pub ties: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct ManifestSummary {
     pub path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -181,10 +262,20 @@ pub struct Aggregate {
 }
 
 /// Run the full Mode A evaluation.
+#[allow(dead_code)]
 pub fn run(
     manifest_path: &Path,
     repos_dir: &Path,
     k_override: Option<usize>,
+) -> Result<ModeAReport> {
+    run_with_options(manifest_path, repos_dir, k_override, RunOptions::default())
+}
+
+pub fn run_with_options(
+    manifest_path: &Path,
+    repos_dir: &Path,
+    k_override: Option<usize>,
+    options: RunOptions<'_>,
 ) -> Result<ModeAReport> {
     let manifest_json = fs::read_to_string(manifest_path).with_context(|| {
         format!(
@@ -200,7 +291,7 @@ pub fn run(
 
     let mut issues: Vec<IssueResult> = Vec::with_capacity(manifest.issues.len());
     for issue in &manifest.issues {
-        issues.push(evaluate_issue(issue, repos_dir, k)?);
+        issues.push(evaluate_issue(issue, repos_dir, k, options)?);
     }
     let aggregate = aggregate(&issues);
 
@@ -228,9 +319,81 @@ pub fn run(
     })
 }
 
+#[cfg(feature = "embed")]
+pub fn run_compare(
+    manifest_path: &Path,
+    repos_dir: &Path,
+    k_override: Option<usize>,
+) -> Result<CompareReport> {
+    let embedder = query::embed::FastembedEmbedder::new_default()?;
+    run_compare_with_embedder(manifest_path, repos_dir, k_override, &embedder)
+}
+
+#[cfg(not(feature = "embed"))]
+pub fn run_compare(
+    _manifest_path: &Path,
+    _repos_dir: &Path,
+    _k_override: Option<usize>,
+) -> Result<CompareReport> {
+    bail!("--compare requires building with --features embed");
+}
+
+#[cfg(feature = "embed")]
+pub fn run_compare_with_embedder(
+    manifest_path: &Path,
+    repos_dir: &Path,
+    k_override: Option<usize>,
+    embedder: &dyn query::embed::LocalEmbedder,
+) -> Result<CompareReport> {
+    let manifest_json = fs::read_to_string(manifest_path).with_context(|| {
+        format!(
+            "failed to read benchmark manifest: {}",
+            manifest_path.display()
+        )
+    })?;
+    let manifest = Manifest::from_str(&manifest_json)?;
+    let k = k_override
+        .or(manifest.default_k)
+        .unwrap_or(DEFAULT_K)
+        .max(1);
+
+    let mut issues = Vec::with_capacity(manifest.issues.len());
+    for issue in &manifest.issues {
+        issues.push(evaluate_issue_compare(issue, repos_dir, k, embedder)?);
+    }
+    let aggregate = aggregate_compare(&issues);
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let iso_date = unix_seconds_to_iso_date(now);
+
+    Ok(CompareReport {
+        mode: "A/B",
+        schema_version: 1,
+        generated_at_unix: now,
+        generated_at_iso_date: iso_date,
+        manifest: ManifestSummary {
+            path: manifest_path.display().to_string(),
+            schema_version: manifest.schema_version,
+            mode: manifest.mode.clone(),
+            description: manifest.description.clone(),
+            issue_count: manifest.issues.len(),
+        },
+        k,
+        aggregate,
+        issues,
+    })
+}
+
 /// Evaluate a single issue. Indexes the repo at `<repos_dir>/<owner>/<name>`
 /// and runs agent-context.
-fn evaluate_issue(issue: &Issue, repos_dir: &Path, k: usize) -> Result<IssueResult> {
+fn evaluate_issue(
+    issue: &Issue,
+    repos_dir: &Path,
+    k: usize,
+    options: RunOptions<'_>,
+) -> Result<IssueResult> {
     let repo_path = repos_dir.join(&issue.repo);
     if !repo_path.exists() {
         return Ok(skipped_issue(
@@ -245,13 +408,18 @@ fn evaluate_issue(issue: &Issue, repos_dir: &Path, k: usize) -> Result<IssueResu
 
     let index = indexer::build_index(&repo_path)
         .with_context(|| format!("failed to index {}", repo_path.display()))?;
-    let context = query::build_context(
+    build_embeddings_if_requested(&repo_path, &index, options)?;
+    let context = query::build_context_with(
         &repo_path,
         &index,
         &issue.task,
-        CONTEXT_LIMIT,
-        SNIPPETS_PER_FILE,
-        false,
+        query::ContextOptions {
+            limit: CONTEXT_LIMIT,
+            snippets_per_file: SNIPPETS_PER_FILE,
+            include_snippets: false,
+            why_debug: false,
+            hybrid: hybrid_options_from_run_options(options),
+        },
     )
     .with_context(|| format!("failed to build context for {}", issue.id))?;
     let read_first = read_first_files(&context)?;
@@ -285,6 +453,132 @@ fn evaluate_issue(issue: &Issue, repos_dir: &Path, k: usize) -> Result<IssueResu
     })
 }
 
+#[cfg(feature = "embed")]
+fn evaluate_issue_compare(
+    issue: &Issue,
+    repos_dir: &Path,
+    k: usize,
+    embedder: &dyn query::embed::LocalEmbedder,
+) -> Result<CompareIssueResult> {
+    let repo_path = repos_dir.join(&issue.repo);
+    if !repo_path.exists() {
+        return Ok(skipped_compare_issue(
+            issue,
+            k,
+            format!(
+                "repo not found at {}; clone <owner>/<repo> there and check out base_commit before running",
+                repo_path.display()
+            ),
+        ));
+    }
+
+    let index = indexer::build_index(&repo_path)
+        .with_context(|| format!("failed to index {}", repo_path.display()))?;
+    query::embed_build::build_and_write_embeds(&repo_path, &index, embedder, true)?;
+    let lexical_context = query::build_context(
+        &repo_path,
+        &index,
+        &issue.task,
+        CONTEXT_LIMIT,
+        SNIPPETS_PER_FILE,
+        false,
+    )
+    .with_context(|| format!("failed to build lexical context for {}", issue.id))?;
+    let hybrid_context = query::build_context_with(
+        &repo_path,
+        &index,
+        &issue.task,
+        query::ContextOptions {
+            limit: CONTEXT_LIMIT,
+            snippets_per_file: SNIPPETS_PER_FILE,
+            include_snippets: false,
+            why_debug: false,
+            hybrid: query::HybridOptions::with_embedder(true, embedder),
+        },
+    )
+    .with_context(|| format!("failed to build hybrid context for {}", issue.id))?;
+
+    let lexical = compare_arm_from_context(&lexical_context, issue, k)?;
+    let hybrid = compare_arm_from_context(&hybrid_context, issue, k)?;
+    let delta = hybrid.first_correct_file_rate_at_k - lexical.first_correct_file_rate_at_k;
+    let outcome = if delta > 0.0 {
+        "win"
+    } else if delta < 0.0 {
+        "loss"
+    } else {
+        "tie"
+    };
+
+    Ok(CompareIssueResult {
+        id: issue.id.clone(),
+        repo: issue.repo.clone(),
+        base_commit: issue.base_commit.clone(),
+        task: issue.task.clone(),
+        ground_truth_files: issue.ground_truth_files.clone(),
+        resolving_pr: issue.resolving_pr,
+        k,
+        lexical,
+        hybrid,
+        delta,
+        outcome: outcome.to_string(),
+        skipped: None,
+    })
+}
+
+#[cfg(feature = "embed")]
+fn compare_arm_from_context(
+    context: &query::ContextOutput,
+    issue: &Issue,
+    k: usize,
+) -> Result<CompareArmResult> {
+    let read_first = read_first_files(context)?;
+    let selected_files_count = read_first.len();
+    let top_k: Vec<String> = read_first.into_iter().take(k).collect();
+    let ground: BTreeSet<&str> = issue
+        .ground_truth_files
+        .iter()
+        .map(String::as_str)
+        .collect();
+    let matched_files: Vec<String> = top_k
+        .iter()
+        .filter(|file| ground.contains(file.as_str()))
+        .cloned()
+        .collect();
+    let first_correct_file_rate_at_k =
+        first_correct_file_rate_at_k(&top_k, &issue.ground_truth_files, k);
+
+    Ok(CompareArmResult {
+        top_k_files: top_k,
+        selected_files_count,
+        first_correct_file_rate_at_k,
+        matched_files,
+    })
+}
+
+#[cfg(feature = "embed")]
+fn skipped_compare_issue(issue: &Issue, k: usize, reason: String) -> CompareIssueResult {
+    let empty = CompareArmResult {
+        top_k_files: Vec::new(),
+        selected_files_count: 0,
+        first_correct_file_rate_at_k: 0.0,
+        matched_files: Vec::new(),
+    };
+    CompareIssueResult {
+        id: issue.id.clone(),
+        repo: issue.repo.clone(),
+        base_commit: issue.base_commit.clone(),
+        task: issue.task.clone(),
+        ground_truth_files: issue.ground_truth_files.clone(),
+        resolving_pr: issue.resolving_pr,
+        k,
+        lexical: empty.clone(),
+        hybrid: empty,
+        delta: 0.0,
+        outcome: "skipped".to_string(),
+        skipped: Some(reason),
+    }
+}
+
 fn skipped_issue(issue: &Issue, k: usize, reason: String) -> IssueResult {
     IssueResult {
         id: issue.id.clone(),
@@ -300,6 +594,52 @@ fn skipped_issue(issue: &Issue, k: usize, reason: String) -> IssueResult {
         matched_files: Vec::new(),
         skipped: Some(reason),
     }
+}
+
+#[cfg(feature = "embed")]
+fn build_embeddings_if_requested(
+    repo_path: &Path,
+    index: &crate::store::CodeIndex,
+    options: RunOptions<'_>,
+) -> Result<()> {
+    if !options.embeddings {
+        return Ok(());
+    }
+    let owned_embedder;
+    let embedder: &dyn query::embed::LocalEmbedder = if let Some(embedder) = options.embedder {
+        embedder
+    } else {
+        owned_embedder = query::embed::FastembedEmbedder::new_default()?;
+        &owned_embedder
+    };
+    query::embed_build::build_and_write_embeds(repo_path, index, embedder, true)?;
+    Ok(())
+}
+
+#[cfg(not(feature = "embed"))]
+fn build_embeddings_if_requested(
+    _repo_path: &Path,
+    _index: &crate::store::CodeIndex,
+    options: RunOptions<'_>,
+) -> Result<()> {
+    if options.embeddings {
+        bail!("--embeddings requires building with --features embed");
+    }
+    Ok(())
+}
+
+#[cfg(feature = "embed")]
+fn hybrid_options_from_run_options(options: RunOptions<'_>) -> query::HybridOptions<'_> {
+    if let Some(embedder) = options.embedder {
+        query::HybridOptions::with_embedder(options.embeddings, embedder)
+    } else {
+        query::HybridOptions::embeddings(options.embeddings)
+    }
+}
+
+#[cfg(not(feature = "embed"))]
+fn hybrid_options_from_run_options(options: RunOptions<'_>) -> query::HybridOptions<'_> {
+    query::HybridOptions::embeddings(options.embeddings)
 }
 
 /// Aggregate per-issue results. Skipped issues are excluded from the
@@ -323,6 +663,58 @@ pub fn aggregate(issues: &[IssueResult]) -> Aggregate {
         total,
         first_correct_file_rate_at_k: rate,
         hits,
+    }
+}
+
+#[cfg(feature = "embed")]
+pub fn aggregate_compare(issues: &[CompareIssueResult]) -> CompareAggregate {
+    let total = issues.len();
+    let skipped = issues
+        .iter()
+        .filter(|issue| issue.skipped.is_some())
+        .count();
+    let evaluated = total - skipped;
+    let mut lexical_hits = 0usize;
+    let mut hybrid_hits = 0usize;
+    let mut wins = 0usize;
+    let mut losses = 0usize;
+    let mut ties = 0usize;
+
+    for issue in issues.iter().filter(|issue| issue.skipped.is_none()) {
+        if issue.lexical.first_correct_file_rate_at_k >= 0.5 {
+            lexical_hits += 1;
+        }
+        if issue.hybrid.first_correct_file_rate_at_k >= 0.5 {
+            hybrid_hits += 1;
+        }
+        match issue.outcome.as_str() {
+            "win" => wins += 1,
+            "loss" => losses += 1,
+            _ => ties += 1,
+        }
+    }
+
+    let lexical_rate = if evaluated == 0 {
+        0.0
+    } else {
+        lexical_hits as f64 / evaluated as f64
+    };
+    let hybrid_rate = if evaluated == 0 {
+        0.0
+    } else {
+        hybrid_hits as f64 / evaluated as f64
+    };
+
+    CompareAggregate {
+        evaluated,
+        skipped,
+        total,
+        lexical_first_correct_file_rate_at_k: lexical_rate,
+        hybrid_first_correct_file_rate_at_k: hybrid_rate,
+        delta: hybrid_rate - lexical_rate,
+        wins,
+        losses,
+        ties,
     }
 }
 
@@ -363,8 +755,40 @@ pub fn resolve_output_path(
     Ok(dir.join(format!("mode-a-{}.json", report.generated_at_iso_date)))
 }
 
+pub fn resolve_compare_output_path(
+    manifest_path: &Path,
+    out: Option<&Path>,
+    report: &CompareReport,
+) -> Result<PathBuf> {
+    if let Some(out) = out {
+        return Ok(out.to_path_buf());
+    }
+    let dir = manifest_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("results");
+    Ok(dir.join(format!("mode-ab-{}.json", report.generated_at_iso_date)))
+}
+
 /// Write the report JSON to disk. Creates the parent directory if missing.
 pub fn write_report(out_path: &Path, report: &ModeAReport) -> Result<()> {
+    if let Some(parent) = out_path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent).with_context(|| {
+            format!(
+                "failed to create benchmark results directory {}",
+                parent.display()
+            )
+        })?;
+    }
+    let json = serde_json::to_string_pretty(report)?;
+    fs::write(out_path, format!("{json}\n"))
+        .with_context(|| format!("failed to write benchmark report to {}", out_path.display()))?;
+    Ok(())
+}
+
+pub fn write_compare_report(out_path: &Path, report: &CompareReport) -> Result<()> {
     if let Some(parent) = out_path.parent()
         && !parent.as_os_str().is_empty()
     {
@@ -395,6 +819,29 @@ pub struct SummaryOutput {
 
 impl SummaryOutput {
     pub fn new(manifest_path: &Path, out_path: &Path, report: &ModeAReport) -> Self {
+        Self {
+            command: "bench-public",
+            mode: report.mode,
+            manifest: manifest_path.display().to_string(),
+            report: out_path.display().to_string(),
+            k: report.k,
+            aggregate: report.aggregate.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct CompareSummaryOutput {
+    pub command: &'static str,
+    pub mode: &'static str,
+    pub manifest: String,
+    pub report: String,
+    pub k: usize,
+    pub aggregate: CompareAggregate,
+}
+
+impl CompareSummaryOutput {
+    pub fn new(manifest_path: &Path, out_path: &Path, report: &CompareReport) -> Self {
         Self {
             command: "bench-public",
             mode: report.mode,
@@ -562,6 +1009,22 @@ mod tests {
     }
 
     #[test]
+    fn expanded_manifest_on_disk_is_valid() {
+        let path = Path::new("benchmarks/public/manifest-50.json");
+        if !path.exists() {
+            return;
+        }
+        let json = std::fs::read_to_string(path).expect("read expanded manifest");
+        let manifest = Manifest::from_str(&json).expect("expanded manifest parses");
+        assert_eq!(manifest.issues.len(), 50);
+        for issue in &manifest.issues {
+            assert!(!issue.repo.is_empty());
+            assert!(!issue.base_commit.is_empty());
+            assert!(!issue.ground_truth_files.is_empty());
+        }
+    }
+
+    #[test]
     fn recall_at_k_hits_when_ground_truth_in_top_k() {
         let read_first = vec![
             "src/a.py".to_string(),
@@ -708,5 +1171,71 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&written).unwrap();
         assert_eq!(parsed["mode"], "A");
         assert_eq!(parsed["k"], 5);
+    }
+
+    #[cfg(feature = "embed")]
+    struct FakeEmbedder;
+
+    #[cfg(feature = "embed")]
+    impl query::embed::LocalEmbedder for FakeEmbedder {
+        fn id(&self) -> query::embed::EmbedderId {
+            query::embed::EmbedderId::new("fake-bench", "v1")
+        }
+
+        fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
+            Ok(texts
+                .iter()
+                .map(|text| {
+                    if text.contains("beta") || text.contains("src/b.rs") {
+                        vec![0.0, 1.0]
+                    } else {
+                        vec![0.0, -1.0]
+                    }
+                })
+                .collect())
+        }
+    }
+
+    #[cfg(feature = "embed")]
+    #[test]
+    fn compare_report_records_deterministic_wins_and_losses() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repos_dir = tmp.path().join("repos");
+        let repo = repos_dir.join("owner/name");
+        std::fs::create_dir_all(repo.join("src")).unwrap();
+        std::fs::write(repo.join("src/a.rs"), "pub fn alpha() {}\n").unwrap();
+        std::fs::write(repo.join("src/b.rs"), "pub fn beta() {}\n").unwrap();
+        let manifest_path = tmp.path().join("manifest.json");
+        std::fs::write(
+            &manifest_path,
+            r#"{
+                "default_k": 1,
+                "issues": [
+                    {
+                        "id": "win",
+                        "repo": "owner/name",
+                        "base_commit": "abc",
+                        "task": "change alpha beta behavior",
+                        "ground_truth_files": ["src/b.rs"]
+                    },
+                    {
+                        "id": "loss",
+                        "repo": "owner/name",
+                        "base_commit": "abc",
+                        "task": "change alpha beta behavior",
+                        "ground_truth_files": ["src/a.rs"]
+                    }
+                ]
+            }"#,
+        )
+        .unwrap();
+
+        let report =
+            run_compare_with_embedder(&manifest_path, &repos_dir, Some(1), &FakeEmbedder).unwrap();
+
+        assert_eq!(report.aggregate.evaluated, 2);
+        assert_eq!(report.aggregate.wins, 1);
+        assert_eq!(report.aggregate.losses, 1);
+        assert_eq!(report.aggregate.ties, 0);
     }
 }

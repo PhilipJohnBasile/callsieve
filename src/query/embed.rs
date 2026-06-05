@@ -3,8 +3,8 @@
 //! This module is the smallest shippable slice of the embedding layer:
 //! a `LocalEmbedder` trait, a `fastembed`-backed adapter, and a
 //! `.callsieve/embeds.bin` reader/writer that tags each cache with the
-//! `(model_id, model_revision, index_schema_version)` triple. Anything that
-//! doesn't match those three values causes the reader to return `None`,
+//! `(model_id, model_revision, index_schema_version, fingerprint)` tuple.
+//! Anything that doesn't match those values causes the reader to return `None`,
 //! forcing a rebuild rather than silently serving stale vectors.
 //!
 //! Nothing here touches `src/query/ranker.rs` yet - the hybrid blend lands in
@@ -26,7 +26,7 @@
 //!
 //! ```text
 //! magic           : 4 bytes  "CSEM"
-//! format_version  : u16      currently 1
+//! format_version  : u16      currently 2
 //! flags           : u8       bit 0 = vectors are f16; bit 1+ reserved
 //! _pad            : u8       reserved, must be 0
 //! index_schema    : u32      mirrors crate::indexer::SCHEMA_VERSION
@@ -36,6 +36,8 @@
 //! model_id        : [u8; n]
 //! model_rev_len   : u16      bytes of UTF-8 model_revision
 //! model_revision  : [u8; n]
+//! fingerprint_len : u16      bytes of UTF-8 index fingerprint
+//! fingerprint     : [u8; n]
 //! vectors         : count * dim * (2 if f16 else 4) bytes
 //! ```
 //!
@@ -54,6 +56,8 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow, bail};
+
+use crate::{indexer::stable_content_hash, store::CodeIndex};
 
 /// Identifies a specific embedding model + checkpoint. Used both at
 /// runtime and as a cache key on disk.
@@ -97,6 +101,11 @@ impl FastembedEmbedder {
         Self::new_with_model(model)
     }
 
+    /// Stable cache id for the default model without initializing ONNX Runtime.
+    pub fn default_id() -> EmbedderId {
+        Self::id_for_model(fastembed::EmbeddingModel::BGESmallENV15)
+    }
+
     /// Construct with an explicit `fastembed::EmbeddingModel`. Exposed so
     /// callers can pin a specific checkpoint (e.g. MiniLM) without
     /// re-implementing the trait.
@@ -106,15 +115,23 @@ impl FastembedEmbedder {
         // That avoids depending on private/unstable fields of
         // `fastembed::ModelInfo`, while still guaranteeing a cache built
         // against one model is rejected if the caller swaps to another.
-        let model_id = format!("{model:?}");
-        let model_revision = format!("fastembed-{}", env!("CARGO_PKG_VERSION"));
+        let id = Self::id_for_model(model.clone());
         let init = fastembed::InitOptions::new(model);
         let inner = fastembed::TextEmbedding::try_new(init)
             .map_err(|e| anyhow!("fastembed init failed: {e}"))?;
-        Ok(Self {
-            inner,
-            id: EmbedderId::new(model_id, model_revision),
-        })
+        Ok(Self { inner, id })
+    }
+
+    fn id_for_model(model: fastembed::EmbeddingModel) -> EmbedderId {
+        // We synthesize a stable `(model_id, model_revision)` from the
+        // model's `Debug` representation plus the embedder crate version.
+        // That avoids depending on private/unstable fields of
+        // `fastembed::ModelInfo`, while still guaranteeing a cache built
+        // against one model is rejected if the caller swaps to another.
+        EmbedderId::new(
+            format!("{model:?}"),
+            format!("fastembed-{}", env!("CARGO_PKG_VERSION")),
+        )
     }
 }
 
@@ -143,7 +160,7 @@ impl LocalEmbedder for FastembedEmbedder {
 // ---------------------------------------------------------------------------
 
 const MAGIC: &[u8; 4] = b"CSEM";
-const FORMAT_VERSION: u16 = 1;
+const FORMAT_VERSION: u16 = 2;
 const FLAG_F16: u8 = 0b0000_0001;
 
 /// In-memory representation of a loaded `.callsieve/embeds.bin`.
@@ -151,6 +168,7 @@ const FLAG_F16: u8 = 0b0000_0001;
 pub struct EmbedCache {
     pub embedder: EmbedderId,
     pub index_schema_version: u32,
+    pub fingerprint: String,
     pub dim: usize,
     /// `vectors[i]` is the i-th embedding, length `dim`.
     pub vectors: Vec<Vec<f32>>,
@@ -161,6 +179,20 @@ pub struct EmbedCache {
 pub struct ExpectedCache<'a> {
     pub embedder: &'a EmbedderId,
     pub index_schema_version: u32,
+    pub fingerprint: &'a str,
+    pub expected_count: usize,
+}
+
+/// Fingerprint the positional alignment contract for `vectors[i] ↔ index.files[i]`.
+pub fn index_fingerprint(index: &CodeIndex) -> String {
+    let mut bytes = Vec::new();
+    for file in &index.files {
+        bytes.extend_from_slice(file.id.as_bytes());
+        bytes.push(0);
+        bytes.extend_from_slice(file.content_hash.as_bytes());
+        bytes.push(b'\n');
+    }
+    stable_content_hash(&bytes)
 }
 
 /// Path helper, mirrors `store::json_store::index_path`.
@@ -216,8 +248,12 @@ pub fn write_embeds_to<W: Write>(w: &mut W, cache: &EmbedCache, quantize_f16: bo
     }
     let model_id = cache.embedder.model_id.as_bytes();
     let model_rev = cache.embedder.model_revision.as_bytes();
-    if model_id.len() > u16::MAX as usize || model_rev.len() > u16::MAX as usize {
-        bail!("model_id / model_revision must fit in u16 bytes");
+    let fingerprint = cache.fingerprint.as_bytes();
+    if model_id.len() > u16::MAX as usize
+        || model_rev.len() > u16::MAX as usize
+        || fingerprint.len() > u16::MAX as usize
+    {
+        bail!("model_id / model_revision / fingerprint must fit in u16 bytes");
     }
     let flags: u8 = if quantize_f16 { FLAG_F16 } else { 0 };
 
@@ -231,6 +267,8 @@ pub fn write_embeds_to<W: Write>(w: &mut W, cache: &EmbedCache, quantize_f16: bo
     w.write_all(model_id)?;
     w.write_all(&(model_rev.len() as u16).to_le_bytes())?;
     w.write_all(model_rev)?;
+    w.write_all(&(fingerprint.len() as u16).to_le_bytes())?;
+    w.write_all(fingerprint)?;
 
     for v in &cache.vectors {
         if quantize_f16 {
@@ -291,10 +329,18 @@ pub fn read_embeds_from<R: Read>(
     let model_revision = String::from_utf8(model_rev_buf)
         .map_err(|_| anyhow!("embeds.bin model_revision is not valid utf-8"))?;
 
+    let fingerprint_len = read_u16_le(&mut r)? as usize;
+    let mut fingerprint_buf = vec![0u8; fingerprint_len];
+    r.read_exact(&mut fingerprint_buf)?;
+    let fingerprint = String::from_utf8(fingerprint_buf)
+        .map_err(|_| anyhow!("embeds.bin fingerprint is not valid utf-8"))?;
+
     // Header check - *this* is the only place stale caches get filtered.
     if index_schema_version != expected.index_schema_version
         || model_id != expected.embedder.model_id
         || model_revision != expected.embedder.model_revision
+        || fingerprint != expected.fingerprint
+        || count != expected.expected_count
     {
         return Ok(None);
     }
@@ -324,6 +370,7 @@ pub fn read_embeds_from<R: Read>(
     Ok(Some(EmbedCache {
         embedder: EmbedderId::new(model_id, model_revision),
         index_schema_version,
+        fingerprint,
         dim,
         vectors,
     }))
@@ -354,6 +401,7 @@ mod tests {
         EmbedCache {
             embedder: EmbedderId::new("bge-small-en-v1.5", "rev-abc123"),
             index_schema_version: 7,
+            fingerprint: "fnv1a64:0123456789abcdef".to_string(),
             dim: 4,
             vectors: vec![
                 vec![0.0, 0.5, -0.25, 1.0],
@@ -372,12 +420,15 @@ mod tests {
         let expected = ExpectedCache {
             embedder: &cache.embedder,
             index_schema_version: cache.index_schema_version,
+            fingerprint: &cache.fingerprint,
+            expected_count: cache.vectors.len(),
         };
         let read = read_embeds_from(Cursor::new(&buf), &expected)
             .unwrap()
             .expect("cache should round-trip");
         assert_eq!(read.embedder, cache.embedder);
         assert_eq!(read.index_schema_version, cache.index_schema_version);
+        assert_eq!(read.fingerprint, cache.fingerprint);
         assert_eq!(read.dim, cache.dim);
         assert_eq!(read.vectors.len(), cache.vectors.len());
         // f16 round-trip: exact for our sample (all values are dyadic
@@ -400,6 +451,8 @@ mod tests {
         let expected = ExpectedCache {
             embedder: &cache.embedder,
             index_schema_version: cache.index_schema_version,
+            fingerprint: &cache.fingerprint,
+            expected_count: cache.vectors.len(),
         };
         let read = read_embeds_from(Cursor::new(&buf), &expected)
             .unwrap()
@@ -417,6 +470,8 @@ mod tests {
         let expected = ExpectedCache {
             embedder: &other,
             index_schema_version: cache.index_schema_version,
+            fingerprint: &cache.fingerprint,
+            expected_count: cache.vectors.len(),
         };
         let res = read_embeds_from(Cursor::new(&buf), &expected).unwrap();
         assert!(res.is_none(), "model_id mismatch must yield None");
@@ -432,6 +487,8 @@ mod tests {
         let expected = ExpectedCache {
             embedder: &other,
             index_schema_version: cache.index_schema_version,
+            fingerprint: &cache.fingerprint,
+            expected_count: cache.vectors.len(),
         };
         let res = read_embeds_from(Cursor::new(&buf), &expected).unwrap();
         assert!(res.is_none(), "model_revision mismatch must yield None");
@@ -446,9 +503,60 @@ mod tests {
         let expected = ExpectedCache {
             embedder: &cache.embedder,
             index_schema_version: cache.index_schema_version + 1,
+            fingerprint: &cache.fingerprint,
+            expected_count: cache.vectors.len(),
         };
         let res = read_embeds_from(Cursor::new(&buf), &expected).unwrap();
         assert!(res.is_none(), "schema_version mismatch must yield None");
+    }
+
+    #[test]
+    fn cache_mismatch_returns_none_on_fingerprint() {
+        let cache = sample_cache();
+        let mut buf = Vec::new();
+        write_embeds_to(&mut buf, &cache, true).unwrap();
+
+        let expected = ExpectedCache {
+            embedder: &cache.embedder,
+            index_schema_version: cache.index_schema_version,
+            fingerprint: "fnv1a64:ffffffffffffffff",
+            expected_count: cache.vectors.len(),
+        };
+        let res = read_embeds_from(Cursor::new(&buf), &expected).unwrap();
+        assert!(res.is_none(), "fingerprint mismatch must yield None");
+    }
+
+    #[test]
+    fn cache_mismatch_returns_none_on_count() {
+        let cache = sample_cache();
+        let mut buf = Vec::new();
+        write_embeds_to(&mut buf, &cache, true).unwrap();
+
+        let expected = ExpectedCache {
+            embedder: &cache.embedder,
+            index_schema_version: cache.index_schema_version,
+            fingerprint: &cache.fingerprint,
+            expected_count: cache.vectors.len() + 1,
+        };
+        let res = read_embeds_from(Cursor::new(&buf), &expected).unwrap();
+        assert!(res.is_none(), "count mismatch must yield None");
+    }
+
+    #[test]
+    fn v1_cache_returns_none() {
+        let cache = sample_cache();
+        let mut buf = Vec::new();
+        write_embeds_to(&mut buf, &cache, true).unwrap();
+        buf[4..6].copy_from_slice(&1u16.to_le_bytes());
+
+        let expected = ExpectedCache {
+            embedder: &cache.embedder,
+            index_schema_version: cache.index_schema_version,
+            fingerprint: &cache.fingerprint,
+            expected_count: cache.vectors.len(),
+        };
+        let res = read_embeds_from(Cursor::new(&buf), &expected).unwrap();
+        assert!(res.is_none(), "old format v1 cache must yield None");
     }
 
     #[test]
@@ -458,6 +566,8 @@ mod tests {
         let expected = ExpectedCache {
             embedder: &id,
             index_schema_version: 7,
+            fingerprint: "fnv1a64:0",
+            expected_count: 0,
         };
         let res = read_embeds(tmp.path(), &expected).unwrap();
         assert!(res.is_none());
@@ -473,6 +583,8 @@ mod tests {
         let expected = ExpectedCache {
             embedder: &cache.embedder,
             index_schema_version: cache.index_schema_version,
+            fingerprint: &cache.fingerprint,
+            expected_count: cache.vectors.len(),
         };
         let read = read_embeds(tmp.path(), &expected)
             .unwrap()
@@ -488,6 +600,8 @@ mod tests {
         let expected = ExpectedCache {
             embedder: &id,
             index_schema_version: 1,
+            fingerprint: "fnv1a64:0",
+            expected_count: 0,
         };
         let res = read_embeds_from(Cursor::new(&buf[..]), &expected).unwrap();
         assert!(res.is_none(), "bad magic must yield None");
@@ -536,6 +650,7 @@ mod tests {
         let cache = EmbedCache {
             embedder: id.clone(),
             index_schema_version: 7,
+            fingerprint: "fnv1a64:abc".to_string(),
             dim: 8,
             vectors: e.embed(&["a", "b", "c"]).unwrap(),
         };
@@ -544,6 +659,8 @@ mod tests {
         let expected = ExpectedCache {
             embedder: &id,
             index_schema_version: 7,
+            fingerprint: &cache.fingerprint,
+            expected_count: cache.vectors.len(),
         };
         let read = read_embeds_from(Cursor::new(&buf), &expected)
             .unwrap()
