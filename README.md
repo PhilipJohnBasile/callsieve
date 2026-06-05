@@ -91,6 +91,8 @@ callsieve demo <path> [--task "<task>"] [--lsp]
 callsieve memory-clear <path>
 callsieve benchmark <path> "<task>" [--limit <n>] [--snippets-per-file <n>] [--no-snippets] [--profile skim|normal|full] [--token-budget <n>]
 callsieve benchmark-suite <path> <tasks.json> [--limit <n>] [--snippets-per-file <n>] [--no-snippets] [--profile skim|normal|full] [--token-budget <n>]
+callsieve bench-public <manifest.json> <repos_dir> [--k <n>] [--out <path>] [--embeddings] [--compare]
+callsieve bench-run <manifest.json> --workdir <dir> [--compare] [--k <n>] [--limit <n>] [--out <path>] [--resume]
 callsieve eval-retrieval <manifest.json> [--limit <n>] [--snippets-per-file <n>] [--no-snippets] [--profile skim|normal|full] [--token-budget <n>] [--json]
 callsieve perf-report <path> [--tasks <manifest.json>] [--iterations <n>] [--json]
 callsieve trace-summary <trace.json>

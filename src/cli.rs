@@ -9,9 +9,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-#[cfg(not(feature = "embed"))]
-use anyhow::bail;
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
 #[cfg(unix)]
@@ -1211,6 +1209,10 @@ pub enum Command {
         /// Where to write the results JSON.
         #[arg(long)]
         out: Option<PathBuf>,
+
+        /// Reuse matching completed issue results from --out and update it after each issue.
+        #[arg(long)]
+        resume: bool,
     },
 }
 
@@ -4018,10 +4020,24 @@ pub fn run() -> Result<()> {
             k,
             limit,
             out,
+            resume,
         } => {
             ensure_bench_run_supported()?;
+            if resume && out.is_none() {
+                bail!("bench-run --resume requires --out <path>");
+            }
             if compare {
-                let report = bench_public::run_bench_compare(&manifest, &workdir, k, limit)?;
+                let report = if resume {
+                    bench_public::run_bench_compare_resume(
+                        &manifest,
+                        &workdir,
+                        k,
+                        limit,
+                        out.as_deref().expect("validated --out for --resume"),
+                    )?
+                } else {
+                    bench_public::run_bench_compare(&manifest, &workdir, k, limit)?
+                };
                 let out_path =
                     bench_public::resolve_compare_output_path(&manifest, out.as_deref(), &report)?;
                 bench_public::write_compare_report(&out_path, &report)?;
@@ -4033,7 +4049,18 @@ pub fn run() -> Result<()> {
                 );
                 output::json::print(&summary)?;
             } else {
-                let report = bench_public::run_bench(&manifest, &workdir, k, limit)?;
+                let report = if resume {
+                    bench_public::run_bench_with_resume(
+                        &manifest,
+                        &workdir,
+                        k,
+                        limit,
+                        bench_public::RunOptions::default(),
+                        out.as_deref().expect("validated --out for --resume"),
+                    )?
+                } else {
+                    bench_public::run_bench(&manifest, &workdir, k, limit)?
+                };
                 let out_path =
                     bench_public::resolve_output_path(&manifest, out.as_deref(), &report)?;
                 bench_public::write_report(&out_path, &report)?;
@@ -15510,6 +15537,7 @@ mod tests {
             "8",
             "--out",
             "benchmarks/public/results/compare-50.json",
+            "--resume",
         ])
         .unwrap();
         Cli::try_parse_from([

@@ -17,7 +17,7 @@
 //! distinct repo and then evaluates pinned local checkouts.
 
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
     process::Command as ProcessCommand,
@@ -25,7 +25,7 @@ use std::{
 };
 
 #[cfg(feature = "embed")]
-use std::{cell::RefCell, collections::BTreeMap};
+use std::cell::RefCell;
 
 use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
@@ -151,7 +151,7 @@ impl Manifest {
 }
 
 /// Per-issue Mode A result.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IssueResult {
     pub id: String,
     pub repo: String,
@@ -201,7 +201,7 @@ pub struct CompareReport {
     pub issues: Vec<CompareIssueResult>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompareIssueResult {
     pub id: String,
     pub repo: String,
@@ -219,7 +219,7 @@ pub struct CompareIssueResult {
     pub skipped: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompareArmResult {
     pub top_k_files: Vec<String>,
     pub selected_files_count: usize,
@@ -417,15 +417,62 @@ pub fn run_bench_with_options(
     limit: Option<usize>,
     options: RunOptions<'_>,
 ) -> Result<ModeAReport> {
+    run_bench_with_resume_output(manifest_path, workdir, k_override, limit, options, None)
+}
+
+pub fn run_bench_with_resume(
+    manifest_path: &Path,
+    workdir: &Path,
+    k_override: Option<usize>,
+    limit: Option<usize>,
+    options: RunOptions<'_>,
+    out_path: &Path,
+) -> Result<ModeAReport> {
+    run_bench_with_resume_output(
+        manifest_path,
+        workdir,
+        k_override,
+        limit,
+        options,
+        Some(out_path),
+    )
+}
+
+fn run_bench_with_resume_output(
+    manifest_path: &Path,
+    workdir: &Path,
+    k_override: Option<usize>,
+    limit: Option<usize>,
+    options: RunOptions<'_>,
+    resume_out_path: Option<&Path>,
+) -> Result<ModeAReport> {
     let manifest = load_manifest(manifest_path)?;
     let k = benchmark_k(&manifest, k_override);
     let selected_count = selected_issue_count(&manifest, limit);
     let selected = &manifest.issues[..selected_count];
+    let mut previous = load_mode_a_resume(resume_out_path, k)?;
+    let pending: Vec<Issue> = selected
+        .iter()
+        .filter(|issue| !mode_a_resume_matches(previous.get(issue.id.as_str()), issue, k))
+        .cloned()
+        .collect();
 
-    prepare_bench_repos(selected, workdir)?;
+    prepare_bench_repos(&pending, workdir)?;
 
     let mut issues = Vec::with_capacity(selected.len());
     for (offset, issue) in selected.iter().enumerate() {
+        if let Some(result) = take_mode_a_resume(&mut previous, issue, k) {
+            eprintln!(
+                "bench-run: reusing {}/{} {} at {}",
+                offset + 1,
+                selected_count,
+                issue.id,
+                short_commit(&issue.base_commit)
+            );
+            issues.push(result);
+            write_mode_a_resume_report(resume_out_path, manifest_path, &manifest, k, &issues)?;
+            continue;
+        }
         checkout_issue(workdir, issue)?;
         eprintln!(
             "bench-run: evaluating {}/{} {} at {}",
@@ -435,21 +482,10 @@ pub fn run_bench_with_options(
             short_commit(&issue.base_commit)
         );
         issues.push(evaluate_issue(issue, workdir, k, options)?);
+        write_mode_a_resume_report(resume_out_path, manifest_path, &manifest, k, &issues)?;
     }
 
-    let aggregate = aggregate(&issues);
-    let (now, iso_date) = report_clock();
-
-    Ok(ModeAReport {
-        mode: "A",
-        schema_version: 1,
-        generated_at_unix: now,
-        generated_at_iso_date: iso_date,
-        manifest: manifest_summary(manifest_path, &manifest),
-        k,
-        aggregate,
-        issues,
-    })
+    Ok(mode_a_report(manifest_path, &manifest, k, issues))
 }
 
 #[cfg(feature = "embed")]
@@ -464,12 +500,43 @@ pub fn run_bench_compare(
     run_bench_compare_with_embedder(manifest_path, workdir, k_override, limit, &embedder)
 }
 
+#[cfg(feature = "embed")]
+pub fn run_bench_compare_resume(
+    manifest_path: &Path,
+    workdir: &Path,
+    k_override: Option<usize>,
+    limit: Option<usize>,
+    out_path: &Path,
+) -> Result<CompareReport> {
+    let embedder = query::embed::FastembedEmbedder::new_default()?;
+    let embedder = MemoizingEmbedder::new(&embedder);
+    run_bench_compare_with_embedder_resume(
+        manifest_path,
+        workdir,
+        k_override,
+        limit,
+        out_path,
+        &embedder,
+    )
+}
+
 #[cfg(not(feature = "embed"))]
 pub fn run_bench_compare(
     _manifest_path: &Path,
     _workdir: &Path,
     _k_override: Option<usize>,
     _limit: Option<usize>,
+) -> Result<CompareReport> {
+    bail!("bench-run --compare requires building with --features embed");
+}
+
+#[cfg(not(feature = "embed"))]
+pub fn run_bench_compare_resume(
+    _manifest_path: &Path,
+    _workdir: &Path,
+    _k_override: Option<usize>,
+    _limit: Option<usize>,
+    _out_path: &Path,
 ) -> Result<CompareReport> {
     bail!("bench-run --compare requires building with --features embed");
 }
@@ -482,15 +549,71 @@ pub fn run_bench_compare_with_embedder(
     limit: Option<usize>,
     embedder: &dyn query::embed::LocalEmbedder,
 ) -> Result<CompareReport> {
+    run_bench_compare_with_embedder_resume_output(
+        manifest_path,
+        workdir,
+        k_override,
+        limit,
+        None,
+        embedder,
+    )
+}
+
+#[cfg(feature = "embed")]
+pub fn run_bench_compare_with_embedder_resume(
+    manifest_path: &Path,
+    workdir: &Path,
+    k_override: Option<usize>,
+    limit: Option<usize>,
+    out_path: &Path,
+    embedder: &dyn query::embed::LocalEmbedder,
+) -> Result<CompareReport> {
+    run_bench_compare_with_embedder_resume_output(
+        manifest_path,
+        workdir,
+        k_override,
+        limit,
+        Some(out_path),
+        embedder,
+    )
+}
+
+#[cfg(feature = "embed")]
+fn run_bench_compare_with_embedder_resume_output(
+    manifest_path: &Path,
+    workdir: &Path,
+    k_override: Option<usize>,
+    limit: Option<usize>,
+    resume_out_path: Option<&Path>,
+    embedder: &dyn query::embed::LocalEmbedder,
+) -> Result<CompareReport> {
     let manifest = load_manifest(manifest_path)?;
     let k = benchmark_k(&manifest, k_override);
     let selected_count = selected_issue_count(&manifest, limit);
     let selected = &manifest.issues[..selected_count];
+    let mut previous = load_compare_resume(resume_out_path, k)?;
+    let pending: Vec<Issue> = selected
+        .iter()
+        .filter(|issue| !compare_resume_matches(previous.get(issue.id.as_str()), issue, k))
+        .cloned()
+        .collect();
 
-    prepare_bench_repos(selected, workdir)?;
+    prepare_bench_repos(&pending, workdir)?;
 
     let mut issues = Vec::with_capacity(selected.len());
     for (offset, issue) in selected.iter().enumerate() {
+        if let Some(result) = take_compare_resume(&mut previous, issue, k) {
+            eprintln!(
+                "bench-run: reusing {}/{} {} at {}",
+                offset + 1,
+                selected_count,
+                issue.id,
+                short_commit(&issue.base_commit)
+            );
+            issues.push(result);
+            write_compare_resume_report(resume_out_path, manifest_path, &manifest, k, &issues)?;
+            continue;
+        }
         checkout_issue(workdir, issue)?;
         eprintln!(
             "bench-run: comparing {}/{} {} at {}",
@@ -500,21 +623,10 @@ pub fn run_bench_compare_with_embedder(
             short_commit(&issue.base_commit)
         );
         issues.push(evaluate_issue_compare(issue, workdir, k, embedder)?);
+        write_compare_resume_report(resume_out_path, manifest_path, &manifest, k, &issues)?;
     }
 
-    let aggregate = aggregate_compare(&issues);
-    let (now, iso_date) = report_clock();
-
-    Ok(CompareReport {
-        mode: "A/B",
-        schema_version: 1,
-        generated_at_unix: now,
-        generated_at_iso_date: iso_date,
-        manifest: manifest_summary(manifest_path, &manifest),
-        k,
-        aggregate,
-        issues,
-    })
+    Ok(compare_report(manifest_path, &manifest, k, issues))
 }
 
 #[cfg(feature = "embed")]
@@ -620,6 +732,226 @@ fn report_clock() -> (u64, String) {
         .map(|d| d.as_secs())
         .unwrap_or(0);
     (now, unix_seconds_to_iso_date(now))
+}
+
+#[derive(Debug, Deserialize)]
+struct StoredModeAReport {
+    mode: String,
+    k: usize,
+    issues: Vec<IssueResult>,
+}
+
+#[cfg(feature = "embed")]
+#[derive(Debug, Deserialize)]
+struct StoredCompareReport {
+    mode: String,
+    k: usize,
+    issues: Vec<CompareIssueResult>,
+}
+
+fn mode_a_report(
+    manifest_path: &Path,
+    manifest: &Manifest,
+    k: usize,
+    issues: Vec<IssueResult>,
+) -> ModeAReport {
+    let aggregate = aggregate(&issues);
+    let (now, iso_date) = report_clock();
+    ModeAReport {
+        mode: "A",
+        schema_version: 1,
+        generated_at_unix: now,
+        generated_at_iso_date: iso_date,
+        manifest: manifest_summary(manifest_path, manifest),
+        k,
+        aggregate,
+        issues,
+    }
+}
+
+#[cfg(feature = "embed")]
+fn compare_report(
+    manifest_path: &Path,
+    manifest: &Manifest,
+    k: usize,
+    issues: Vec<CompareIssueResult>,
+) -> CompareReport {
+    let aggregate = aggregate_compare(&issues);
+    let (now, iso_date) = report_clock();
+    CompareReport {
+        mode: "A/B",
+        schema_version: 1,
+        generated_at_unix: now,
+        generated_at_iso_date: iso_date,
+        manifest: manifest_summary(manifest_path, manifest),
+        k,
+        aggregate,
+        issues,
+    }
+}
+
+fn load_mode_a_resume(
+    resume_out_path: Option<&Path>,
+    k: usize,
+) -> Result<BTreeMap<String, IssueResult>> {
+    let Some(out_path) = resume_out_path else {
+        return Ok(BTreeMap::new());
+    };
+    if !out_path.is_file() {
+        return Ok(BTreeMap::new());
+    }
+    let json = fs::read_to_string(out_path)
+        .with_context(|| format!("failed to read resume report {}", out_path.display()))?;
+    let report: StoredModeAReport = serde_json::from_str(&json)
+        .with_context(|| format!("failed to parse resume report {}", out_path.display()))?;
+    if report.mode != "A" {
+        bail!(
+            "bench-run --resume expected mode A report at {}, found `{}`",
+            out_path.display(),
+            report.mode
+        );
+    }
+    if report.k != k {
+        bail!(
+            "bench-run --resume expected k {k} at {}, found {}",
+            out_path.display(),
+            report.k
+        );
+    }
+    let mut by_id = BTreeMap::new();
+    for issue in report.issues {
+        if by_id.insert(issue.id.clone(), issue).is_some() {
+            bail!(
+                "bench-run --resume report {} contains duplicate issue ids",
+                out_path.display()
+            );
+        }
+    }
+    Ok(by_id)
+}
+
+#[cfg(feature = "embed")]
+fn load_compare_resume(
+    resume_out_path: Option<&Path>,
+    k: usize,
+) -> Result<BTreeMap<String, CompareIssueResult>> {
+    let Some(out_path) = resume_out_path else {
+        return Ok(BTreeMap::new());
+    };
+    if !out_path.is_file() {
+        return Ok(BTreeMap::new());
+    }
+    let json = fs::read_to_string(out_path)
+        .with_context(|| format!("failed to read resume report {}", out_path.display()))?;
+    let report: StoredCompareReport = serde_json::from_str(&json)
+        .with_context(|| format!("failed to parse resume report {}", out_path.display()))?;
+    if report.mode != "A/B" {
+        bail!(
+            "bench-run --resume expected mode A/B report at {}, found `{}`",
+            out_path.display(),
+            report.mode
+        );
+    }
+    if report.k != k {
+        bail!(
+            "bench-run --resume expected k {k} at {}, found {}",
+            out_path.display(),
+            report.k
+        );
+    }
+    let mut by_id = BTreeMap::new();
+    for issue in report.issues {
+        if by_id.insert(issue.id.clone(), issue).is_some() {
+            bail!(
+                "bench-run --resume report {} contains duplicate issue ids",
+                out_path.display()
+            );
+        }
+    }
+    Ok(by_id)
+}
+
+fn mode_a_resume_matches(result: Option<&IssueResult>, issue: &Issue, k: usize) -> bool {
+    let Some(result) = result else {
+        return false;
+    };
+    result.skipped.is_none()
+        && result.k == k
+        && result.id == issue.id
+        && result.repo == issue.repo
+        && result.base_commit == issue.base_commit
+        && result.task == issue.task
+        && result.ground_truth_files == issue.ground_truth_files
+}
+
+fn take_mode_a_resume(
+    previous: &mut BTreeMap<String, IssueResult>,
+    issue: &Issue,
+    k: usize,
+) -> Option<IssueResult> {
+    let result = previous.remove(&issue.id)?;
+    if mode_a_resume_matches(Some(&result), issue, k) {
+        Some(result)
+    } else {
+        None
+    }
+}
+
+#[cfg(feature = "embed")]
+fn compare_resume_matches(result: Option<&CompareIssueResult>, issue: &Issue, k: usize) -> bool {
+    let Some(result) = result else {
+        return false;
+    };
+    result.skipped.is_none()
+        && result.k == k
+        && result.id == issue.id
+        && result.repo == issue.repo
+        && result.base_commit == issue.base_commit
+        && result.task == issue.task
+        && result.ground_truth_files == issue.ground_truth_files
+}
+
+#[cfg(feature = "embed")]
+fn take_compare_resume(
+    previous: &mut BTreeMap<String, CompareIssueResult>,
+    issue: &Issue,
+    k: usize,
+) -> Option<CompareIssueResult> {
+    let result = previous.remove(&issue.id)?;
+    if compare_resume_matches(Some(&result), issue, k) {
+        Some(result)
+    } else {
+        None
+    }
+}
+
+fn write_mode_a_resume_report(
+    resume_out_path: Option<&Path>,
+    manifest_path: &Path,
+    manifest: &Manifest,
+    k: usize,
+    issues: &[IssueResult],
+) -> Result<()> {
+    if let Some(out_path) = resume_out_path {
+        let report = mode_a_report(manifest_path, manifest, k, issues.to_vec());
+        write_report(out_path, &report)?;
+    }
+    Ok(())
+}
+
+#[cfg(feature = "embed")]
+fn write_compare_resume_report(
+    resume_out_path: Option<&Path>,
+    manifest_path: &Path,
+    manifest: &Manifest,
+    k: usize,
+    issues: &[CompareIssueResult],
+) -> Result<()> {
+    if let Some(out_path) = resume_out_path {
+        let report = compare_report(manifest_path, manifest, k, issues.to_vec());
+        write_compare_report(out_path, &report)?;
+    }
+    Ok(())
 }
 
 fn prepare_bench_repos(issues: &[Issue], workdir: &Path) -> Result<()> {
@@ -1140,23 +1472,16 @@ pub fn resolve_compare_output_path(
 
 /// Write the report JSON to disk. Creates the parent directory if missing.
 pub fn write_report(out_path: &Path, report: &ModeAReport) -> Result<()> {
-    if let Some(parent) = out_path.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        fs::create_dir_all(parent).with_context(|| {
-            format!(
-                "failed to create benchmark results directory {}",
-                parent.display()
-            )
-        })?;
-    }
     let json = serde_json::to_string_pretty(report)?;
-    fs::write(out_path, format!("{json}\n"))
-        .with_context(|| format!("failed to write benchmark report to {}", out_path.display()))?;
-    Ok(())
+    write_report_json(out_path, &json)
 }
 
 pub fn write_compare_report(out_path: &Path, report: &CompareReport) -> Result<()> {
+    let json = serde_json::to_string_pretty(report)?;
+    write_report_json(out_path, &json)
+}
+
+fn write_report_json(out_path: &Path, json: &str) -> Result<()> {
     if let Some(parent) = out_path.parent()
         && !parent.as_os_str().is_empty()
     {
@@ -1167,10 +1492,31 @@ pub fn write_compare_report(out_path: &Path, report: &CompareReport) -> Result<(
             )
         })?;
     }
-    let json = serde_json::to_string_pretty(report)?;
-    fs::write(out_path, format!("{json}\n"))
-        .with_context(|| format!("failed to write benchmark report to {}", out_path.display()))?;
+    let tmp_path = temporary_report_path(out_path);
+    fs::write(&tmp_path, format!("{json}\n")).with_context(|| {
+        format!(
+            "failed to write temporary benchmark report to {}",
+            tmp_path.display()
+        )
+    })?;
+    fs::rename(&tmp_path, out_path).with_context(|| {
+        format!(
+            "failed to atomically write benchmark report to {}",
+            out_path.display()
+        )
+    })?;
     Ok(())
+}
+
+fn temporary_report_path(out_path: &Path) -> PathBuf {
+    let mut tmp_path = out_path.to_path_buf();
+    let extension = out_path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| format!("{value}.tmp"))
+        .unwrap_or_else(|| "tmp".to_string());
+    tmp_path.set_extension(extension);
+    tmp_path
 }
 
 /// Compact summary printed to stdout after a run. Keeps the actual report on
@@ -1661,6 +2007,60 @@ mod tests {
     }
 
     #[cfg(feature = "embed")]
+    fn make_compare_result(
+        id: &str,
+        repo: &str,
+        base_commit: &str,
+        task: &str,
+        ground_truth_files: Vec<String>,
+    ) -> CompareIssueResult {
+        let arm = CompareArmResult {
+            top_k_files: ground_truth_files.clone(),
+            selected_files_count: ground_truth_files.len(),
+            first_correct_file_rate_at_k: 1.0,
+            matched_files: ground_truth_files.clone(),
+        };
+        CompareIssueResult {
+            id: id.to_string(),
+            repo: repo.to_string(),
+            base_commit: base_commit.to_string(),
+            task: task.to_string(),
+            ground_truth_files,
+            resolving_pr: None,
+            k: 1,
+            lexical: arm.clone(),
+            hybrid: arm,
+            delta: 0.0,
+            outcome: "tie".to_string(),
+            skipped: None,
+        }
+    }
+
+    #[cfg(feature = "embed")]
+    fn make_compare_report_for_test(
+        manifest_path: &Path,
+        issues: Vec<CompareIssueResult>,
+        k: usize,
+    ) -> CompareReport {
+        CompareReport {
+            mode: "A/B",
+            schema_version: 1,
+            generated_at_unix: 0,
+            generated_at_iso_date: "1970-01-01".to_string(),
+            manifest: ManifestSummary {
+                path: manifest_path.display().to_string(),
+                schema_version: None,
+                mode: None,
+                description: None,
+                issue_count: 2,
+            },
+            k,
+            aggregate: aggregate_compare(&issues),
+            issues,
+        }
+    }
+
+    #[cfg(feature = "embed")]
     #[test]
     fn bench_run_compare_checks_out_each_issue_and_aggregates() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1710,5 +2110,132 @@ mod tests {
         assert_eq!(report.aggregate.losses, 1);
         assert_eq!(report.aggregate.ties, 0);
         assert_eq!(git(&repo, &["rev-parse", "HEAD"]), second_commit);
+    }
+
+    #[cfg(feature = "embed")]
+    #[test]
+    fn bench_run_compare_resume_reuses_matching_issue_and_writes_complete_report() {
+        let tmp = tempfile::tempdir().unwrap();
+        let workdir = tmp.path().join("work");
+        let repo = workdir.join("owner/name");
+        std::fs::create_dir_all(repo.join("src")).unwrap();
+        git(&repo, &["init"]);
+        std::fs::write(repo.join("src/a.rs"), "pub fn alpha() {}\n").unwrap();
+        std::fs::write(repo.join("src/b.rs"), "pub fn beta() {}\n").unwrap();
+        let _first_commit = git_commit(&repo, "initial");
+        std::fs::write(repo.join("src/b.rs"), "pub fn beta_delta() {}\n").unwrap();
+        let second_commit = git_commit(&repo, "change b");
+        let cached_commit = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
+
+        let manifest_path = tmp.path().join("manifest.json");
+        let cached_task = "cached alpha beta behavior";
+        let fresh_task = "fresh alpha beta behavior";
+        std::fs::write(
+            &manifest_path,
+            format!(
+                r#"{{
+                    "default_k": 1,
+                    "issues": [
+                        {{
+                            "id": "cached",
+                            "repo": "owner/name",
+                            "base_commit": "{cached_commit}",
+                            "task": "{cached_task}",
+                            "ground_truth_files": ["src/b.rs"]
+                        }},
+                        {{
+                            "id": "fresh",
+                            "repo": "owner/name",
+                            "base_commit": "{second_commit}",
+                            "task": "{fresh_task}",
+                            "ground_truth_files": ["src/a.rs"]
+                        }}
+                    ]
+                }}"#
+            ),
+        )
+        .unwrap();
+
+        let out_path = tmp.path().join("compare.json");
+        let cached = make_compare_result(
+            "cached",
+            "owner/name",
+            cached_commit,
+            cached_task,
+            vec!["src/b.rs".to_string()],
+        );
+        let initial_report = make_compare_report_for_test(&manifest_path, vec![cached], 1);
+        write_compare_report(&out_path, &initial_report).unwrap();
+
+        let report = run_bench_compare_with_embedder_resume(
+            &manifest_path,
+            &workdir,
+            Some(1),
+            None,
+            &out_path,
+            &FakeEmbedder,
+        )
+        .unwrap();
+
+        assert_eq!(report.issues.len(), 2);
+        assert_eq!(report.issues[0].id, "cached");
+        assert_eq!(report.issues[0].base_commit, cached_commit);
+        assert_eq!(report.issues[1].id, "fresh");
+        assert_eq!(report.aggregate.total, 2);
+        assert_eq!(git(&repo, &["rev-parse", "HEAD"]), second_commit);
+
+        let written = std::fs::read_to_string(&out_path).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&written).unwrap();
+        assert_eq!(parsed["mode"], "A/B");
+        assert_eq!(parsed["issues"].as_array().unwrap().len(), 2);
+    }
+
+    #[cfg(feature = "embed")]
+    #[test]
+    fn bench_run_compare_resume_rejects_k_mismatch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let manifest_path = tmp.path().join("manifest.json");
+        std::fs::write(
+            &manifest_path,
+            r#"{
+                "default_k": 1,
+                "issues": [
+                    {
+                        "id": "cached",
+                        "repo": "owner/name",
+                        "base_commit": "abc",
+                        "task": "cached alpha beta behavior",
+                        "ground_truth_files": ["src/b.rs"]
+                    }
+                ]
+            }"#,
+        )
+        .unwrap();
+
+        let out_path = tmp.path().join("compare.json");
+        let cached = make_compare_result(
+            "cached",
+            "owner/name",
+            "abc",
+            "cached alpha beta behavior",
+            vec!["src/b.rs".to_string()],
+        );
+        let initial_report = make_compare_report_for_test(&manifest_path, vec![cached], 2);
+        write_compare_report(&out_path, &initial_report).unwrap();
+
+        let err = run_bench_compare_with_embedder_resume(
+            &manifest_path,
+            &tmp.path().join("work"),
+            Some(1),
+            None,
+            &out_path,
+            &FakeEmbedder,
+        )
+        .unwrap_err();
+
+        assert!(
+            err.to_string().contains("expected k 1"),
+            "unexpected error: {err:#}"
+        );
     }
 }

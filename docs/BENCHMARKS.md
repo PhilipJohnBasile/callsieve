@@ -75,8 +75,10 @@ Run it with the embed feature:
 
 ```bash
 cargo build --release --features embed
-target/release/callsieve bench-run benchmarks/public/manifest-50.json --workdir /tmp/csbench --compare --out benchmarks/public/results/compare-50.json
+target/release/callsieve bench-run benchmarks/public/manifest-50.json --workdir /tmp/csbench --compare --out benchmarks/public/results/compare-50.json --resume
 ```
+
+`--resume` keeps the report file valid after each completed issue and reuses matching completed issue results if the run is interrupted. It requires `--out` so the runner has a stable report path to read and update.
 
 Latest local A/B run, generated June 5, 2026:
 
