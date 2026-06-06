@@ -120,6 +120,8 @@ callsieve hook install <repo> --client codex --strict --force --lsp
 6. Record every file the agent actually read, and record CallSieve-selected context files separately if the agent did not need whole-file reads.
 7. Record the command/tool summary that best represents the phase.
 
+When optional retrieval flags are used, include them in the recorded command summary. For example, record `--embeddings`, `--git-boost`, and `--error <trace>` when those flags are part of the CallSieve phase. Do not compare a baseline against an undocumented retrieval configuration.
+
 Record the observed phases with the helper:
 
 ```bash

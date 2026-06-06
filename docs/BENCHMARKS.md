@@ -80,6 +80,8 @@ target/release/callsieve bench-run benchmarks/public/manifest-50.json --workdir 
 
 `--resume` keeps the report file valid after each completed issue and reuses matching completed issue results if the run is interrupted. It requires `--out` so the runner has a stable report path to read and update.
 
+The hybrid arm uses local embeddings only when the binary is built with `--features embed` and the run opts in with `--compare`. The cache format is versioned; stale or mismatched embedding caches are ignored and rebuilt rather than reused against the wrong index. The current cache stores chunk vectors plus chunk-to-file owners, then max-pools chunk cosine scores to the file level for ranking.
+
 Latest local A/B run, generated June 5, 2026:
 
 | Dataset | K | Issues | Skipped | Lexical first-correct-file rate | Hybrid first-correct-file rate | Delta | Wins | Losses | Ties |
@@ -87,6 +89,12 @@ Latest local A/B run, generated June 5, 2026:
 | SWE-bench Lite public subset | 5 | 50 | 0 | `56.0%` | `56.0%` | `+0.0 pp` | 0 | 0 | 50 |
 
 This run proves the hybrid path is wired and non-regressing on this benchmark, but it does not support a quality-lift claim. Treat the current public number as parity until a benchmark shows positive wins over lexical retrieval.
+
+Report language to use today:
+
+- Good: "hybrid retrieval is wired, reproducible, and non-regressing on the 50-issue public benchmark."
+- Good: "lexical remains the default path; hybrid is opt-in."
+- Bad: "hybrid improves retrieval quality" unless a newer benchmark shows positive lift.
 
 ## Task Format
 

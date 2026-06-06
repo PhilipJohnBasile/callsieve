@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.2.2 - 2026-06-06
+
+### Added
+
+- Added git activity signals to the local index and context packets, including recent commits, author counts, modification time, and churn.
+- Added `agent-context --error <file>` to parse stack traces and promote indexed files named by resolved frames.
+- Wired optional local embeddings into retrieval behind the `embed` feature and runtime `--embeddings` opt-in.
+- Added chunked `embeds.bin` format v3 with chunk-to-file owners, optional chunk symbols, and stale-cache invalidation.
+- Added semantic recall injection and shared semantic scoring so hybrid retrieval computes the query embedding once per context request.
+- Added resumable public benchmark runs with `bench-run --compare --resume` and a checked-in 50-issue compare result.
+
+### Changed
+
+- Kept lexical retrieval as the default path while documenting the opt-in hybrid, git boost, and stack-trace workflows.
+- Updated docs to state the current public hybrid result honestly: parity with lexical retrieval on the 50-issue benchmark, not a quality-lift claim.
+
+### Fixed
+
+- Restored the missing git and stack-trace modules required by the schema 8 index and error-context ranking paths.
+
 ## v0.2.1 - 2026-06-04
 
 ### Added

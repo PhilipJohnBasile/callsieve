@@ -46,9 +46,9 @@ Keep broad claims gated. Use `context_payload_reduction` for estimated prompt-pa
 
 ## Current State
 
-CallSieve is now an open-source local Rust CLI with a JSON index, deterministic retrieval, optional LSP reference enrichment, lifecycle hooks for Codex, Claude Code, GitHub Copilot, OpenCode, Antigravity CLI, and Cline, MCP/rule/template setup for Cursor, VS Code, Windsurf, Continue, Zed, Junie, JetBrains AI Assistant, Amp, Goose, Warp, and Zoo Code, context-first guardrails, daemon/watch freshness support, benchmark reports, observed-session traces, and gated proof reports.
+CallSieve is now an open-source local Rust CLI with a JSON index, deterministic retrieval, optional local embeddings, optional LSP reference enrichment, CODEOWNERS and git-history signals, stack-trace-aware error context, lifecycle hooks for Codex, Claude Code, GitHub Copilot, OpenCode, Antigravity CLI, and Cline, MCP/rule/template setup for Cursor, VS Code, Windsurf, Continue, Zed, Junie, JetBrains AI Assistant, Amp, Goose, Warp, and Zoo Code, context-first guardrails, daemon/watch freshness support, benchmark reports, observed-session traces, and gated proof reports.
 
-Public hybrid A/B result: on the 50-issue SWE-bench Lite subset in `benchmarks/public/manifest-50.json`, lexical and opt-in hybrid retrieval both scored `56.0%` first-correct-file@5 (`+0.0 pp`, 0 wins, 0 losses, 50 ties), so hybrid is currently proven wired and non-regressing, not quality-lifting.
+Public hybrid A/B result: on the 50-issue SWE-bench Lite subset in `benchmarks/public/manifest-50.json`, lexical and opt-in hybrid retrieval both scored `56.0%` first-correct-file@5 (`+0.0 pp`, 0 wins, 0 losses, 50 ties), so hybrid is currently proven wired and non-regressing, not quality-lifting. The benchmark report is reproducible with `bench-run --compare --resume`.
 
 For human installation and client setup, see [docs/INSTALL.md](docs/INSTALL.md). For AI CLI and wrapper behavior, see [docs/AGENT_CLI.md](docs/AGENT_CLI.md). For observed whole-session proof collection, see [docs/OBSERVED_SESSIONS.md](docs/OBSERVED_SESSIONS.md). For dogfooding and less-grep measurement, see [docs/DOGFOOD.md](docs/DOGFOOD.md). For paid pilot packaging, see [docs/PILOTS.md](docs/PILOTS.md).
 
@@ -73,17 +73,28 @@ callsieve claude-hooks install /path/to/repo --strict --force
 
 `agent-context` defaults to a budgeted `skim` packet: compact file, symbol, reason, related-test, and risk hints with no snippets. Output includes `retrieval_cost.retrieval_model_tokens = 0` so agents can distinguish zero-token local retrieval from the context tokens spent reading the returned packet. Use `--profile normal`, `--profile full`, `--snippets-per-file`, or the focused `focus`, `related`, and `tests` commands to reveal more detail only after the first packet is insufficient.
 
+Optional retrieval signals stay opt-in:
+
+```bash
+cargo build --features embed
+target/debug/callsieve index <repo> --embeddings
+target/debug/callsieve agent-context <repo> "<task>" --embeddings --git-boost
+target/debug/callsieve agent-context <repo> "<task>" --error <stacktrace.log>
+```
+
+`--embeddings` requires a binary built with `--features embed`; the default build stays deterministic and dependency-light. `--git-boost` nudges recently changed or high-churn files only when requested. `--error` parses stack traces and error logs, then promotes indexed files named in the frames. The integer displayed score remains lexical and explainable; hybrid retrieval only changes ordering when explicitly enabled.
+
 JSON output is compact by default for agent token savings. Add global `--pretty` for human-readable formatting.
 
 ## Current CLI Surface
 
 ```bash
-callsieve index <path> [--lsp]
+callsieve index <path> [--lsp] [--embeddings]
 callsieve symbols <path>
 callsieve symbol <path> <symbol_name>
 callsieve query <path> "<question>" [--why-debug]
 callsieve context <path> "<task>" [--limit <n>] [--snippets-per-file <n>] [--no-snippets] [--profile skim|normal|full] [--token-budget <n>] [--why-debug] [--format json|markdown]
-callsieve agent-context <path> "<task>" [--limit <n>] [--snippets-per-file <n>] [--profile skim|normal|full] [--token-budget <n>] [--why-debug] [--error <file>] [--git-boost] [--format json|markdown]
+callsieve agent-context <path> "<task>" [--limit <n>] [--snippets-per-file <n>] [--profile skim|normal|full] [--token-budget <n>] [--why-debug] [--embeddings] [--error <file>] [--git-boost] [--format json|markdown]
 callsieve focus <path> --file <file> [--symbol <symbol>]
 callsieve related <path> --file <file>
 callsieve tests <path> --file <file>
@@ -259,6 +270,9 @@ The Rust rehearsal command is self-healing for local-safe issues. `--preflight` 
 - extracts practical symbols with tree-sitter-backed parsing and deterministic fallbacks
 - extracts imports, references, and calls
 - can enrich references with local Language Server Protocol servers when `--lsp` is enabled
+- can build an optional local embeddings cache with `--embeddings` for opt-in hybrid retrieval
+- indexes CODEOWNERS ownership and recent git activity for local ranking and context signals
+- can parse stack traces through `agent-context --error` to promote crash-related files
 - indexes bounded content terms for Markdown, JSON, TOML, YAML, and text without returning full files
 - stores a local JSON index at `.callsieve/index.json`
 - returns compact JSON for agent consumption, with Markdown output available for direct reading
@@ -298,6 +312,7 @@ The Rust rehearsal command is self-healing for local-safe issues. `--preflight` 
 - audits agent setup, traces, index freshness, and optional shim state with `enforce`
 - installs an opt-in local `callsieve` launcher plus `rg`/`grep` shims for PATH-level interception
 - wraps grep workflows so CallSieve context is returned before the original `rg` or `grep` command is replayed
+- runs a resumable public 50-issue lexical-vs-hybrid A/B benchmark with `bench-run --compare --resume`
 
 ## Example Query Output
 

@@ -40,6 +40,8 @@ A planned audit-log product would emit every agent action, every file the agent 
 
 A hands-on engagement for repos larger than 100,000 files, where the default ranker needs tuning, custom signal ingestion, and benchmark validation against the actual codebase. Output is a tuned `.callsieve/config.toml`, custom indexer signals where appropriate, a private benchmark suite covering the repo's task shapes, and a retrieval regression CI step. Patterns that recur across engagements get productized into the OSS core over time.
 
+The OSS core now includes opt-in local embeddings, CODEOWNERS ownership, git activity signals, and stack-trace routing. A tuning engagement starts by measuring those shipped signals against the team's private benchmark before proposing custom work. Hybrid retrieval should be sold as opt-in and benchmark-gated unless the team's own A/B shows a lift.
+
 | Field | Detail |
 | --- | --- |
 | Buyer | Large engineering orgs with a single very large repo (FAANG-shaped, big-bank-shaped, big-game-studio-shaped). |

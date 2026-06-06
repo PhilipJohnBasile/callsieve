@@ -10,6 +10,8 @@ The public repo includes:
 
 - local repository indexing
 - deterministic `agent-context` retrieval
+- opt-in local hybrid retrieval with `--embeddings`
+- CODEOWNERS, git activity, and stack-trace context signals
 - MCP tools for agent integration
 - context-first policy checks
 - benchmark and retrieval-eval commands
@@ -30,6 +32,7 @@ A paid pilot should sell the outcome, not access to the source code:
 - measure grep commands, file reads, selected files, critical misses, and token counts
 - produce a shareable evidence pack with anonymized aggregate metrics when needed
 - identify retrieval misses and tune fixtures, docs, and setup
+- evaluate optional flags such as `--embeddings`, `--git-boost`, and `--error` against the team's own benchmark tasks before changing workflow defaults
 - hand off a repeatable local workflow that does not require cloud services or API keys
 
 ## Pilot Success Criteria
@@ -43,6 +46,7 @@ Use concrete gates instead of broad language:
 - observed token reduction is measured from real paired transcript context token counts
 - `context_payload_reduction` is described as an estimate, not observed whole-session savings
 - `retrieval_cost.retrieval_model_tokens = 0` is described as retrieval-only, not whole-session savings
+- hybrid retrieval is described as opt-in unless a measured pilot explicitly enables it
 
 Use `enterprise-proof-report` only for broad developer-session claims. Until that report passes, avoid phrases like "almost all developer sessions" or broad enterprise-scale guarantees.
 

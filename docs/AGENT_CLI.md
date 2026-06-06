@@ -33,6 +33,16 @@ If CallSieve is being run from this Rust source checkout instead of an installed
 cargo run -- agent-context <repo> "<task>"
 ```
 
+Optional signals are explicit. Use them only when the repo has the matching local artifacts or the task calls for them:
+
+```bash
+callsieve index <repo> --embeddings
+callsieve agent-context <repo> "<task>" --embeddings --git-boost
+callsieve agent-context <repo> "<task>" --error <stacktrace.log>
+```
+
+`--embeddings` requires a binary built with `--features embed`; otherwise the CLI exits with a clear feature-gate error. The default path remains lexical and deterministic. `--git-boost` uses recent local git activity as a ranking nudge. `--error` parses stack traces and promotes files named by resolved frames. Record these flags in traces or benchmark notes when they are part of a measured run.
+
 MCP equivalent:
 
 ```json
@@ -100,6 +110,7 @@ callsieve symbol <repo> <symbol_name> --limit 20
 callsieve query <repo> "<question>" --limit 10
 callsieve context <repo> "<task>" --limit 8 --snippets-per-file 1 --why-debug
 callsieve agent-context <repo> "<task>" --format markdown
+callsieve agent-context <repo> "<task>" --embeddings --why-debug
 ```
 
 Use `--why-debug` only when diagnosing ranking behavior. It adds scoring detail and costs more context.
@@ -157,11 +168,18 @@ For each `context.read_first[]` item, prioritize:
 - `related_tests`: tests likely affected by the change.
 - `blast_radius.risk`: rough change-risk signal.
 - `blast_radius.tests`, `blast_radius.imports`, `blast_radius.referenced_by`: impact hints.
+- `git`: recent local git activity when indexed, useful as context rather than proof by itself.
 
 If `warnings` contains stale index entries, consider rerunning:
 
 ```bash
 callsieve index <repo> --lsp
+```
+
+If `warnings` reports a missing or stale embeddings cache, rerun:
+
+```bash
+callsieve index <repo> --embeddings
 ```
 
 ## Grep Policy

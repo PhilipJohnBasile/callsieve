@@ -18,6 +18,16 @@ The MCP server is one integration surface for agents. It does not replace the CL
 
 `callsieve_context` is zero-AI-model-token retrieval: ranking runs against the local index before the prompt exists. The returned packet still consumes agent context tokens when the MCP client reads it, so the default response stays compact.
 
+The MCP context tool follows the default deterministic retrieval path. Optional hybrid retrieval, stack-trace routing, and git boosting are CLI flags today:
+
+```bash
+callsieve index /path/to/repo --embeddings
+callsieve agent-context /path/to/repo "<task>" --embeddings --git-boost
+callsieve agent-context /path/to/repo "<task>" --error /path/to/trace.log
+```
+
+Use those CLI flags when you are evaluating ranking behavior or running benchmark proof. Use MCP when the agent needs the portable context-first contract.
+
 Build or install CallSieve first. You can index each repository up front, or let the first `callsieve_context` call rebuild a missing or stale local index:
 
 ```bash

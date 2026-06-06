@@ -64,6 +64,8 @@ For each task pair:
 4. Reject contaminated sessions with an audit reason instead of deleting them.
 5. Run `callsieve pilot-qa <manifest>` every `25` paired sessions.
 
+If the CallSieve phase uses optional retrieval flags such as `--embeddings`, `--git-boost`, or `--error`, record those flags in the command summary and segment the report by configuration. Do not mix lexical-only and hybrid-assisted sessions into one unlabeled quality claim.
+
 Only observed sessions with `metadata.collection = "observed_session"` count toward the broad proof. Controlled replay is reported separately and must be zero for the enterprise gate.
 
 Each repo entry should declare `proof_tier`, `scale_class`, `scale_criteria`, `languages`, `clients`, and `task_categories`. The report also derives client and task-category coverage from observed traces and suite metadata, but manifest metadata makes gaps visible before collection is complete.
@@ -78,6 +80,8 @@ For each scale proxy:
 4. Measure index time, index size, freshness, query latency, context packet size, recall, and failure rate.
 5. Record `audit.scale_validation.agent_context_p95_latency_ms`.
 6. Keep index failures, stale-index failures, and crashes at `0`.
+
+For hybrid retrieval validation, also record embedding cache build time, cache freshness behavior, first-correct-file rate versus lexical, and whether the result is a lift, parity, or regression. Current public evidence supports parity, not a quality-lift claim.
 
 The default p95 `agent-context` latency gate is `5000ms` on developer hardware.
 

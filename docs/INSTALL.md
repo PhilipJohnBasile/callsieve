@@ -25,6 +25,8 @@ Recommended:
 
 Language servers are optional. CallSieve falls back to tree-sitter and deterministic heuristics when they are missing.
 
+Optional hybrid retrieval requires a binary built with the `embed` feature. The feature adds local embedding dependencies and may download the embedding runtime or model on first use, but repository code is still indexed and ranked locally.
+
 ## Install From GitHub Releases
 
 Download the archive for your OS and CPU from:
@@ -54,6 +56,16 @@ cd callsieve
 cargo install --path . --force
 callsieve --help
 ```
+
+Install the optional embedding-enabled binary from source:
+
+```bash
+cargo install --path . --features embed --force
+callsieve index /path/to/repo --embeddings
+callsieve agent-context /path/to/repo "find where login is handled" --embeddings
+```
+
+The default install stays lexical and deterministic. Use the embedding-enabled build only when you want to evaluate opt-in hybrid retrieval.
 
 If `callsieve` is not found after install, make sure Cargo's bin directory is on your PATH.
 
@@ -98,6 +110,19 @@ callsieve demo /path/to/repo --task "find the code that handles login"
 ```
 
 If the output includes `read_first`, CallSieve is ready for that repo.
+
+For the latest optional retrieval path:
+
+```bash
+callsieve index /path/to/repo --embeddings
+callsieve agent-context /path/to/repo "find the code that handles login" --embeddings --git-boost
+```
+
+For crash or test-failure work, save the stack trace to a file and pass it into `agent-context`:
+
+```bash
+callsieve agent-context /path/to/repo "fix the failing redirect test" --error /path/to/trace.log
+```
 
 For one-command local adoption:
 

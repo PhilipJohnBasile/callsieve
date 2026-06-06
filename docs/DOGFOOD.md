@@ -25,6 +25,25 @@ callsieve agent-context <repo> "find where CLI commands are defined"
 
 `agent-context` and MCP `callsieve_context` include `retrieval_cost.retrieval_model_tokens = 0`. Treat that as local retrieval cost only. The returned packet and any follow-up file reads still consume agent context tokens.
 
+## Latest Local Dogfood Loop
+
+When working in this repo, use the strongest local path that is actually built:
+
+```bash
+cargo build --features embed
+target/debug/callsieve status .
+target/debug/callsieve index . --embeddings
+target/debug/callsieve agent-context . "<task>" --embeddings --git-boost --why-debug
+```
+
+Read the returned `read_first` files before broad search. If the task starts from a failure log, save the log and add:
+
+```bash
+target/debug/callsieve agent-context . "<task>" --error .callsieve/error.log
+```
+
+This dogfoods hybrid retrieval, git activity signals, and stack-trace routing while keeping the default product path lexical unless the flags are present.
+
 ## Repeated Task Families
 
 `agent-context` writes `.callsieve/task-memory.json`, an ignored local hint cache. The cache stores prior task terms, read-first files, selected symbols, and related tests.
@@ -60,6 +79,8 @@ For local platform-neutral measurement:
 callsieve benchmark <repo> "<task>"
 callsieve proof-rehearsal --preflight
 callsieve proof-rehearsal --fix --resume
+cargo build --release --features embed
+target/release/callsieve bench-run benchmarks/public/manifest-50.json --workdir /tmp/csbench --compare --out benchmarks/public/results/compare-50.json --resume
 ```
 
 Use the phrase `estimated context payload reduction` for `context_payload_reduction`. This applies across AI platforms because it measures the prompt payload avoided versus deterministic grep/read replay.
