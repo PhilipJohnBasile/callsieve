@@ -5,6 +5,7 @@
 ### Added
 
 - Added a 30-issue natural-language benchmark slice (`benchmarks/public/manifest-nl.json`) with prompts stripped of file paths, symbol names, and code snippets, plus a checked-in `compare-nl.json` result that isolates semantic retrieval quality.
+- Added the Claude Code `proof-sprint` command group for buyer-facing observed proof workflows with init, status, collect, run/resume, and finalize steps.
 
 ### Changed
 

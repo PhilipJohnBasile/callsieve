@@ -50,6 +50,21 @@ Use concrete gates instead of broad language:
 
 Use `enterprise-proof-report` only for broad developer-session claims. Until that report passes, avoid phrases like "almost all developer sessions" or broad enterprise-scale guarantees.
 
+## Claude Proof Sprint
+
+Use `proof-sprint` when a pilot buyer wants the fastest credible observed proof path with Claude Code:
+
+```bash
+callsieve proof-sprint init benchmarks/evidence/proof-sprint.local.json --client claude --sessions 10 --model claude-opus-4-8
+callsieve proof-sprint status benchmarks/evidence/proof-sprint.local.json
+callsieve proof-sprint run benchmarks/evidence/proof-sprint.local.json --resume
+callsieve proof-sprint finalize benchmarks/evidence/proof-sprint.local.json --out benchmarks/evidence/proof.local.json
+```
+
+`proof-sprint status` is the operator dashboard. It reports paired sessions complete, missing baseline and CallSieve phases, observed token reduction when transcripts exist, critical misses, strict trace violations, transcript-accounting coverage, QA status, and the next command to run. `proof-sprint run --resume` collects the next missing phase, preferring the CallSieve half of a partially collected pair before starting a new baseline. Use `--dry-run` to print the next Claude collection plan without spawning Claude, and `--limit N` to collect more than one phase in a single invocation.
+
+The 10-session sprint is useful for paid-pilot qualification. The 50-session target remains the first serious public claim gate. Both paths use the same observed-session manifest, `pilot-qa`, and `proof-report` gates.
+
 ## Evidence Flow
 
 ```bash

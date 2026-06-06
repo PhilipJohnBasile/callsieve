@@ -592,6 +592,13 @@ pub enum Command {
         dry_run: bool,
     },
 
+    /// Run a buyer-facing observed proof sprint over existing pilot evidence tooling.
+    #[command(name = "proof-sprint")]
+    ProofSprint {
+        #[command(subcommand)]
+        command: ProofSprintCommand,
+    },
+
     /// Record one real observed Codex paired-session event with transcript token counts.
     #[command(name = "record-codex-observed-session")]
     RecordCodexObservedSession {
@@ -1604,6 +1611,85 @@ pub enum PilotTaskCommand {
     },
 }
 
+#[derive(Debug, Subcommand)]
+pub enum ProofSprintCommand {
+    /// Create a Claude Code observed proof-sprint manifest.
+    Init {
+        manifest: PathBuf,
+
+        #[arg(long, value_enum, default_value_t = AgentClient::Claude)]
+        client: AgentClient,
+
+        #[arg(long, default_value_t = 10)]
+        sessions: usize,
+
+        #[arg(long, default_value = "claude-opus-4-8")]
+        model: String,
+
+        #[arg(long)]
+        force: bool,
+
+        #[arg(long = "skip-repo-check", hide = true)]
+        skip_repo_check: bool,
+    },
+
+    /// Show observed proof-sprint progress and the next collection command.
+    Status {
+        manifest: PathBuf,
+
+        /// Accepted for CLI stability. CallSieve output is JSON by default.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Collect one baseline or CallSieve Claude Code proof-sprint phase.
+    Collect {
+        manifest: PathBuf,
+
+        #[arg(long = "task-id", alias = "task_id")]
+        task_id: String,
+
+        #[arg(long, value_enum)]
+        mode: PilotSessionMode,
+
+        #[arg(long = "max-budget-usd", default_value = "0.50")]
+        max_budget_usd: String,
+
+        #[arg(long = "dry-run")]
+        dry_run: bool,
+    },
+
+    /// Collect the next missing Claude Code proof-sprint phase, resuming safely.
+    Run {
+        manifest: PathBuf,
+
+        #[arg(long = "max-budget-usd", default_value = "0.50")]
+        max_budget_usd: String,
+
+        /// Continue a partially collected manifest by skipping completed phases.
+        #[arg(long)]
+        resume: bool,
+
+        /// Maximum phases to collect in this invocation.
+        #[arg(long, default_value_t = 1)]
+        limit: usize,
+
+        #[arg(long = "dry-run")]
+        dry_run: bool,
+    },
+
+    /// Finalize a proof-sprint manifest into a proof-report artifact after QA passes.
+    Finalize {
+        manifest: PathBuf,
+
+        #[arg(long)]
+        out: PathBuf,
+
+        #[arg(long, default_value_t = REHEARSAL_REPORT_LIMIT)]
+        limit: usize,
+    },
+}
+
 #[derive(Debug, Clone, Copy, ValueEnum)]
 pub enum AgentClient {
     Codex,
@@ -2032,6 +2118,85 @@ struct CollectClaudeObservedSessionOutput {
     claude_command: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     record: Option<RecordObservedSessionOutput>,
+}
+
+#[derive(Debug, Serialize)]
+struct ProofSprintInitOutput {
+    command: &'static str,
+    status: String,
+    manifest: String,
+    client: String,
+    model: String,
+    task_count: usize,
+    target_sessions: usize,
+    repos: Vec<String>,
+    next_status: String,
+    next_collect: String,
+    final_proof: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ProofSprintStatusOutput {
+    command: &'static str,
+    manifest: String,
+    status: String,
+    client: String,
+    target_sessions: usize,
+    planned_tasks: usize,
+    paired_sessions_complete: usize,
+    rejected_sessions: usize,
+    missing_baseline_phases: Vec<String>,
+    missing_callsieve_phases: Vec<String>,
+    observed_token_reduction_percent: Option<f64>,
+    critical_misses: usize,
+    strict_trace_violations: usize,
+    transcript_accounting_coverage_percent: f64,
+    qa_status: String,
+    qa_failures: usize,
+    next_command: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ProofSprintCollectOutput {
+    command: &'static str,
+    status: String,
+    manifest: String,
+    task_id: String,
+    mode: PilotSessionMode,
+    model: String,
+    collect: CollectClaudeObservedSessionOutput,
+    next_status: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ProofSprintRunOutput {
+    command: &'static str,
+    status: String,
+    manifest: String,
+    resume: bool,
+    dry_run: bool,
+    requested_limit: usize,
+    collected_phases: usize,
+    phases: Vec<ProofSprintRunPhaseOutput>,
+    status_after: ProofSprintStatusOutput,
+    next_command: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ProofSprintRunPhaseOutput {
+    task_id: String,
+    mode: PilotSessionMode,
+    status: String,
+    collect: ProofSprintCollectOutput,
+}
+
+#[derive(Debug, Serialize)]
+struct ProofSprintFinalizeOutput {
+    command: &'static str,
+    status: String,
+    manifest: String,
+    out: String,
+    finalize: PilotFinalizeOutput,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -3270,6 +3435,53 @@ pub fn run() -> Result<()> {
             )?;
             output::json::print(&output)?;
         }
+        Command::ProofSprint { command } => match command {
+            ProofSprintCommand::Init {
+                manifest,
+                client,
+                sessions,
+                model,
+                force,
+                skip_repo_check,
+            } => {
+                let output =
+                    proof_sprint_init(&manifest, client, sessions, &model, force, skip_repo_check)?;
+                output::json::print(&output)?;
+            }
+            ProofSprintCommand::Status { manifest, json: _ } => {
+                let output = proof_sprint_status(&manifest)?;
+                output::json::print(&output)?;
+            }
+            ProofSprintCommand::Collect {
+                manifest,
+                task_id,
+                mode,
+                max_budget_usd,
+                dry_run,
+            } => {
+                let output =
+                    proof_sprint_collect(&manifest, &task_id, mode, &max_budget_usd, dry_run)?;
+                output::json::print(&output)?;
+            }
+            ProofSprintCommand::Run {
+                manifest,
+                max_budget_usd,
+                resume,
+                limit,
+                dry_run,
+            } => {
+                let output = proof_sprint_run(&manifest, &max_budget_usd, resume, limit, dry_run)?;
+                output::json::print(&output)?;
+            }
+            ProofSprintCommand::Finalize {
+                manifest,
+                out,
+                limit,
+            } => {
+                let output = proof_sprint_finalize(&manifest, &out, limit)?;
+                output::json::print(&output)?;
+            }
+        },
         Command::RecordCodexObservedSession {
             manifest,
             task_id,
@@ -5700,6 +5912,379 @@ fn collect_claude_observed_session(
         claude_command: command_summary,
         record,
     })
+}
+
+fn proof_sprint_init(
+    manifest: &Path,
+    client: AgentClient,
+    sessions: usize,
+    model: &str,
+    force: bool,
+    skip_repo_check: bool,
+) -> Result<ProofSprintInitOutput> {
+    if !matches!(client, AgentClient::Claude) {
+        anyhow::bail!("proof-sprint currently supports --client claude")
+    }
+    if !matches!(sessions, 10 | 50) {
+        anyhow::bail!("proof-sprint --sessions must be 10 or 50")
+    }
+
+    setup_observed_claude_oss_50(manifest, model, false, force, skip_repo_check)?;
+    configure_proof_sprint_manifest(manifest, sessions)?;
+    let manifest_value = read_pilot_manifest(manifest)?;
+    let repos = proof_sprint_repos(&manifest_value);
+    let next_task = manifest_value
+        .tasks
+        .first()
+        .map(|task| task.id.as_str())
+        .unwrap_or("<task-id>");
+
+    Ok(ProofSprintInitOutput {
+        command: "proof-sprint init",
+        status: "ready_for_observed_collection".to_string(),
+        manifest: manifest.display().to_string(),
+        client: "claude".to_string(),
+        model: model.trim().to_string(),
+        task_count: manifest_value.tasks.len(),
+        target_sessions: manifest_value.target_sessions,
+        repos,
+        next_status: format!("callsieve proof-sprint status {}", manifest.display()),
+        next_collect: format!(
+            "callsieve proof-sprint collect {} --task-id {} --mode baseline",
+            manifest.display(),
+            next_task
+        ),
+        final_proof: format!(
+            "callsieve proof-sprint finalize {} --out benchmarks/evidence/proof.local.json --limit {}",
+            manifest.display(),
+            REHEARSAL_REPORT_LIMIT
+        ),
+    })
+}
+
+fn configure_proof_sprint_manifest(manifest_path: &Path, sessions: usize) -> Result<()> {
+    let mut manifest = read_pilot_manifest(manifest_path)?;
+    manifest.target_sessions = sessions;
+    manifest.protocol.minimum_planned_tasks = manifest.tasks.len();
+    if !manifest.thresholds.is_object() {
+        manifest.thresholds = serde_json::json!({});
+    }
+    let thresholds = manifest
+        .thresholds
+        .as_object_mut()
+        .context("proof-sprint thresholds must be a JSON object")?;
+    thresholds.insert(
+        "minimum_observed_sessions".to_string(),
+        serde_json::json!(sessions),
+    );
+    thresholds.insert(
+        "minimum_planned_tasks".to_string(),
+        serde_json::json!(manifest.tasks.len()),
+    );
+    thresholds.insert(
+        "minimum_observed_token_reduction_percent".to_string(),
+        serde_json::json!(50.0),
+    );
+    thresholds.insert("maximum_critical_misses".to_string(), serde_json::json!(0));
+    thresholds.insert("maximum_trace_violations".to_string(), serde_json::json!(0));
+    thresholds.insert(
+        "require_transcript_token_accounting".to_string(),
+        serde_json::json!(true),
+    );
+    write_pilot_manifest(manifest_path, &manifest)
+}
+
+fn proof_sprint_status(manifest_path: &Path) -> Result<ProofSprintStatusOutput> {
+    let manifest = read_pilot_manifest(manifest_path)?;
+    let qa = pilot_qa(manifest_path)?;
+    let mut missing_baseline_phases = Vec::new();
+    let mut missing_callsieve_phases = Vec::new();
+    let mut baseline_tokens = 0usize;
+    let mut callsieve_tokens = 0usize;
+    let mut complete_trace_count = 0usize;
+    let mut transcript_accounted_traces = 0usize;
+    let mut critical_misses = 0usize;
+    let mut strict_trace_violations = 0usize;
+
+    for task in manifest
+        .tasks
+        .iter()
+        .filter(|task| task.status != "rejected")
+    {
+        let baseline_exists = Path::new(&task.baseline_trace_path).is_file();
+        let callsieve_exists = Path::new(&task.callsieve_trace_path).is_file();
+        if !baseline_exists {
+            missing_baseline_phases.push(task.id.clone());
+        }
+        if !callsieve_exists {
+            missing_callsieve_phases.push(task.id.clone());
+        }
+
+        let trace_path = Path::new(&task.trace_path);
+        if trace_path.is_file() {
+            let trace_json = fs::read_to_string(trace_path)
+                .with_context(|| format!("failed to read trace: {}", trace_path.display()))?;
+            let trace_value: serde_json::Value = serde_json::from_str(&trace_json)
+                .with_context(|| format!("failed to parse trace: {}", trace_path.display()))?;
+            let summary = query::trace_summary_from_str(&trace_json)?;
+            let summary_value = serde_json::to_value(&summary)?;
+            baseline_tokens += summary_number(&summary_value, "baseline_tokens");
+            callsieve_tokens += summary_number(&summary_value, "callsieve_tokens");
+            critical_misses += summary_number(&summary_value, "critical_files_still_missed");
+            complete_trace_count += 1;
+            if trace_token_accounting_source(&trace_value) == "transcript_context_tokens" {
+                transcript_accounted_traces += 1;
+            }
+        }
+
+        if callsieve_exists {
+            let callsieve_trace_json = fs::read_to_string(&task.callsieve_trace_path)
+                .with_context(|| format!("failed to read trace: {}", task.callsieve_trace_path))?;
+            let policy = query::trace_check_from_str_with_options(&callsieve_trace_json, true)?;
+            let policy_value = serde_json::to_value(policy)?;
+            strict_trace_violations += summary_number(&policy_value, "violations");
+        }
+    }
+
+    let observed_token_reduction_percent = if baseline_tokens > 0 {
+        Some(((baseline_tokens as f64 - callsieve_tokens as f64) / baseline_tokens as f64) * 100.0)
+    } else {
+        None
+    };
+    let transcript_accounting_coverage_percent = if complete_trace_count == 0 {
+        0.0
+    } else {
+        (transcript_accounted_traces as f64 / complete_trace_count as f64) * 100.0
+    };
+    let next_command = proof_sprint_next_command(manifest_path, &manifest, &qa);
+    let status = if qa.status == "pass" {
+        "ready_to_finalize"
+    } else if qa.observed_sessions >= manifest.target_sessions {
+        "qa_blocked"
+    } else {
+        "collecting"
+    };
+
+    Ok(ProofSprintStatusOutput {
+        command: "proof-sprint status",
+        manifest: manifest_path.display().to_string(),
+        status: status.to_string(),
+        client: proof_sprint_client(&manifest),
+        target_sessions: manifest.target_sessions,
+        planned_tasks: manifest.tasks.len(),
+        paired_sessions_complete: qa.observed_sessions,
+        rejected_sessions: qa.rejected_sessions,
+        missing_baseline_phases,
+        missing_callsieve_phases,
+        observed_token_reduction_percent,
+        critical_misses,
+        strict_trace_violations,
+        transcript_accounting_coverage_percent,
+        qa_status: qa.status,
+        qa_failures: qa.failures,
+        next_command,
+    })
+}
+
+fn proof_sprint_next_command(
+    manifest_path: &Path,
+    manifest: &PilotHarnessManifest,
+    qa: &PilotQaOutput,
+) -> String {
+    if qa.observed_sessions < manifest.target_sessions {
+        if let Some((task_id, mode)) = proof_sprint_next_phase_to_collect(manifest) {
+            let mode = pilot_session_mode_name(mode);
+            return format!(
+                "callsieve proof-sprint collect {} --task-id {} --mode {}",
+                manifest_path.display(),
+                task_id,
+                mode
+            );
+        }
+        return format!("callsieve proof-sprint status {}", manifest_path.display());
+    }
+    if qa.status != "pass" {
+        return format!("callsieve pilot-qa {}", manifest_path.display());
+    }
+    format!(
+        "callsieve proof-sprint finalize {} --out benchmarks/evidence/proof.local.json --limit {}",
+        manifest_path.display(),
+        REHEARSAL_REPORT_LIMIT
+    )
+}
+
+fn proof_sprint_next_phase_to_collect(
+    manifest: &PilotHarnessManifest,
+) -> Option<(String, PilotSessionMode)> {
+    for task in manifest
+        .tasks
+        .iter()
+        .filter(|task| task.status != "rejected")
+    {
+        let baseline_exists = Path::new(&task.baseline_trace_path).is_file();
+        let callsieve_exists = Path::new(&task.callsieve_trace_path).is_file();
+        if baseline_exists && !callsieve_exists {
+            return Some((task.id.clone(), PilotSessionMode::Callsieve));
+        }
+    }
+    for task in manifest
+        .tasks
+        .iter()
+        .filter(|task| task.status != "rejected")
+    {
+        if !Path::new(&task.baseline_trace_path).is_file() {
+            return Some((task.id.clone(), PilotSessionMode::Baseline));
+        }
+    }
+    None
+}
+
+fn proof_sprint_has_collected_phase(manifest: &PilotHarnessManifest) -> bool {
+    manifest.tasks.iter().any(|task| {
+        Path::new(&task.baseline_trace_path).is_file()
+            || Path::new(&task.callsieve_trace_path).is_file()
+            || Path::new(&task.trace_path).is_file()
+    })
+}
+
+fn proof_sprint_run(
+    manifest: &Path,
+    max_budget_usd: &str,
+    resume: bool,
+    limit: usize,
+    dry_run: bool,
+) -> Result<ProofSprintRunOutput> {
+    if limit == 0 {
+        anyhow::bail!("proof-sprint run --limit must be greater than 0")
+    }
+    let manifest_value = read_pilot_manifest(manifest)?;
+    if !resume && proof_sprint_has_collected_phase(&manifest_value) {
+        anyhow::bail!(
+            "proof-sprint manifest already has collected phases; pass --resume to continue"
+        )
+    }
+
+    let mut phases = Vec::new();
+    for _ in 0..limit {
+        let current_manifest = read_pilot_manifest(manifest)?;
+        let qa = pilot_qa(manifest)?;
+        if qa.observed_sessions >= current_manifest.target_sessions || qa.status == "pass" {
+            break;
+        }
+        let Some((task_id, mode)) = proof_sprint_next_phase_to_collect(&current_manifest) else {
+            break;
+        };
+        let collect = proof_sprint_collect(manifest, &task_id, mode, max_budget_usd, dry_run)?;
+        let status = collect.status.clone();
+        phases.push(ProofSprintRunPhaseOutput {
+            task_id,
+            mode,
+            status,
+            collect,
+        });
+        if dry_run {
+            break;
+        }
+    }
+
+    let status_after = proof_sprint_status(manifest)?;
+    let next_command = status_after.next_command.clone();
+    let status = if dry_run {
+        "dry_run"
+    } else if !phases.is_empty() {
+        "collected"
+    } else {
+        status_after.status.as_str()
+    };
+
+    Ok(ProofSprintRunOutput {
+        command: "proof-sprint run",
+        status: status.to_string(),
+        manifest: manifest.display().to_string(),
+        resume,
+        dry_run,
+        requested_limit: limit,
+        collected_phases: if dry_run { 0 } else { phases.len() },
+        phases,
+        status_after,
+        next_command,
+    })
+}
+
+fn proof_sprint_collect(
+    manifest: &Path,
+    task_id: &str,
+    mode: PilotSessionMode,
+    max_budget_usd: &str,
+    dry_run: bool,
+) -> Result<ProofSprintCollectOutput> {
+    let task = pilot_task_from_manifest(manifest, task_id)?;
+    if task.client != "claude" {
+        anyhow::bail!("proof-sprint collect currently supports Claude tasks only")
+    }
+    let model = task.model.clone();
+    let collect = collect_claude_observed_session(
+        manifest,
+        task_id,
+        mode,
+        &model,
+        max_budget_usd,
+        None,
+        4,
+        1,
+        Vec::new(),
+        dry_run,
+    )?;
+    Ok(ProofSprintCollectOutput {
+        command: "proof-sprint collect",
+        status: collect.status.clone(),
+        manifest: manifest.display().to_string(),
+        task_id: task_id.to_string(),
+        mode,
+        model,
+        collect,
+        next_status: format!("callsieve proof-sprint status {}", manifest.display()),
+    })
+}
+
+fn proof_sprint_finalize(
+    manifest: &Path,
+    out: &Path,
+    limit: usize,
+) -> Result<ProofSprintFinalizeOutput> {
+    let finalize = pilot_finalize(manifest, out, limit, 2, true)?;
+    Ok(ProofSprintFinalizeOutput {
+        command: "proof-sprint finalize",
+        status: "finalized".to_string(),
+        manifest: manifest.display().to_string(),
+        out: out.display().to_string(),
+        finalize,
+    })
+}
+
+fn proof_sprint_repos(manifest: &PilotHarnessManifest) -> Vec<String> {
+    manifest
+        .tasks
+        .iter()
+        .map(|task| task.repo.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn proof_sprint_client(manifest: &PilotHarnessManifest) -> String {
+    let clients = manifest
+        .tasks
+        .iter()
+        .map(|task| task.client.as_str())
+        .collect::<BTreeSet<_>>();
+    if clients.len() == 1 {
+        clients.into_iter().next().unwrap_or("unknown").to_string()
+    } else if clients.is_empty() {
+        "unknown".to_string()
+    } else {
+        "mixed".to_string()
+    }
 }
 
 fn pilot_task_from_manifest(manifest: &Path, task_id: &str) -> Result<PilotHarnessTask> {
@@ -15721,6 +16306,66 @@ mod tests {
             "--allowed-tool",
             "Read",
             "--dry-run",
+        ])
+        .unwrap();
+        Cli::try_parse_from([
+            "callsieve",
+            "proof-sprint",
+            "init",
+            "benchmarks/evidence/proof-sprint.local.json",
+            "--client",
+            "claude",
+            "--sessions",
+            "10",
+            "--model",
+            "claude-opus-4-8",
+            "--force",
+        ])
+        .unwrap();
+        Cli::try_parse_from([
+            "callsieve",
+            "proof-sprint",
+            "status",
+            "benchmarks/evidence/proof-sprint.local.json",
+            "--json",
+        ])
+        .unwrap();
+        Cli::try_parse_from([
+            "callsieve",
+            "proof-sprint",
+            "collect",
+            "benchmarks/evidence/proof-sprint.local.json",
+            "--task-id",
+            "auth",
+            "--mode",
+            "baseline",
+            "--max-budget-usd",
+            "0.50",
+            "--dry-run",
+        ])
+        .unwrap();
+        Cli::try_parse_from([
+            "callsieve",
+            "proof-sprint",
+            "run",
+            "benchmarks/evidence/proof-sprint.local.json",
+            "--resume",
+            "--limit",
+            "2",
+            "--max-budget-usd",
+            "0.50",
+            "--dry-run",
+        ])
+        .unwrap();
+        Cli::try_parse_from([
+            "callsieve",
+            "proof-sprint",
+            "finalize",
+            "benchmarks/evidence/proof-sprint.local.json",
+            "--out",
+            "benchmarks/evidence/proof.local.json",
+            "--limit",
+            "24",
         ])
         .unwrap();
         Cli::try_parse_from([

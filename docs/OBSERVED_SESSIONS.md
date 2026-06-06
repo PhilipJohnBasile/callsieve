@@ -61,6 +61,16 @@ callsieve pilot-task reject <manifest.json> --task-id <task-id> --reason "<audit
 
 ## Setup
 
+For a Claude Code paid-pilot proof sprint, use the wrapper command group:
+
+```bash
+callsieve proof-sprint init benchmarks/evidence/proof-sprint.local.json --client claude --sessions 10 --model claude-opus-4-8
+callsieve proof-sprint status benchmarks/evidence/proof-sprint.local.json
+callsieve proof-sprint run benchmarks/evidence/proof-sprint.local.json --resume
+```
+
+This preregisters the same OSS task matrix as the 50-session Claude milestone, but sets the observed-session target to `10`. Use `--sessions 50` for the first public claim gate.
+
 Create a 50-session milestone manifest for the agent you are observing:
 
 ```bash
@@ -88,6 +98,7 @@ Run QA before collection. It should fail until real paired sessions are recorded
 ```bash
 callsieve pilot-qa benchmarks/evidence/observed-codex-oss-50.local.json
 callsieve pilot-qa benchmarks/evidence/observed-claude-oss-50.local.json
+callsieve proof-sprint status benchmarks/evidence/proof-sprint.local.json
 ```
 
 ## Run A Task

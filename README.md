@@ -118,6 +118,11 @@ callsieve pilot-init <manifest.json> [--sessions <n>]
 callsieve pilot-task add <manifest.json> <repo> "<task>" [--id <id>] [--expected-file <path>] [--critical-file <path>] [--external] [--pair-id <id>] [--task-category <name>] [--difficulty <name>] [--condition <name>] [--token-source transcript_context_tokens]
 callsieve pilot-task reject <manifest.json> --task-id <id> --reason <reason>
 callsieve pilot-run <manifest.json> --task-id <id> --mode baseline|callsieve --command <cmd> [--files-read <path>...] --tokens <n>
+callsieve proof-sprint init <manifest.json> --client claude --sessions 10|50 --model <name> [--force]
+callsieve proof-sprint status <manifest.json> [--json]
+callsieve proof-sprint collect <manifest.json> --task-id <id> --mode baseline|callsieve [--max-budget-usd <n>] [--dry-run]
+callsieve proof-sprint run <manifest.json> [--resume] [--limit <n>] [--max-budget-usd <n>] [--dry-run]
+callsieve proof-sprint finalize <manifest.json> --out <proof.json> [--limit <n>]
 callsieve pilot-collect-ollama <manifest.json> [--model qwen2.5-coder:7b] [--limit <n>] [--context-limit <n>]
 callsieve pilot-collect-lm-studio <manifest.json> [--model qwen3-coder-next] [--base-url http://127.0.0.1:1234/v1] [--limit <n>] [--context-limit <n>]
 callsieve pilot-qa <manifest.json>
@@ -198,6 +203,11 @@ cargo run -- pilot-run benchmarks/evidence/pilot.local.json --task-id auth-expir
 cargo run -- record-codex-observed-session --manifest benchmarks/evidence/pilot.local.json --task-id auth-expiry --mode callsieve --command "callsieve agent-context . \"change login token expiry behavior\"" --tokens 3000 --files-read src/auth/session.ts
 cargo run -- record-observed-session --manifest benchmarks/evidence/pilot.local.json --client claude --model claude-opus-4-8 --task-id auth-expiry --mode callsieve --command "claude -p \"change login token expiry behavior\" --output-format json" --usage-json .callsieve/observed/auth-expiry-callsieve.json --files-read src/auth/session.ts
 cargo run -- collect-claude-observed-session --manifest benchmarks/evidence/observed-claude-oss-50.local.json --task-id ripgrep-ignore-walk-claude-r01 --mode callsieve --context-limit 4 --snippets-per-file 0 --max-budget-usd 0.50
+cargo run -- proof-sprint init benchmarks/evidence/proof-sprint.local.json --client claude --sessions 10 --model claude-opus-4-8
+cargo run -- proof-sprint status benchmarks/evidence/proof-sprint.local.json
+cargo run -- proof-sprint collect benchmarks/evidence/proof-sprint.local.json --task-id ripgrep-ignore-walk-claude-r01 --mode baseline --dry-run
+cargo run -- proof-sprint run benchmarks/evidence/proof-sprint.local.json --resume --dry-run
+cargo run -- proof-sprint finalize benchmarks/evidence/proof-sprint.local.json --out benchmarks/evidence/proof.local.json
 cargo run -- pilot-collect-ollama benchmarks/evidence/observed-generic-ollama-100.local.json --model qwen2.5-coder:7b --limit 10 --context-limit 24
 cargo run -- pilot-collect-lm-studio benchmarks/evidence/observed-generic-ollama-100.local.json --model qwen3-coder-next --base-url http://127.0.0.1:1234/v1 --limit 10 --context-limit 24
 cargo run -- pilot-qa benchmarks/evidence/pilot.local.json
@@ -543,6 +553,8 @@ Use `benchmark-doctor` before a report to catch missing repos, missing indexes, 
 `pilot-report` is the pilot-proof artifact: it combines multi-repo benchmark recall, estimated token savings, observed trace savings, controlled replay counts, strict before-grep policy checks, index freshness, daemon state, Codex bootstrap coverage, and LSP coverage.
 
 `proof-report` is the top-level claim artifact. It exposes planned tasks, rejected-session audit count, observed sessions, transcript-token provenance, controlled replay sessions, external repo coverage, observed token reduction, controlled replay ratio, freshness, daemon, bootstrap, and LSP status in one JSON object. Controlled replay is never counted as observed evidence.
+
+`proof-sprint` is the buyer-facing Claude Code wrapper around the same pilot evidence system. Use it for a 10-session paid-pilot proof sprint or the 50-session public claim gate when you want one command group for init, status, collection, resume, and finalization. `proof-sprint run --resume` collects the next missing baseline or CallSieve phase and stops when the target is met. It still refuses claim proof until `pilot-qa` passes.
 
 `enterprise-proof-report` is the broad-claim artifact. It is opt-in and fails unless the manifest meets the enterprise gates: 1,000 paired observed sessions, 50 repos, 10 Microsoft-scale OSS proxies, manifest-configured client coverage, 5 languages, 10 task categories, 90% positive per-session savings, 75% of sessions above 30% savings, zero critical misses, zero strict trace violations, zero controlled replay, full transcript token accounting, and paid-pilot PMF evidence. See [docs/ENTERPRISE_PROOF.md](docs/ENTERPRISE_PROOF.md) and [benchmarks/evidence/enterprise-proof-manifest.example.json](benchmarks/evidence/enterprise-proof-manifest.example.json).
 

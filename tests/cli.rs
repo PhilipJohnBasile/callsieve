@@ -2606,6 +2606,272 @@ fn claude_collector_dry_run_defaults_to_compact_context_snippets() {
 }
 
 #[test]
+fn proof_sprint_init_status_and_dry_run_collect_wrap_existing_claude_flow() {
+    let manifest_root = tempfile::tempdir().unwrap();
+    let manifest_path = manifest_root.path().join("proof-sprint.local.json");
+
+    let init = json(&run(&[
+        "proof-sprint",
+        "init",
+        manifest_path.to_str().unwrap(),
+        "--client",
+        "claude",
+        "--sessions",
+        "10",
+        "--model",
+        "claude-opus-4-8",
+        "--skip-repo-check",
+    ]));
+    assert_eq!(init["command"], "proof-sprint init");
+    assert_eq!(init["status"], "ready_for_observed_collection");
+    assert_eq!(init["client"], "claude");
+    assert_eq!(init["task_count"], 50);
+    assert_eq!(init["target_sessions"], 10);
+    assert!(
+        init["next_collect"]
+            .as_str()
+            .unwrap()
+            .contains("--mode baseline")
+    );
+
+    let manifest: Value = serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+    assert_eq!(manifest["target_sessions"], 10);
+    assert_eq!(manifest["thresholds"]["minimum_observed_sessions"], 10);
+    assert_eq!(manifest["tasks"].as_array().unwrap().len(), 50);
+    assert!(manifest["tasks"].as_array().unwrap().iter().all(|task| {
+        task["client"] == "claude"
+            && task["model"] == "claude-opus-4-8"
+            && task["token_accounting_source"] == "transcript_context_tokens"
+    }));
+    let first_task = manifest["tasks"][0]["id"].as_str().unwrap();
+
+    let status = json(&run(&[
+        "proof-sprint",
+        "status",
+        manifest_path.to_str().unwrap(),
+    ]));
+    assert_eq!(status["command"], "proof-sprint status");
+    assert_eq!(status["status"], "collecting");
+    assert_eq!(status["paired_sessions_complete"], 0);
+    assert_eq!(
+        status["missing_baseline_phases"].as_array().unwrap().len(),
+        50
+    );
+    assert_eq!(
+        status["transcript_accounting_coverage_percent"]
+            .as_f64()
+            .unwrap(),
+        0.0
+    );
+    assert!(
+        status["next_command"]
+            .as_str()
+            .unwrap()
+            .contains(&format!("--task-id {first_task} --mode baseline"))
+    );
+
+    let dry_run = json(&run(&[
+        "proof-sprint",
+        "collect",
+        manifest_path.to_str().unwrap(),
+        "--task-id",
+        first_task,
+        "--mode",
+        "baseline",
+        "--dry-run",
+    ]));
+    assert_eq!(dry_run["command"], "proof-sprint collect");
+    assert_eq!(dry_run["status"], "dry_run");
+    assert_eq!(dry_run["model"], "claude-opus-4-8");
+    assert_eq!(
+        dry_run["collect"]["command"],
+        "collect-claude-observed-session"
+    );
+    assert!(
+        dry_run["collect"]["claude_command"]
+            .as_str()
+            .unwrap()
+            .contains("claude -p")
+    );
+    assert!(dry_run["collect"].get("record").is_none());
+
+    let run_dry = json(&run(&[
+        "proof-sprint",
+        "run",
+        manifest_path.to_str().unwrap(),
+        "--dry-run",
+    ]));
+    assert_eq!(run_dry["command"], "proof-sprint run");
+    assert_eq!(run_dry["status"], "dry_run");
+    assert_eq!(run_dry["collected_phases"], 0);
+    assert_eq!(run_dry["phases"].as_array().unwrap().len(), 1);
+    assert_eq!(run_dry["phases"][0]["task_id"], first_task);
+    assert_eq!(run_dry["phases"][0]["mode"], "baseline");
+    assert_eq!(run_dry["phases"][0]["collect"]["status"], "dry_run");
+}
+
+#[test]
+fn proof_sprint_status_pairs_baseline_then_callsieve_before_new_task() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+    json(&run(&["index", root]));
+    let manifest_root = tempfile::tempdir().unwrap();
+    let manifest_path = manifest_root.path().join("proof-sprint.json");
+
+    json(&run(&[
+        "pilot-init",
+        manifest_path.to_str().unwrap(),
+        "--sessions",
+        "1",
+    ]));
+    json(&run(&[
+        "pilot-task",
+        "add",
+        manifest_path.to_str().unwrap(),
+        root,
+        "change createSession token behavior",
+        "--id",
+        "auth",
+        "--expected-file",
+        "src/auth/session.ts",
+        "--critical-file",
+        "src/auth/session.ts",
+        "--client",
+        "claude",
+        "--model",
+        "claude-opus-4-8",
+    ]));
+
+    let empty = json(&run(&[
+        "proof-sprint",
+        "status",
+        manifest_path.to_str().unwrap(),
+    ]));
+    assert!(
+        empty["next_command"]
+            .as_str()
+            .unwrap()
+            .contains("--task-id auth --mode baseline")
+    );
+
+    json(&run(&[
+        "pilot-run",
+        manifest_path.to_str().unwrap(),
+        "--task-id",
+        "auth",
+        "--mode",
+        "baseline",
+        "--command",
+        "rg createSession",
+        "--files-read",
+        "src/auth/session.ts",
+        "--tokens",
+        "10000",
+    ]));
+    let run_without_resume = run(&[
+        "proof-sprint",
+        "run",
+        manifest_path.to_str().unwrap(),
+        "--dry-run",
+    ]);
+    assert!(!run_without_resume.status.success());
+    let run_without_resume = json_allow_failure(&run_without_resume);
+    assert!(
+        run_without_resume["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("pass --resume")
+    );
+
+    let baseline_only = json(&run(&[
+        "proof-sprint",
+        "status",
+        manifest_path.to_str().unwrap(),
+    ]));
+    assert!(
+        baseline_only["next_command"]
+            .as_str()
+            .unwrap()
+            .contains("--task-id auth --mode callsieve")
+    );
+    let resumed_run = json(&run(&[
+        "proof-sprint",
+        "run",
+        manifest_path.to_str().unwrap(),
+        "--resume",
+        "--dry-run",
+    ]));
+    assert_eq!(resumed_run["status"], "dry_run");
+    assert_eq!(resumed_run["phases"][0]["task_id"], "auth");
+    assert_eq!(resumed_run["phases"][0]["mode"], "callsieve");
+
+    json(&run(&[
+        "pilot-run",
+        manifest_path.to_str().unwrap(),
+        "--task-id",
+        "auth",
+        "--mode",
+        "callsieve",
+        "--command",
+        "callsieve agent-context . \"change createSession token behavior\"",
+        "--context-selected-file",
+        "src/auth/session.ts",
+        "--tokens",
+        "3000",
+    ]));
+    let complete = json(&run(&[
+        "proof-sprint",
+        "status",
+        manifest_path.to_str().unwrap(),
+    ]));
+    assert_eq!(complete["status"], "ready_to_finalize");
+    assert_eq!(complete["paired_sessions_complete"], 1);
+    assert_eq!(complete["qa_status"], "pass");
+    assert!(
+        complete["next_command"]
+            .as_str()
+            .unwrap()
+            .contains("proof-sprint finalize")
+    );
+    assert!(
+        complete["observed_token_reduction_percent"]
+            .as_f64()
+            .unwrap()
+            > 60.0
+    );
+}
+
+#[test]
+fn proof_sprint_finalize_refuses_until_pilot_qa_passes() {
+    let manifest_root = tempfile::tempdir().unwrap();
+    let manifest_path = manifest_root.path().join("proof-sprint.json");
+    let proof_path = manifest_root.path().join("proof.json");
+    json(&run(&[
+        "pilot-init",
+        manifest_path.to_str().unwrap(),
+        "--sessions",
+        "1",
+    ]));
+
+    let output = run(&[
+        "proof-sprint",
+        "finalize",
+        manifest_path.to_str().unwrap(),
+        "--out",
+        proof_path.to_str().unwrap(),
+    ]);
+    assert!(!output.status.success());
+    let error = json_allow_failure(&output);
+    assert!(
+        error["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("pilot QA failed")
+    );
+    assert!(!proof_path.exists());
+}
+
+#[test]
 fn pilot_task_reject_preserves_audit_and_excludes_task_from_count() {
     let repo = fixture_repo();
     let root = repo.path().to_str().unwrap();
