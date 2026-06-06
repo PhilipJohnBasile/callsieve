@@ -1,8 +1,8 @@
 {
   "mode": "A/B",
   "schema_version": 1,
-  "generated_at_unix": 1780690975,
-  "generated_at_iso_date": "2026-06-05",
+  "generated_at_unix": 1780722973,
+  "generated_at_iso_date": "2026-06-06",
   "manifest": {
     "path": "benchmarks/public/manifest-50.json",
     "schema_version": 1,
@@ -17,10 +17,25 @@
     "total": 50,
     "lexical_first_correct_file_rate_at_k": 0.56,
     "hybrid_first_correct_file_rate_at_k": 0.56,
-    "delta": 0,
+    "delta": 0.0,
     "wins": 0,
     "losses": 0,
-    "ties": 50
+    "ties": 50,
+    "natural_language": {
+      "evaluated": 1,
+      "lexical_first_correct_file_rate_at_k": 1.0,
+      "hybrid_first_correct_file_rate_at_k": 1.0,
+      "delta": 0.0
+    },
+    "identifier": {
+      "evaluated": 49,
+      "lexical_first_correct_file_rate_at_k": 0.5510204081632653,
+      "hybrid_first_correct_file_rate_at_k": 0.5510204081632653,
+      "delta": 0.0
+    },
+    "grep_first_correct_file_rate_at_k": 0.06,
+    "hybrid_minus_grep": 0.5,
+    "grep_evaluated": 50
   },
   "issues": [
     {
@@ -32,6 +47,19 @@
         "astropy/modeling/separable.py"
       ],
       "k": 5,
+      "query_kind": "identifier",
+      "grep": {
+        "top_k_files": [
+          "CHANGES.rst",
+          "astropy/modeling/core.py",
+          "docs/io/fits/appendix/history.rst",
+          "astropy/extern/jquery/data/js/jquery-3.1.1.js",
+          "astropy/wcs/wcs.py"
+        ],
+        "selected_files_count": 1662,
+        "first_correct_file_rate_at_k": 0.0,
+        "matched_files": []
+      },
       "lexical": {
         "top_k_files": [
           "astropy/modeling/separable.py",
@@ -72,6 +100,19 @@
         "astropy/io/ascii/rst.py"
       ],
       "k": 5,
+      "query_kind": "identifier",
+      "grep": {
+        "top_k_files": [
+          "CHANGES.rst",
+          "docs/io/fits/appendix/history.rst",
+          "astropy/wcs/wcs.py",
+          "cextern/cfitsio/docs/changes.txt",
+          "docs/io/unified.rst"
+        ],
+        "selected_files_count": 1680,
+        "first_correct_file_rate_at_k": 0.0,
+        "matched_files": []
+      },
       "lexical": {
         "top_k_files": [
           "astropy/units/__init__.py",
@@ -108,6 +149,19 @@
         "astropy/io/ascii/qdp.py"
       ],
       "k": 5,
+      "query_kind": "identifier",
+      "grep": {
+        "top_k_files": [
+          "CHANGES.rst",
+          "docs/io/fits/appendix/history.rst",
+          "astropy/wcs/wcs.py",
+          "cextern/cfitsio/docs/changes.txt",
+          "docs/development/testguide.rst"
+        ],
+        "selected_files_count": 1660,
+        "first_correct_file_rate_at_k": 0.0,
+        "matched_files": []
+      },
       "lexical": {
         "top_k_files": [
           "astropy/io/ascii/qdp.py",
@@ -148,6 +202,19 @@
         "astropy/nddata/mixins/ndarithmetic.py"
       ],
       "k": 5,
+      "query_kind": "identifier",
+      "grep": {
+        "top_k_files": [
+          "CHANGES.rst",
+          "cextern/cfitsio/docs/changes.txt",
+          "docs/io/fits/appendix/history.rst",
+          "docs/time/index.rst",
+          "astropy/extern/jquery/data/js/jquery-3.6.0.js"
+        ],
+        "selected_files_count": 1552,
+        "first_correct_file_rate_at_k": 0.0,
+        "matched_files": []
+      },
       "lexical": {
         "top_k_files": [
           "astropy/units/quantity_helper/erfa.py",
@@ -184,6 +251,19 @@
         "astropy/io/fits/fitsrec.py"
       ],
       "k": 5,
+      "query_kind": "identifier",
+      "grep": {
+        "top_k_files": [
+          "CHANGES.rst",
+          "docs/io/fits/appendix/history.rst",
+          "cextern/cfitsio/docs/changes.txt",
+          "astropy/extern/js/jquery.dataTables.js",
+          "cextern/expat/configure"
+        ],
+        "selected_files_count": 1622,
+        "first_correct_file_rate_at_k": 0.0,
+        "matched_files": []
+      },
       "lexical": {
         "top_k_files": [
           "astropy/io/fits/fitsrec.py",
@@ -224,6 +304,21 @@
         "astropy/wcs/wcs.py"
       ],
       "k": 5,
+      "query_kind": "identifier",
+      "grep": {
+        "top_k_files": [
+          "CHANGES.rst",
+          "astropy/wcs/wcs.py",
+          "astropy/modeling/core.py",
+          "cextern/cfitsio/docs/changes.txt",
+          "cextern/wcslib/CHANGES"
+        ],
+        "selected_files_count": 1671,
+        "first_correct_file_rate_at_k": 1.0,
+        "matched_files": [
+          "astropy/wcs/wcs.py"
+        ]
+      },
       "lexical": {
         "top_k_files": [
           "astropy/wcs/wcs.py",
@@ -264,6 +359,19 @@
         "django/conf/global_settings.py"
       ],
       "k": 5,
+      "query_kind": "identifier",
+      "grep": {
+        "top_k_files": [
+          "docs/releases/1.9.txt",
+          "docs/releases/1.8.txt",
+          "docs/man/django-admin.1",
+          "docs/ref/django-admin.txt",
+          "docs/ref/settings.txt"
+        ],
+        "selected_files_count": 4075,
+        "first_correct_file_rate_at_k": 0.0,
+        "matched_files": []
+      },
       "lexical": {
         "top_k_files": [
           "django/core/files/storage.py",
@@ -300,6 +408,19 @@
         "django/db/models/fields/__init__.py"
       ],
       "k": 5,
+      "query_kind": "identifier",
+      "grep": {
+        "top_k_files": [
+          "docs/ref/settings.txt",
+          "docs/releases/1.8.txt",
+          "docs/ref/django-admin.txt",
+          "docs/releases/1.7.txt",
+          "docs/topics/migrations.txt"
+        ],
+        "selected_files_count": 4188,
+        "first_correct_file_rate_at_k": 0.0,
+        "matched_files": []
+      },
       "lexical": {
         "top_k_files": [
           "django/db/models/fields/__init__.py",
@@ -340,6 +461,19 @@
         "django/db/models/sql/compiler.py"
       ],
       "k": 5,
+      "query_kind": "identifier",
+      "grep": {
+        "top_k_files": [
+          "django/contrib/admin/static/admin/js/vendor/jquery/jquery.js",
+          "docs/releases/1.7.txt",
+          "docs/releases/1.4.txt",
+          "docs/topics/i18n/translation.txt",
+          "docs/ref/contrib/admin/index.txt"
+        ],
+        "selected_files_count": 4191,
+        "first_correct_file_rate_at_k": 0.0,
+        "matched_files": []
+      },
       "lexical": {
         "top_k_files": [
           "django/db/models/expressions.py",
@@ -380,6 +514,19 @@
         "django/forms/widgets.py"
       ],
       "k": 5,
+      "query_kind": "identifier",
+      "grep": {
+        "top_k_files": [
+          "docs/releases/1.7.txt",
+          "docs/ref/contrib/admin/index.txt",
+          "django/contrib/admin/static/admin/js/vendor/jquery/jquery.js",
+          "docs/releases/1.6.txt",
+          "docs/ref/models/querysets.txt"
+        ],
+        "selected_files_count": 4145,
+        "first_correct_file_rate_at_k": 0.0,
+        "matched_files": []
+      },
       "lexical": {
         "top_k_files": [
           "django/forms/widgets.py",
@@ -420,6 +567,19 @@
         "django/core/management/commands/sqlmigrate.py"
       ],
       "k": 5,
+      "query_kind": "identifier",
+      "grep": {
+        "top_k_files": [
+          "docs/releases/1.8.txt",
+          "docs/releases/1.7.txt",
+          "docs/ref/settings.txt",
+          "docs/releases/1.9.txt",
+          "docs/man/django-admin.1"
+        ],
+        "selected_files_count": 3934,
+        "first_correct_file_rate_at_k": 0.0,
+        "matched_files": []
+      },
       "lexical": {
         "top_k_files": [
           "django/db/transaction.py",
@@ -456,6 +616,19 @@
         "django/db/models/fields/__init__.py"
       ],
       "k": 5,
+      "query_kind": "identifier",
+      "grep": {
+        "top_k_files": [
+          "django/contrib/admin/static/admin/js/vendor/jquery/jquery.js",
+          "docs/ref/models/querysets.txt",
+          "docs/topics/i18n/translation.txt",
+          "docs/ref/templates/builtins.txt",
+          "docs/ref/utils.txt"
+        ],
+        "selected_files_count": 4116,
+        "first_correct_file_rate_at_k": 0.0,
+        "matched_files": []
+      },
       "lexical": {
         "top_k_files": [
           "django/forms/fields.py",
@@ -496,6 +669,19 @@
         "django/contrib/auth/validators.py"
       ],
       "k": 5,
+      "query_kind": "identifier",
+      "grep": {
+        "top_k_files": [
+          "docs/releases/1.10.txt",
+          "docs/releases/1.8.txt",
+          "docs/ref/settings.txt",
+          "docs/releases/1.7.txt",
+          "django/contrib/admin/static/admin/js/vendor/jquery/jquery.js"
+        ],
+        "selected_files_count": 4047,
+        "first_correct_file_rate_at_k": 0.0,
+        "matched_files": []
+      },
       "lexical": {
         "top_k_files": [
           "django/contrib/auth/validators.py",
@@ -536,6 +722,19 @@
         "django/http/response.py"
       ],
       "k": 5,
+      "query_kind": "identifier",
+      "grep": {
+        "top_k_files": [
+          "docs/ref/models/querysets.txt",
+          "docs/topics/testing/tools.txt",
+          "docs/ref/django-admin.txt",
+          "docs/releases/1.5.txt",
+          "docs/releases/1.9.txt"
+        ],
+        "selected_files_count": 4186,
+        "first_correct_file_rate_at_k": 0.0,
+        "matched_files": []
+      },
       "lexical": {
         "top_k_files": [
           "django/http/response.py",
@@ -576,6 +775,19 @@
         "django/db/models/deletion.py"
       ],
       "k": 5,
+      "query_kind": "natural_language",
+      "grep": {
+        "top_k_files": [
+          "docs/man/django-admin.1",
+          "docs/ref/django-admin.txt",
+          "docs/releases/1.8.txt",
+          "django/contrib/admin/options.py",
+          "docs/ref/contrib/admin/index.txt"
+        ],
+        "selected_files_count": 4081,
+        "first_correct_file_rate_at_k": 0.0,
+        "matched_files": []
+      },
       "lexical": {
         "top_k_files": [
           "django/db/models/deletion.py",
@@ -616,6 +828,19 @@
         "django/contrib/auth/migrations/0011_update_proxy_permissions.py"
       ],
       "k": 5,
+      "query_kind": "identifier",
+      "grep": {
+        "top_k_files": [
+          "docs/releases/1.7.txt",
+          "docs/releases/1.9.txt",
+          "tests/admin_views/tests.py",
+          "docs/man/django-admin.1",
+          "django/contrib/admin/static/admin/js/vendor/jquery/jquery.js"
+        ],
+        "selected_files_count": 4205,
+        "first_correct_file_rate_at_k": 0.0,
+        "matched_files": []
+      },
       "lexical": {
         "top_k_files": [
           "django/db/utils.py",
@@ -652,6 +877,19 @@
         "django/utils/autoreload.py"
       ],
       "k": 5,
+      "query_kind": "identifier",
+      "grep": {
+        "top_k_files": [
+          "docs/releases/1.8.txt",
+          "docs/man/django-admin.1",
+          "docs/ref/django-admin.txt",
+          "docs/releases/1.9.txt",
+          "django/contrib/admin/static/admin/js/vendor/jquery/jquery.js"
+        ],
+        "selected_files_count": 4119,
+        "first_correct_file_rate_at_k": 0.0,
+        "matched_files": []
+      },
       "lexical": {
         "top_k_files": [
           "django/utils/autoreload.py",
@@ -692,6 +930,19 @@
         "django/conf/__init__.py"
       ],
       "k": 5,
+      "query_kind": "identifier",
+      "grep": {
+        "top_k_files": [
+          "docs/ref/contrib/admin/index.txt",
+          "docs/releases/1.9.txt",
+          "docs/releases/1.7.txt",
+          "docs/releases/1.8.txt",
+          "docs/releases/1.10.txt"
+        ],
+        "selected_files_count": 4205,
+        "first_correct_file_rate_at_k": 0.0,
+        "matched_files": []
+      },
       "lexical": {
         "top_k_files": [
           "django/contrib/staticfiles/storage.py",
@@ -728,6 +979,19 @@
         "django/utils/autoreload.py"
       ],
       "k": 5,
+      "query_kind": "identifier",
+      "grep": {
+        "top_k_files": [
+          "django/contrib/admin/static/admin/js/vendor/jquery/jquery.js",
+          "docs/topics/i18n/translation.txt",
+          "docs/ref/models/querysets.txt",
+          "docs/releases/1.7.txt",
+          "docs/releases/1.8.txt"
+        ],
+        "selected_files_count": 4207,
+        "first_correct_file_rate_at_k": 0.0,
+        "matched_files": []
+      },
       "lexical": {
         "top_k_files": [
           "django/utils/autoreload.py",
@@ -768,6 +1032,19 @@
         "django/views/debug.py"
       ],
       "k": 5,
+      "query_kind": "identifier",
+      "grep": {
+        "top_k_files": [
+          "docs/man/django-admin.1",
+          "docs/ref/settings.txt",
+          "docs/ref/django-admin.txt",
+          "docs/releases/1.7.txt",
+          "docs/releases/1.9.txt"
+        ],
+        "selected_files_count": 4161,
+        "first_correct_file_rate_at_k": 0.0,
+        "matched_files": []
+      },
       "lexical": {
         "top_k_files": [
           "django/shortcuts.py",
@@ -808,6 +1085,19 @@
         "django/core/checks/model_checks.py"
       ],
       "k": 5,
+      "query_kind": "identifier",
+      "grep": {
+        "top_k_files": [
+          "docs/releases/1.8.txt",
+          "docs/releases/1.4.txt",
+          "docs/releases/1.6.txt",
+          "docs/releases/1.7.txt",
+          "django/contrib/admin/static/admin/js/vendor/jquery/jquery.js"
+        ],
+        "selected_files_count": 4194,
+        "first_correct_file_rate_at_k": 0.0,
+        "matched_files": []
+      },
       "lexical": {
         "top_k_files": [
           "django/db/models/base.py",
@@ -823,10 +1113,10 @@
       "hybrid": {
         "top_k_files": [
           "django/db/models/base.py",
-          "django/db/backends/sqlite3/base.py",
           "django/db/backends/base/base.py",
+          "django/db/backends/sqlite3/base.py",
           "django/db/backends/oracle/base.py",
-          "docs/topics/db/models.txt"
+          "tests/reserved_names/models.py"
         ],
         "selected_files_count": 8,
         "first_correct_file_rate_at_k": 0.0,
@@ -844,6 +1134,19 @@
         "django/db/models/fields/__init__.py"
       ],
       "k": 5,
+      "query_kind": "identifier",
+      "grep": {
+        "top_k_files": [
+          "docs/ref/models/fields.txt",
+          "django/contrib/admin/static/admin/js/vendor/jquery/jquery.js",
+          "docs/ref/models/querysets.txt",
+          "docs/releases/1.9.txt",
+          "docs/ref/contrib/admin/index.txt"
+        ],
+        "selected_files_count": 3987,
+        "first_correct_file_rate_at_k": 0.0,
+        "matched_files": []
+      },
       "lexical": {
         "top_k_files": [
           "django/contrib/admin/checks.py",
@@ -884,6 +1187,19 @@
         "django/db/models/lookups.py"
       ],
       "k": 5,
+      "query_kind": "identifier",
+      "grep": {
+        "top_k_files": [
+          "docs/ref/contrib/admin/index.txt",
+          "docs/ref/models/expressions.txt",
+          "docs/ref/models/querysets.txt",
+          "tests/admin_views/tests.py",
+          "tests/queries/tests.py"
+        ],
+        "selected_files_count": 4131,
+        "first_correct_file_rate_at_k": 0.0,
+        "matched_files": []
+      },
       "lexical": {
         "top_k_files": [
           "django/contrib/auth/models.py",
@@ -920,6 +1236,19 @@
         "django/db/migrations/serializer.py"
       ],
       "k": 5,
+      "query_kind": "identifier",
+      "grep": {
+        "top_k_files": [
+          "docs/ref/settings.txt",
+          "docs/ref/contrib/admin/index.txt",
+          "docs/ref/models/fields.txt",
+          "docs/topics/i18n/translation.txt",
+          "docs/releases/1.8.txt"
+        ],
+        "selected_files_count": 4227,
+        "first_correct_file_rate_at_k": 0.0,
+        "matched_files": []
+      },
       "lexical": {
         "top_k_files": [
           "django/db/models/fields/files.py",
@@ -956,6 +1285,19 @@
         "django/utils/http.py"
       ],
       "k": 5,
+      "query_kind": "identifier",
+      "grep": {
+        "top_k_files": [
+          "docs/ref/templates/builtins.txt",
+          "docs/releases/1.8.txt",
+          "docs/ref/models/querysets.txt",
+          "django/contrib/admin/static/admin/js/vendor/jquery/jquery.js",
+          "docs/releases/1.10.txt"
+        ],
+        "selected_files_count": 4145,
+        "first_correct_file_rate_at_k": 0.0,
+        "matched_files": []
+      },
       "lexical": {
         "top_k_files": [
           "django/utils/http.py",
@@ -974,7 +1316,7 @@
         "top_k_files": [
           "django/utils/http.py",
           "django/contrib/admin/utils.py",
-          "django/db/utils.py",
+          "django/test/utils.py",
           "tests/utils_tests/test_http.py",
           "django/db/backends/utils.py"
         ],
@@ -996,6 +1338,19 @@
         "django/db/models/lookups.py"
       ],
       "k": 5,
+      "query_kind": "identifier",
+      "grep": {
+        "top_k_files": [
+          "tests/queries/tests.py",
+          "django/contrib/admin/static/admin/js/vendor/jquery/jquery.js",
+          "django/db/models/sql/query.py",
+          "docs/releases/1.7.txt",
+          "docs/releases/1.8.txt"
+        ],
+        "selected_files_count": 3631,
+        "first_correct_file_rate_at_k": 0.0,
+        "matched_files": []
+      },
       "lexical": {
         "top_k_files": [
           "django/db/models/query.py",
@@ -1032,6 +1387,19 @@
         "django/db/migrations/autodetector.py"
       ],
       "k": 5,
+      "query_kind": "identifier",
+      "grep": {
+        "top_k_files": [
+          "docs/releases/1.8.txt",
+          "docs/releases/1.7.txt",
+          "tests/migrations/test_autodetector.py",
+          "docs/ref/contrib/admin/index.txt",
+          "docs/ref/models/fields.txt"
+        ],
+        "selected_files_count": 4123,
+        "first_correct_file_rate_at_k": 0.0,
+        "matched_files": []
+      },
       "lexical": {
         "top_k_files": [
           "django/db/migrations/operations/fields.py",
@@ -1068,6 +1436,19 @@
         "django/db/models/enums.py"
       ],
       "k": 5,
+      "query_kind": "identifier",
+      "grep": {
+        "top_k_files": [
+          "docs/releases/1.7.txt",
+          "docs/ref/models/querysets.txt",
+          "docs/releases/1.9.txt",
+          "docs/releases/1.8.txt",
+          "docs/releases/1.10.txt"
+        ],
+        "selected_files_count": 4252,
+        "first_correct_file_rate_at_k": 0.0,
+        "matched_files": []
+      },
       "lexical": {
         "top_k_files": [
           "tests/queries/models.py",
@@ -1104,6 +1485,21 @@
         "django/db/models/fields/__init__.py"
       ],
       "k": 5,
+      "query_kind": "identifier",
+      "grep": {
+        "top_k_files": [
+          "docs/ref/models/fields.txt",
+          "django/db/models/fields/__init__.py",
+          "docs/ref/contrib/admin/index.txt",
+          "docs/ref/models/querysets.txt",
+          "docs/topics/db/models.txt"
+        ],
+        "selected_files_count": 4137,
+        "first_correct_file_rate_at_k": 1.0,
+        "matched_files": [
+          "django/db/models/fields/__init__.py"
+        ]
+      },
       "lexical": {
         "top_k_files": [
           "django/db/models/fields/__init__.py",
@@ -1144,6 +1540,19 @@
         "django/db/backends/sqlite3/creation.py"
       ],
       "k": 5,
+      "query_kind": "identifier",
+      "grep": {
+        "top_k_files": [
+          "docs/man/django-admin.1",
+          "docs/ref/django-admin.txt",
+          "docs/releases/1.9.txt",
+          "docs/releases/1.8.txt",
+          "docs/releases/1.7.txt"
+        ],
+        "selected_files_count": 4275,
+        "first_correct_file_rate_at_k": 0.0,
+        "matched_files": []
+      },
       "lexical": {
         "top_k_files": [
           "tests/model_forms/tests.py",
@@ -1180,6 +1589,19 @@
         "django/db/migrations/serializer.py"
       ],
       "k": 5,
+      "query_kind": "identifier",
+      "grep": {
+        "top_k_files": [
+          "docs/releases/1.7.txt",
+          "docs/ref/contrib/admin/index.txt",
+          "docs/ref/settings.txt",
+          "docs/releases/1.8.txt",
+          "docs/ref/models/querysets.txt"
+        ],
+        "selected_files_count": 4258,
+        "first_correct_file_rate_at_k": 0.0,
+        "matched_files": []
+      },
       "lexical": {
         "top_k_files": [
           "django/db/migrations/operations/models.py",
@@ -1216,6 +1638,19 @@
         "django/urls/resolvers.py"
       ],
       "k": 5,
+      "query_kind": "identifier",
+      "grep": {
+        "top_k_files": [
+          "docs/releases/1.9.txt",
+          "django/contrib/admin/static/admin/js/vendor/jquery/jquery.js",
+          "docs/releases/1.7.txt",
+          "docs/releases/1.8.txt",
+          "docs/topics/i18n/translation.txt"
+        ],
+        "selected_files_count": 4278,
+        "first_correct_file_rate_at_k": 0.0,
+        "matched_files": []
+      },
       "lexical": {
         "top_k_files": [
           "django/core/handlers/base.py",
@@ -1231,10 +1666,10 @@
       "hybrid": {
         "top_k_files": [
           "django/core/handlers/base.py",
+          "django/http/response.py",
           "tests/urlpatterns_reverse/views.py",
           "django/http/request.py",
-          "django/core/serializers/base.py",
-          "django/http/response.py"
+          "django/core/serializers/base.py"
         ],
         "selected_files_count": 8,
         "first_correct_file_rate_at_k": 0.0,
@@ -1252,6 +1687,19 @@
         "django/db/models/fields/__init__.py"
       ],
       "k": 5,
+      "query_kind": "identifier",
+      "grep": {
+        "top_k_files": [
+          "docs/ref/models/fields.txt",
+          "django/contrib/admin/static/admin/js/vendor/jquery/jquery.js",
+          "docs/ref/models/querysets.txt",
+          "docs/releases/1.8.txt",
+          "tests/admin_views/tests.py"
+        ],
+        "selected_files_count": 4017,
+        "first_correct_file_rate_at_k": 0.0,
+        "matched_files": []
+      },
       "lexical": {
         "top_k_files": [
           "django/db/models/fields/__init__.py",
@@ -1292,6 +1740,19 @@
         "django/core/checks/translation.py"
       ],
       "k": 5,
+      "query_kind": "identifier",
+      "grep": {
+        "top_k_files": [
+          "docs/topics/i18n/translation.txt",
+          "docs/man/django-admin.1",
+          "docs/ref/django-admin.txt",
+          "docs/ref/settings.txt",
+          "docs/releases/1.7.txt"
+        ],
+        "selected_files_count": 4266,
+        "first_correct_file_rate_at_k": 0.0,
+        "matched_files": []
+      },
       "lexical": {
         "top_k_files": [
           "django/core/management/base.py",
@@ -1328,6 +1789,19 @@
         "django/contrib/admin/utils.py"
       ],
       "k": 5,
+      "query_kind": "identifier",
+      "grep": {
+        "top_k_files": [
+          "docs/releases/1.7.txt",
+          "docs/releases/1.9.txt",
+          "docs/ref/models/fields.txt",
+          "docs/ref/contrib/admin/index.txt",
+          "docs/releases/1.8.txt"
+        ],
+        "selected_files_count": 4173,
+        "first_correct_file_rate_at_k": 0.0,
+        "matched_files": []
+      },
       "lexical": {
         "top_k_files": [
           "django/contrib/admin/utils.py",
@@ -1368,6 +1842,19 @@
         "django/db/backends/base/creation.py"
       ],
       "k": 5,
+      "query_kind": "identifier",
+      "grep": {
+        "top_k_files": [
+          "docs/releases/1.7.txt",
+          "docs/releases/1.8.txt",
+          "docs/releases/1.9.txt",
+          "docs/topics/testing/tools.txt",
+          "docs/ref/settings.txt"
+        ],
+        "selected_files_count": 4271,
+        "first_correct_file_rate_at_k": 0.0,
+        "matched_files": []
+      },
       "lexical": {
         "top_k_files": [
           "django/db/backends/base/creation.py",
@@ -1408,6 +1895,19 @@
         "django/db/models/sql/compiler.py"
       ],
       "k": 5,
+      "query_kind": "identifier",
+      "grep": {
+        "top_k_files": [
+          "docs/ref/models/querysets.txt",
+          "docs/ref/contrib/admin/index.txt",
+          "docs/releases/1.7.txt",
+          "docs/topics/db/models.txt",
+          "tests/admin_views/tests.py"
+        ],
+        "selected_files_count": 4204,
+        "first_correct_file_rate_at_k": 0.0,
+        "matched_files": []
+      },
       "lexical": {
         "top_k_files": [
           "django/db/models/query.py",
@@ -1444,6 +1944,19 @@
         "django/db/models/fields/related.py"
       ],
       "k": 5,
+      "query_kind": "identifier",
+      "grep": {
+        "top_k_files": [
+          "docs/ref/contrib/admin/index.txt",
+          "docs/ref/models/fields.txt",
+          "docs/releases/1.9.txt",
+          "docs/topics/db/models.txt",
+          "docs/releases/1.7.txt"
+        ],
+        "selected_files_count": 4212,
+        "first_correct_file_rate_at_k": 0.0,
+        "matched_files": []
+      },
       "lexical": {
         "top_k_files": [
           "django/db/models/fields/related.py",
@@ -1484,6 +1997,19 @@
         "django/db/models/sql/query.py"
       ],
       "k": 5,
+      "query_kind": "identifier",
+      "grep": {
+        "top_k_files": [
+          "docs/ref/models/querysets.txt",
+          "tests/queries/tests.py",
+          "docs/releases/1.9.txt",
+          "docs/topics/i18n/translation.txt",
+          "django/db/models/sql/compiler.py"
+        ],
+        "selected_files_count": 4249,
+        "first_correct_file_rate_at_k": 0.0,
+        "matched_files": []
+      },
       "lexical": {
         "top_k_files": [
           "django/db/models/fields/related.py",
@@ -1520,6 +2046,19 @@
         "django/views/debug.py"
       ],
       "k": 5,
+      "query_kind": "identifier",
+      "grep": {
+        "top_k_files": [
+          "docs/releases/1.6.txt",
+          "docs/topics/auth/default.txt",
+          "docs/ref/contrib/admin/index.txt",
+          "docs/ref/settings.txt",
+          "docs/ref/templates/builtins.txt"
+        ],
+        "selected_files_count": 4270,
+        "first_correct_file_rate_at_k": 0.0,
+        "matched_files": []
+      },
       "lexical": {
         "top_k_files": [
           "django/views/debug.py",
@@ -1560,6 +2099,19 @@
         "django/db/backends/base/schema.py"
       ],
       "k": 5,
+      "query_kind": "identifier",
+      "grep": {
+        "top_k_files": [
+          "docs/releases/1.8.txt",
+          "docs/man/django-admin.1",
+          "docs/ref/models/fields.txt",
+          "docs/ref/django-admin.txt",
+          "docs/releases/1.7.txt"
+        ],
+        "selected_files_count": 4314,
+        "first_correct_file_rate_at_k": 0.0,
+        "matched_files": []
+      },
       "lexical": {
         "top_k_files": [
           "django/db/backends/base/schema.py",
@@ -1600,6 +2152,19 @@
         "django/db/models/deletion.py"
       ],
       "k": 5,
+      "query_kind": "identifier",
+      "grep": {
+        "top_k_files": [
+          "docs/ref/contrib/admin/index.txt",
+          "docs/ref/models/fields.txt",
+          "docs/releases/1.10.txt",
+          "docs/releases/1.7.txt",
+          "docs/releases/1.9.txt"
+        ],
+        "selected_files_count": 4132,
+        "first_correct_file_rate_at_k": 0.0,
+        "matched_files": []
+      },
       "lexical": {
         "top_k_files": [
           "django/db/models/query.py",
@@ -1636,6 +2201,19 @@
         "django/db/models/base.py"
       ],
       "k": 5,
+      "query_kind": "identifier",
+      "grep": {
+        "top_k_files": [
+          "docs/releases/1.7.txt",
+          "docs/releases/1.8.txt",
+          "django/db/models/sql/query.py",
+          "docs/man/django-admin.1",
+          "docs/ref/django-admin.txt"
+        ],
+        "selected_files_count": 3922,
+        "first_correct_file_rate_at_k": 0.0,
+        "matched_files": []
+      },
       "lexical": {
         "top_k_files": [
           "django/contrib/contenttypes/fields.py",
@@ -1672,6 +2250,21 @@
         "django/db/models/query.py"
       ],
       "k": 5,
+      "query_kind": "identifier",
+      "grep": {
+        "top_k_files": [
+          "tests/queries/tests.py",
+          "docs/ref/models/querysets.txt",
+          "tests/expressions/tests.py",
+          "django/db/models/query.py",
+          "docs/releases/1.10.txt"
+        ],
+        "selected_files_count": 4229,
+        "first_correct_file_rate_at_k": 1.0,
+        "matched_files": [
+          "django/db/models/query.py"
+        ]
+      },
       "lexical": {
         "top_k_files": [
           "django/db/models/query.py",
@@ -1712,6 +2305,19 @@
         "django/contrib/staticfiles/handlers.py"
       ],
       "k": 5,
+      "query_kind": "identifier",
+      "grep": {
+        "top_k_files": [
+          "django/contrib/admin/static/admin/js/vendor/jquery/jquery.js",
+          "docs/releases/1.9.txt",
+          "docs/ref/settings.txt",
+          "docs/releases/1.4.txt",
+          "docs/releases/1.8.txt"
+        ],
+        "selected_files_count": 4253,
+        "first_correct_file_rate_at_k": 0.0,
+        "matched_files": []
+      },
       "lexical": {
         "top_k_files": [
           "django/contrib/staticfiles/handlers.py",
@@ -1752,6 +2358,19 @@
         "django/utils/text.py"
       ],
       "k": 5,
+      "query_kind": "identifier",
+      "grep": {
+        "top_k_files": [
+          "docs/ref/utils.txt",
+          "docs/releases/1.8.txt",
+          "docs/releases/1.9.txt",
+          "docs/man/django-admin.1",
+          "docs/ref/django-admin.txt"
+        ],
+        "selected_files_count": 4083,
+        "first_correct_file_rate_at_k": 0.0,
+        "matched_files": []
+      },
       "lexical": {
         "top_k_files": [
           "tests/test_utils/tests.py",
@@ -1792,6 +2411,19 @@
         "django/db/models/sql/query.py"
       ],
       "k": 5,
+      "query_kind": "identifier",
+      "grep": {
+        "top_k_files": [
+          "docs/releases/1.8.txt",
+          "docs/releases/1.7.txt",
+          "docs/releases/1.9.txt",
+          "docs/ref/contrib/admin/index.txt",
+          "tests/admin_views/tests.py"
+        ],
+        "selected_files_count": 4307,
+        "first_correct_file_rate_at_k": 0.0,
+        "matched_files": []
+      },
       "lexical": {
         "top_k_files": [
           "django/forms/fields.py",
@@ -1832,6 +2464,19 @@
         "django/db/models/sql/compiler.py"
       ],
       "k": 5,
+      "query_kind": "identifier",
+      "grep": {
+        "top_k_files": [
+          "docs/ref/models/querysets.txt",
+          "django/contrib/admin/static/admin/js/vendor/jquery/jquery.js",
+          "docs/releases/1.7.txt",
+          "docs/ref/contrib/admin/index.txt",
+          "tests/queries/tests.py"
+        ],
+        "selected_files_count": 4301,
+        "first_correct_file_rate_at_k": 0.0,
+        "matched_files": []
+      },
       "lexical": {
         "top_k_files": [
           "django/db/models/fields/__init__.py",
@@ -1868,6 +2513,19 @@
         "django/db/models/sql/query.py"
       ],
       "k": 5,
+      "query_kind": "identifier",
+      "grep": {
+        "top_k_files": [
+          "docs/ref/models/querysets.txt",
+          "django/contrib/admin/static/admin/js/vendor/jquery/jquery.js",
+          "docs/ref/contrib/admin/index.txt",
+          "tests/admin_views/tests.py",
+          "docs/ref/settings.txt"
+        ],
+        "selected_files_count": 4256,
+        "first_correct_file_rate_at_k": 0.0,
+        "matched_files": []
+      },
       "lexical": {
         "top_k_files": [
           "django/forms/models.py",
@@ -1904,6 +2562,19 @@
         "django/core/exceptions.py"
       ],
       "k": 5,
+      "query_kind": "identifier",
+      "grep": {
+        "top_k_files": [
+          "docs/releases/1.7.txt",
+          "docs/releases/1.6.txt",
+          "docs/topics/i18n/translation.txt",
+          "docs/topics/testing/tools.txt",
+          "docs/ref/contrib/admin/index.txt"
+        ],
+        "selected_files_count": 4202,
+        "first_correct_file_rate_at_k": 0.0,
+        "matched_files": []
+      },
       "lexical": {
         "top_k_files": [
           "django/contrib/admin/helpers.py",

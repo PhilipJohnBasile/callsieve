@@ -82,13 +82,15 @@ target/release/callsieve bench-run benchmarks/public/manifest-50.json --workdir 
 
 The hybrid arm uses local embeddings only when the binary is built with `--features embed` and the run opts in with `--compare`. The cache format is versioned; stale or mismatched embedding caches are ignored and rebuilt rather than reused against the wrong index. The current cache stores chunk vectors plus chunk-to-file owners, then max-pools chunk cosine scores to the file level for ranking.
 
-Latest local A/B run, generated June 5, 2026:
+Latest local A/B run, generated June 6, 2026 from current `main`:
 
 | Dataset | K | Issues | Skipped | Lexical first-correct-file rate | Hybrid first-correct-file rate | Delta | Wins | Losses | Ties |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | SWE-bench Lite public subset | 5 | 50 | 0 | `56.0%` | `56.0%` | `+0.0 pp` | 0 | 0 | 50 |
 
-This run proves the hybrid path is wired and non-regressing on this benchmark, but it does not support a quality-lift claim. Treat the current public number as parity until a benchmark shows positive wins over lexical retrieval.
+The same run reports grep first-correct-file@5 at `6.0%`, so hybrid is `+50.0 pp` over the naive grep arm. The query-kind split is heavily identifier-shaped: `49` identifier issues and `1` natural-language issue, with `+0.0 pp` hybrid delta in both slices.
+
+This run proves the hybrid path is wired and non-regressing on this benchmark, and that CallSieve beats the naive grep arm on this dataset. It does not support a semantic quality-lift claim over lexical retrieval. Treat the current public number as parity until a benchmark shows positive wins over lexical retrieval.
 
 Report language to use today:
 

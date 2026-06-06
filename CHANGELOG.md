@@ -10,6 +10,7 @@
 - Added chunked `embeds.bin` format v3 with chunk-to-file owners, optional chunk symbols, and stale-cache invalidation.
 - Added semantic recall injection and shared semantic scoring so hybrid retrieval computes the query embedding once per context request.
 - Added resumable public benchmark runs with `bench-run --compare --resume` and a checked-in 50-issue compare result.
+- Refreshed the 50-issue public A/B report on current `main`, including query-kind and grep aggregate fields.
 
 ### Changed
 
