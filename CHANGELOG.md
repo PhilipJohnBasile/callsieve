@@ -6,6 +6,11 @@
 
 - Added a 30-issue natural-language benchmark slice (`benchmarks/public/manifest-nl.json`) with prompts stripped of file paths, symbol names, and code snippets, plus a checked-in `compare-nl.json` result that isolates semantic retrieval quality.
 
+### Changed
+
+- Changed optional local embedding caches to `embeds.bin` format v4 with capped body-bearing symbol chunks and matched-symbol surfacing for semantic recall candidates.
+- Re-ran the public hybrid A/B reports after the chunk-level refresh; hybrid remains non-regressing but still flat versus lexical on both the 50-issue and natural-language benchmark slices.
+
 ## v0.2.2 - 2026-06-06
 
 ### Added

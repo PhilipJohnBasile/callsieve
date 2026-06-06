@@ -2408,21 +2408,36 @@ fn add_semantic_candidates(
         .map(|candidate| candidate.file_id.as_str())
         .collect();
 
-    let mut scored: Vec<(f32, &str)> = Vec::new();
+    let mut scored: Vec<(f32, &str, Option<&str>)> = Vec::new();
     for (file_id, score) in &semantic_scores {
         if existing.contains(file_id.as_str()) {
             continue;
         }
         if score.cosine >= SEMANTIC_RECALL_COSINE_FLOOR {
-            scored.push((score.cosine, file_id.as_str()));
+            scored.push((
+                score.cosine,
+                file_id.as_str(),
+                score.chunk_symbol.as_deref(),
+            ));
         }
     }
     scored.sort_by(|a, b| b.0.total_cmp(&a.0).then_with(|| a.1.cmp(b.1)));
 
     let base_rank = candidates.len();
-    for (offset, (cosine, file_id)) in scored.into_iter().take(limit).enumerate() {
+    for (offset, (cosine, file_id, chunk_symbol)) in scored.into_iter().take(limit).enumerate() {
         let mut candidate = ContextCandidate::new(file_id.to_string(), 0, base_rank + offset);
-        let why = format!("surfaced by semantic recall (no lexical match), cosine={cosine:.3}");
+        if let Some(symbol_id) = chunk_symbol
+            && candidate.symbol_ids.len() < MAX_CONTEXT_SYMBOLS_PER_FILE
+        {
+            candidate.symbol_ids.push(symbol_id.to_string());
+        }
+        let why = if let Some(symbol_id) = chunk_symbol {
+            format!(
+                "surfaced by semantic recall via {symbol_id} (no lexical match), cosine={cosine:.3}"
+            )
+        } else {
+            format!("surfaced by semantic recall (no lexical match), cosine={cosine:.3}")
+        };
         candidate.seen_why.insert(why.clone());
         candidate.why.push(why.clone());
         candidate.push_debug(ranker::ScoreComponent {
@@ -7021,6 +7036,35 @@ mod tests {
 
     #[cfg(feature = "embed")]
     #[test]
+    fn semantic_scores_from_cache_selects_best_chunk_per_file() {
+        let index = minimal_index(vec![
+            minimal_file("target", "src/target.rs"),
+            minimal_file("other", "src/other.rs"),
+        ]);
+        let embedder = FakeEmbedder;
+        let cache = embed::EmbedCache {
+            embedder: embed::LocalEmbedder::id(&embedder),
+            index_schema_version: SCHEMA_VERSION,
+            fingerprint: embed::index_fingerprint(&index),
+            dim: 2,
+            vectors: vec![vec![1.0, 0.0], vec![0.0, 1.0], vec![0.5, 0.5]],
+            chunk_owners: vec![0, 0, 1],
+            chunk_symbols: vec![
+                Some("symbol:weak".to_string()),
+                Some("symbol:best".to_string()),
+                Some("symbol:other".to_string()),
+            ],
+        };
+
+        let scores = semantic_scores_from_cache(&index, &cache, &[0.0, 1.0]);
+        let target = scores.get("target").expect("target score");
+
+        assert_eq!(target.chunk_symbol.as_deref(), Some("symbol:best"));
+        assert!((target.cosine - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[cfg(feature = "embed")]
+    #[test]
     fn semantic_recall_injects_files_lexical_missed() {
         let temp = tempfile::tempdir().unwrap();
         let index = minimal_index(vec![
@@ -7073,9 +7117,14 @@ mod tests {
 
         let injected = candidates.iter().find(|c| c.file_id == "sem").unwrap();
         assert_eq!(injected.best_score, 0, "injected file has no lexical score");
+        assert_eq!(injected.symbol_ids, vec!["sem".to_string()]);
         assert!(
             injected.why.iter().any(|w| w.contains("semantic recall")),
             "injected file should explain its provenance"
+        );
+        assert!(
+            injected.why.iter().any(|w| w.contains("via sem")),
+            "injected file should name the matched symbol in why text"
         );
     }
 

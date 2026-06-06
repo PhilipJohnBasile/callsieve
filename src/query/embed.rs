@@ -162,7 +162,7 @@ impl LocalEmbedder for FastembedEmbedder {
 // ---------------------------------------------------------------------------
 
 const MAGIC: &[u8; 4] = b"CSEM";
-const FORMAT_VERSION: u16 = 3;
+const FORMAT_VERSION: u16 = 4;
 const FLAG_F16: u8 = 0b0000_0001;
 
 /// In-memory representation of a loaded `.callsieve/embeds.bin`.
@@ -639,6 +639,23 @@ mod tests {
         };
         let res = read_embeds_from(Cursor::new(&buf), &expected).unwrap();
         assert!(res.is_none(), "old format v2 cache must yield None");
+    }
+
+    #[test]
+    fn v3_cache_returns_none() {
+        let cache = sample_cache();
+        let mut buf = Vec::new();
+        write_embeds_to(&mut buf, &cache, true).unwrap();
+        buf[4..6].copy_from_slice(&3u16.to_le_bytes());
+
+        let expected = ExpectedCache {
+            embedder: &cache.embedder,
+            index_schema_version: cache.index_schema_version,
+            fingerprint: &cache.fingerprint,
+            expected_file_count: 2,
+        };
+        let res = read_embeds_from(Cursor::new(&buf), &expected).unwrap();
+        assert!(res.is_none(), "old format v3 cache must yield None");
     }
 
     #[test]

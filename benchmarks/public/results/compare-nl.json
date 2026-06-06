@@ -1,7 +1,7 @@
 {
   "mode": "A/B",
   "schema_version": 1,
-  "generated_at_unix": 1780725774,
+  "generated_at_unix": 1780759757,
   "generated_at_iso_date": "2026-06-06",
   "manifest": {
     "path": "benchmarks/public/manifest-nl.json",
@@ -77,8 +77,8 @@
           "astropy/modeling/models.py",
           "astropy/modeling/core.py",
           "astropy/modeling/bounding_box.py",
-          "astropy/modeling/parameters.py",
-          "astropy/modeling/functional_models.py"
+          "astropy/modeling/functional_models.py",
+          "astropy/modeling/parameters.py"
         ],
         "selected_files_count": 8,
         "first_correct_file_rate_at_k": 0.0,
@@ -124,8 +124,8 @@
       "hybrid": {
         "top_k_files": [
           "astropy/table/table.py",
-          "astropy/io/fits/hdu/table.py",
           "astropy/io/ascii/tests/test_c_reader.py",
+          "astropy/io/fits/hdu/table.py",
           "astropy/extern/jquery/data/js/jquery.dataTables.js",
           "astropy/io/fits/header.py"
         ],
@@ -175,8 +175,8 @@
       "hybrid": {
         "top_k_files": [
           "astropy/extern/jquery/data/js/jquery.dataTables.js",
-          "astropy/extern/jquery/data/js/jquery-3.6.0.js",
           "astropy/utils/data.py",
+          "astropy/extern/jquery/data/js/jquery-3.6.0.js",
           "astropy/extern/jquery/data/js/jquery.dataTables.min.js",
           "cextern/cfitsio/lib/fits_hdecompress.c"
         ],
@@ -279,7 +279,7 @@
           "astropy/io/votable/converters.py",
           "astropy/io/misc/hdf5.py",
           "astropy/io/fits/connect.py",
-          "astropy/table/pprint.py",
+          "astropy/io/ascii/tests/test_read.py",
           "astropy/table/table.py"
         ],
         "selected_files_count": 8,
@@ -376,7 +376,7 @@
       },
       "hybrid": {
         "top_k_files": [
-          "django/core/files/uploadedfile.py",
+          "django/core/files/storage.py",
           "tests/file_storage/tests.py",
           "django/db/models/fields/files.py",
           "docs/ref/files/file.txt",
@@ -431,7 +431,7 @@
           "django/db/models/fields/__init__.py",
           "django/forms/fields.py",
           "docs/ref/files/file.txt",
-          "tests/model_fields/test_promises.py"
+          "django/contrib/admin/utils.py"
         ],
         "selected_files_count": 8,
         "first_correct_file_rate_at_k": 1.0,
@@ -478,8 +478,8 @@
       },
       "hybrid": {
         "top_k_files": [
-          "django/db/models/expressions.py",
           "django/db/models/query.py",
+          "django/db/models/expressions.py",
           "django/db/backends/base/base.py",
           "docs/topics/db/queries.txt",
           "django/core/checks/database.py"
@@ -632,8 +632,8 @@
           "django/utils/duration.py",
           "django/contrib/admin/static/admin/js/inlines.js",
           "js_tests/qunit/qunit.js",
-          "django/db/models/expressions.py",
-          "django/forms/widgets.py"
+          "django/forms/widgets.py",
+          "django/db/models/expressions.py"
         ],
         "selected_files_count": 8,
         "first_correct_file_rate_at_k": 0.0,
@@ -681,8 +681,8 @@
           "django/contrib/admin/static/admin/js/urlify.js",
           "django/urls/resolvers.py",
           "django/core/exceptions.py",
-          "django/db/models/expressions.py",
-          "django/contrib/auth/models.py"
+          "django/contrib/auth/models.py",
+          "django/db/models/expressions.py"
         ],
         "selected_files_count": 8,
         "first_correct_file_rate_at_k": 0.0,
@@ -777,8 +777,8 @@
       "hybrid": {
         "top_k_files": [
           "django/contrib/admin/static/admin/js/admin/RelatedObjectLookups.js",
-          "django/db/backends/base/schema.py",
           "django/contrib/postgres/fields/jsonb.py",
+          "django/db/backends/base/schema.py",
           "django/db/models/fields/related_descriptors.py",
           "django/db/models/fields/__init__.py"
         ],
@@ -828,8 +828,8 @@
           "django/db/models/fields/proxy.py",
           "django/contrib/auth/models.py",
           "django/contrib/gis/db/models/proxy.py",
-          "django/forms/models.py",
-          "django/contrib/contenttypes/models.py"
+          "django/contrib/contenttypes/models.py",
+          "django/forms/models.py"
         ],
         "selected_files_count": 8,
         "first_correct_file_rate_at_k": 0.0,
@@ -876,8 +876,8 @@
         "top_k_files": [
           "django/core/management/__init__.py",
           "django/contrib/admin/views/main.py",
-          "django/contrib/contenttypes/management/__init__.py",
           "django/contrib/auth/management/__init__.py",
+          "django/contrib/contenttypes/management/__init__.py",
           "django/db/migrations/autodetector.py"
         ],
         "selected_files_count": 8,
@@ -1075,10 +1075,10 @@
       "hybrid": {
         "top_k_files": [
           "django/db/models/sql/query.py",
-          "django/forms/models.py",
-          "django/db/migrations/operations/models.py",
           "django/contrib/contenttypes/models.py",
-          "django/contrib/auth/models.py"
+          "django/forms/models.py",
+          "django/contrib/auth/models.py",
+          "django/db/migrations/operations/models.py"
         ],
         "selected_files_count": 8,
         "first_correct_file_rate_at_k": 0.0,
@@ -1128,8 +1128,8 @@
           "django/utils/text.py",
           "django/db/models/functions/text.py",
           "tests/forms_tests/tests/test_formsets.py",
-          "js_tests/qunit/qunit.js",
-          "django/db/models/query_utils.py"
+          "django/urls/resolvers.py",
+          "js_tests/qunit/qunit.js"
         ],
         "selected_files_count": 8,
         "first_correct_file_rate_at_k": 0.0,
@@ -1174,8 +1174,8 @@
       },
       "hybrid": {
         "top_k_files": [
-          "django/db/models/query.py",
           "django/db/models/sql/query.py",
+          "django/db/models/query.py",
           "django/db/models/expressions.py",
           "js_tests/qunit/qunit.js",
           "django/contrib/admin/static/admin/js/core.js"
@@ -1378,8 +1378,8 @@
         "top_k_files": [
           "django/db/backends/base/schema.py",
           "django/db/models/base.py",
-          "django/db/models/fields/__init__.py",
           "django/db/models/fields/files.py",
+          "django/db/models/fields/__init__.py",
           "js_tests/qunit/qunit.js"
         ],
         "selected_files_count": 8,
@@ -1428,8 +1428,8 @@
           "django/forms/fields.py",
           "django/contrib/admin/options.py",
           "django/forms/models.py",
-          "django/db/models/sql/query.py",
-          "django/contrib/contenttypes/fields.py"
+          "tests/migrations/test_autodetector.py",
+          "django/db/models/sql/query.py"
         ],
         "selected_files_count": 8,
         "first_correct_file_rate_at_k": 0.0,
@@ -1530,7 +1530,7 @@
           "tests/test_utils/tests.py",
           "tests/multiple_database/tests.py",
           "tests/backends/sqlite/tests.py",
-          "tests/migrations/test_base.py",
+          "tests/test_runner/tests.py",
           "tests/generic_views/test_base.py"
         ],
         "selected_files_count": 8,

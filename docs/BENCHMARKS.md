@@ -83,9 +83,9 @@ target/release/callsieve bench-run benchmarks/public/manifest-nl.json --workdir 
 
 `--resume` keeps the report file valid after each completed issue and reuses matching completed issue results if the run is interrupted. It requires `--out` so the runner has a stable report path to read and update.
 
-The hybrid arm uses local embeddings only when the binary is built with `--features embed` and the run opts in with `--compare`. The cache format is versioned; stale or mismatched embedding caches are ignored and rebuilt rather than reused against the wrong index. The current cache stores chunk vectors plus chunk-to-file owners, then max-pools chunk cosine scores to the file level for ranking.
+The hybrid arm uses local embeddings only when the binary is built with `--features embed` and the run opts in with `--compare`. The cache format is versioned; stale or mismatched embedding caches are ignored and rebuilt rather than reused against the wrong index. The current v4 cache stores a file-level chunk plus capped body-bearing symbol chunks, chunk-to-file owners, and optional chunk symbols; query-time scoring max-pools chunk cosine scores to the file level for ranking and surfaces the best matching symbol when semantic recall injects a file.
 
-Latest local A/B run, generated June 6, 2026 from current `main`:
+Latest local A/B run, generated June 6, 2026 from current `main` after the chunk-level v4 refresh:
 
 | Dataset | K | Issues | Skipped | Lexical first-correct-file rate | Hybrid first-correct-file rate | Delta | Wins | Losses | Ties |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -94,7 +94,7 @@ Latest local A/B run, generated June 6, 2026 from current `main`:
 
 The 50-issue run reports grep first-correct-file@5 at `6.0%`, so hybrid is `+50.0 pp` over the naive grep arm. The query-kind split is heavily identifier-shaped: `49` identifier issues and `1` natural-language issue, with `+0.0 pp` hybrid delta in both slices.
 
-The natural-language slice reports grep first-correct-file@5 at `13.3%`, so hybrid is `+6.7 pp` over the naive grep arm on that slice. All 30 prompts classify as `natural_language`; the hybrid-vs-lexical result is still flat at `+0.0 pp`.
+The natural-language slice reports grep first-correct-file@5 at `13.3%`, so hybrid is `+6.7 pp` over the naive grep arm on that slice. All 30 prompts classify as `natural_language`; the hybrid-vs-lexical result is still flat at `+0.0 pp`. A bounded tuning check with lower semantic recall floor and a larger injection pool was flat on the first 8 natural-language issues, so those knobs were not kept.
 
 These runs prove the hybrid path is wired and non-regressing on these benchmarks, and that CallSieve beats the naive grep arm on both datasets. They do not support a semantic quality-lift claim over lexical retrieval. Treat the current public numbers as parity until a benchmark shows positive wins over lexical retrieval.
 
