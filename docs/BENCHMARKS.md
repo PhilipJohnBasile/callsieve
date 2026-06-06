@@ -71,11 +71,14 @@ The suite output includes:
 
 CallSieve includes a 50-issue public retrieval benchmark at `benchmarks/public/manifest-50.json`. The manifest uses public SWE-bench Lite issues from `astropy/astropy` and `django/django`, pinned to each issue's `base_commit`; `ground_truth_files` are derived from the gold patch diff headers. The runner clones each distinct repo once under `--workdir`, checks out each pinned commit locally, builds a fresh CallSieve index, and compares lexical retrieval against opt-in hybrid retrieval.
 
+The 50-issue manifest is heavily identifier-shaped, so CallSieve also includes `benchmarks/public/manifest-nl.json`: a 30-issue slice using the same pinned commits and gold files, with task prompts rewritten to avoid direct file paths, symbol names, and code snippets. That slice is intended to stress natural-language retrieval separately from the identifier-heavy public issue text.
+
 Run it with the embed feature:
 
 ```bash
 cargo build --release --features embed
 target/release/callsieve bench-run benchmarks/public/manifest-50.json --workdir /tmp/csbench --compare --out benchmarks/public/results/compare-50.json --resume
+target/release/callsieve bench-run benchmarks/public/manifest-nl.json --workdir /tmp/csbench --compare --out benchmarks/public/results/compare-nl.json --resume
 ```
 
 `--resume` keeps the report file valid after each completed issue and reuses matching completed issue results if the run is interrupted. It requires `--out` so the runner has a stable report path to read and update.
@@ -87,14 +90,17 @@ Latest local A/B run, generated June 6, 2026 from current `main`:
 | Dataset | K | Issues | Skipped | Lexical first-correct-file rate | Hybrid first-correct-file rate | Delta | Wins | Losses | Ties |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | SWE-bench Lite public subset | 5 | 50 | 0 | `56.0%` | `56.0%` | `+0.0 pp` | 0 | 0 | 50 |
+| SWE-bench Lite natural-language slice | 5 | 30 | 0 | `20.0%` | `20.0%` | `+0.0 pp` | 1 | 1 | 28 |
 
-The same run reports grep first-correct-file@5 at `6.0%`, so hybrid is `+50.0 pp` over the naive grep arm. The query-kind split is heavily identifier-shaped: `49` identifier issues and `1` natural-language issue, with `+0.0 pp` hybrid delta in both slices.
+The 50-issue run reports grep first-correct-file@5 at `6.0%`, so hybrid is `+50.0 pp` over the naive grep arm. The query-kind split is heavily identifier-shaped: `49` identifier issues and `1` natural-language issue, with `+0.0 pp` hybrid delta in both slices.
 
-This run proves the hybrid path is wired and non-regressing on this benchmark, and that CallSieve beats the naive grep arm on this dataset. It does not support a semantic quality-lift claim over lexical retrieval. Treat the current public number as parity until a benchmark shows positive wins over lexical retrieval.
+The natural-language slice reports grep first-correct-file@5 at `13.3%`, so hybrid is `+6.7 pp` over the naive grep arm on that slice. All 30 prompts classify as `natural_language`; the hybrid-vs-lexical result is still flat at `+0.0 pp`.
+
+These runs prove the hybrid path is wired and non-regressing on these benchmarks, and that CallSieve beats the naive grep arm on both datasets. They do not support a semantic quality-lift claim over lexical retrieval. Treat the current public numbers as parity until a benchmark shows positive wins over lexical retrieval.
 
 Report language to use today:
 
-- Good: "hybrid retrieval is wired, reproducible, and non-regressing on the 50-issue public benchmark."
+- Good: "hybrid retrieval is wired, reproducible, and non-regressing on the public benchmarks."
 - Good: "lexical remains the default path; hybrid is opt-in."
 - Bad: "hybrid improves retrieval quality" unless a newer benchmark shows positive lift.
 

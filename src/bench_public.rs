@@ -1942,6 +1942,39 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "embed")]
+    #[test]
+    fn natural_language_manifest_on_disk_is_valid() {
+        let path = Path::new("benchmarks/public/manifest-nl.json");
+        if !path.exists() {
+            return;
+        }
+        let json = std::fs::read_to_string(path).expect("read natural-language manifest");
+        let manifest = Manifest::from_str(&json).expect("natural-language manifest parses");
+        assert!(
+            manifest.issues.len() >= 30,
+            "natural-language manifest should have at least 30 issues"
+        );
+
+        let mut natural_language_count = 0usize;
+        for issue in &manifest.issues {
+            assert!(!issue.repo.is_empty());
+            assert!(!issue.base_commit.is_empty());
+            assert!(!issue.ground_truth_files.is_empty());
+            let tokens = crate::query::ranker::query_tokens(&issue.task);
+            let kind = crate::query::classify::query_kind(&issue.task, &tokens);
+            if kind == crate::query::classify::QueryKind::NaturalLanguage {
+                natural_language_count += 1;
+            }
+        }
+
+        assert!(
+            natural_language_count * 5 >= manifest.issues.len() * 4,
+            "expected at least 80% natural-language prompts, got {natural_language_count}/{}",
+            manifest.issues.len()
+        );
+    }
+
     #[test]
     fn recall_at_k_hits_when_ground_truth_in_top_k() {
         let read_first = vec![
