@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Added a 30-issue natural-language benchmark slice (`benchmarks/public/manifest-nl.json`) with prompts stripped of file paths, symbol names, and code snippets, plus a checked-in `compare-nl.json` result that isolates semantic retrieval quality.
+
 ## v0.2.2 - 2026-06-06
 
 ### Added
