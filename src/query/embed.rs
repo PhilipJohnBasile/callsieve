@@ -26,18 +26,20 @@
 //!
 //! ```text
 //! magic           : 4 bytes  "CSEM"
-//! format_version  : u16      currently 2
+//! format_version  : u16      currently 3
 //! flags           : u8       bit 0 = vectors are f16; bit 1+ reserved
 //! _pad            : u8       reserved, must be 0
 //! index_schema    : u32      mirrors crate::indexer::SCHEMA_VERSION
 //! dim             : u32      embedding dimensionality
-//! count           : u32      number of vectors
+//! count           : u32      number of chunk vectors
 //! model_id_len    : u16      bytes of UTF-8 model_id
 //! model_id        : [u8; n]
 //! model_rev_len   : u16      bytes of UTF-8 model_revision
 //! model_revision  : [u8; n]
 //! fingerprint_len : u16      bytes of UTF-8 index fingerprint
 //! fingerprint     : [u8; n]
+//! chunk_owners    : count * u32 file index in index.files
+//! chunk_symbols   : count * (u16 len + UTF-8 bytes), u16::MAX means none
 //! vectors         : count * dim * (2 if f16 else 4) bytes
 //! ```
 //!
@@ -160,7 +162,7 @@ impl LocalEmbedder for FastembedEmbedder {
 // ---------------------------------------------------------------------------
 
 const MAGIC: &[u8; 4] = b"CSEM";
-const FORMAT_VERSION: u16 = 2;
+const FORMAT_VERSION: u16 = 3;
 const FLAG_F16: u8 = 0b0000_0001;
 
 /// In-memory representation of a loaded `.callsieve/embeds.bin`.
@@ -170,8 +172,12 @@ pub struct EmbedCache {
     pub index_schema_version: u32,
     pub fingerprint: String,
     pub dim: usize,
-    /// `vectors[i]` is the i-th embedding, length `dim`.
+    /// `vectors[i]` is the i-th chunk embedding, length `dim`.
     pub vectors: Vec<Vec<f32>>,
+    /// `chunk_owners[i]` is the `index.files` position that owns `vectors[i]`.
+    pub chunk_owners: Vec<u32>,
+    /// Optional symbol id for the chunk, used only for why-debug explainability.
+    pub chunk_symbols: Vec<Option<String>>,
 }
 
 /// What the caller asks the reader to enforce.
@@ -180,10 +186,12 @@ pub struct ExpectedCache<'a> {
     pub embedder: &'a EmbedderId,
     pub index_schema_version: u32,
     pub fingerprint: &'a str,
-    pub expected_count: usize,
+    pub expected_file_count: usize,
 }
 
-/// Fingerprint the positional alignment contract for `vectors[i] ↔ index.files[i]`.
+/// Fingerprint the file set/order/content contract. Chunk vectors carry their
+/// own `chunk_owners`, but those owners are only meaningful against this file
+/// fingerprint.
 pub fn index_fingerprint(index: &CodeIndex) -> String {
     let mut bytes = Vec::new();
     for file in &index.files {
@@ -237,6 +245,16 @@ pub fn write_embeds_to<W: Write>(w: &mut W, cache: &EmbedCache, quantize_f16: bo
     if cache.dim == 0 {
         bail!("embed cache dim must be > 0");
     }
+    if cache.vectors.len() != cache.chunk_owners.len()
+        || cache.vectors.len() != cache.chunk_symbols.len()
+    {
+        bail!(
+            "embed cache has {} vectors, {} chunk owners, and {} chunk symbols",
+            cache.vectors.len(),
+            cache.chunk_owners.len(),
+            cache.chunk_symbols.len()
+        );
+    }
     for (i, v) in cache.vectors.iter().enumerate() {
         if v.len() != cache.dim {
             bail!(
@@ -255,6 +273,11 @@ pub fn write_embeds_to<W: Write>(w: &mut W, cache: &EmbedCache, quantize_f16: bo
     {
         bail!("model_id / model_revision / fingerprint must fit in u16 bytes");
     }
+    for symbol in cache.chunk_symbols.iter().flatten() {
+        if symbol.len() >= u16::MAX as usize {
+            bail!("chunk symbol id must fit in u16 bytes");
+        }
+    }
     let flags: u8 = if quantize_f16 { FLAG_F16 } else { 0 };
 
     w.write_all(MAGIC)?;
@@ -269,6 +292,19 @@ pub fn write_embeds_to<W: Write>(w: &mut W, cache: &EmbedCache, quantize_f16: bo
     w.write_all(model_rev)?;
     w.write_all(&(fingerprint.len() as u16).to_le_bytes())?;
     w.write_all(fingerprint)?;
+    for owner in &cache.chunk_owners {
+        w.write_all(&owner.to_le_bytes())?;
+    }
+    for symbol in &cache.chunk_symbols {
+        match symbol {
+            Some(symbol) => {
+                let bytes = symbol.as_bytes();
+                w.write_all(&(bytes.len() as u16).to_le_bytes())?;
+                w.write_all(bytes)?;
+            }
+            None => w.write_all(&u16::MAX.to_le_bytes())?,
+        }
+    }
 
     for v in &cache.vectors {
         if quantize_f16 {
@@ -340,13 +376,35 @@ pub fn read_embeds_from<R: Read>(
         || model_id != expected.embedder.model_id
         || model_revision != expected.embedder.model_revision
         || fingerprint != expected.fingerprint
-        || count != expected.expected_count
     {
         return Ok(None);
     }
 
     if dim == 0 {
         bail!("embeds.bin has zero dim");
+    }
+    let mut chunk_owners = Vec::with_capacity(count);
+    for _ in 0..count {
+        chunk_owners.push(read_u32_le(&mut r)?);
+    }
+    if chunk_owners
+        .iter()
+        .any(|owner| *owner as usize >= expected.expected_file_count)
+    {
+        return Ok(None);
+    }
+    let mut chunk_symbols = Vec::with_capacity(count);
+    for _ in 0..count {
+        let len = read_u16_le(&mut r)?;
+        if len == u16::MAX {
+            chunk_symbols.push(None);
+            continue;
+        }
+        let mut buf = vec![0u8; len as usize];
+        r.read_exact(&mut buf)?;
+        let symbol = String::from_utf8(buf)
+            .map_err(|_| anyhow!("embeds.bin chunk symbol is not valid utf-8"))?;
+        chunk_symbols.push(Some(symbol));
     }
     let mut vectors = Vec::with_capacity(count);
     for _ in 0..count {
@@ -373,6 +431,8 @@ pub fn read_embeds_from<R: Read>(
         fingerprint,
         dim,
         vectors,
+        chunk_owners,
+        chunk_symbols,
     }))
 }
 
@@ -408,6 +468,8 @@ mod tests {
                 vec![0.125, -0.125, 0.75, -0.5],
                 vec![1.0, 1.0, -1.0, -1.0],
             ],
+            chunk_owners: vec![0, 0, 1],
+            chunk_symbols: vec![Some("sym:a".to_string()), None, Some("sym:b".to_string())],
         }
     }
 
@@ -421,7 +483,7 @@ mod tests {
             embedder: &cache.embedder,
             index_schema_version: cache.index_schema_version,
             fingerprint: &cache.fingerprint,
-            expected_count: cache.vectors.len(),
+            expected_file_count: cache.vectors.len(),
         };
         let read = read_embeds_from(Cursor::new(&buf), &expected)
             .unwrap()
@@ -431,6 +493,8 @@ mod tests {
         assert_eq!(read.fingerprint, cache.fingerprint);
         assert_eq!(read.dim, cache.dim);
         assert_eq!(read.vectors.len(), cache.vectors.len());
+        assert_eq!(read.chunk_owners, cache.chunk_owners);
+        assert_eq!(read.chunk_symbols, cache.chunk_symbols);
         // f16 round-trip: exact for our sample (all values are dyadic
         // fractions representable in 11-bit mantissa). Use a tight epsilon
         // anyway in case the sample changes.
@@ -452,7 +516,7 @@ mod tests {
             embedder: &cache.embedder,
             index_schema_version: cache.index_schema_version,
             fingerprint: &cache.fingerprint,
-            expected_count: cache.vectors.len(),
+            expected_file_count: cache.vectors.len(),
         };
         let read = read_embeds_from(Cursor::new(&buf), &expected)
             .unwrap()
@@ -471,7 +535,7 @@ mod tests {
             embedder: &other,
             index_schema_version: cache.index_schema_version,
             fingerprint: &cache.fingerprint,
-            expected_count: cache.vectors.len(),
+            expected_file_count: cache.vectors.len(),
         };
         let res = read_embeds_from(Cursor::new(&buf), &expected).unwrap();
         assert!(res.is_none(), "model_id mismatch must yield None");
@@ -488,7 +552,7 @@ mod tests {
             embedder: &other,
             index_schema_version: cache.index_schema_version,
             fingerprint: &cache.fingerprint,
-            expected_count: cache.vectors.len(),
+            expected_file_count: cache.vectors.len(),
         };
         let res = read_embeds_from(Cursor::new(&buf), &expected).unwrap();
         assert!(res.is_none(), "model_revision mismatch must yield None");
@@ -504,7 +568,7 @@ mod tests {
             embedder: &cache.embedder,
             index_schema_version: cache.index_schema_version + 1,
             fingerprint: &cache.fingerprint,
-            expected_count: cache.vectors.len(),
+            expected_file_count: cache.vectors.len(),
         };
         let res = read_embeds_from(Cursor::new(&buf), &expected).unwrap();
         assert!(res.is_none(), "schema_version mismatch must yield None");
@@ -520,15 +584,16 @@ mod tests {
             embedder: &cache.embedder,
             index_schema_version: cache.index_schema_version,
             fingerprint: "fnv1a64:ffffffffffffffff",
-            expected_count: cache.vectors.len(),
+            expected_file_count: cache.vectors.len(),
         };
         let res = read_embeds_from(Cursor::new(&buf), &expected).unwrap();
         assert!(res.is_none(), "fingerprint mismatch must yield None");
     }
 
     #[test]
-    fn cache_mismatch_returns_none_on_count() {
-        let cache = sample_cache();
+    fn cache_mismatch_returns_none_on_invalid_chunk_owner() {
+        let mut cache = sample_cache();
+        cache.chunk_owners[0] = 99;
         let mut buf = Vec::new();
         write_embeds_to(&mut buf, &cache, true).unwrap();
 
@@ -536,10 +601,10 @@ mod tests {
             embedder: &cache.embedder,
             index_schema_version: cache.index_schema_version,
             fingerprint: &cache.fingerprint,
-            expected_count: cache.vectors.len() + 1,
+            expected_file_count: 2,
         };
         let res = read_embeds_from(Cursor::new(&buf), &expected).unwrap();
-        assert!(res.is_none(), "count mismatch must yield None");
+        assert!(res.is_none(), "invalid chunk owner must yield None");
     }
 
     #[test]
@@ -553,10 +618,27 @@ mod tests {
             embedder: &cache.embedder,
             index_schema_version: cache.index_schema_version,
             fingerprint: &cache.fingerprint,
-            expected_count: cache.vectors.len(),
+            expected_file_count: cache.vectors.len(),
         };
         let res = read_embeds_from(Cursor::new(&buf), &expected).unwrap();
         assert!(res.is_none(), "old format v1 cache must yield None");
+    }
+
+    #[test]
+    fn v2_cache_returns_none() {
+        let cache = sample_cache();
+        let mut buf = Vec::new();
+        write_embeds_to(&mut buf, &cache, true).unwrap();
+        buf[4..6].copy_from_slice(&2u16.to_le_bytes());
+
+        let expected = ExpectedCache {
+            embedder: &cache.embedder,
+            index_schema_version: cache.index_schema_version,
+            fingerprint: &cache.fingerprint,
+            expected_file_count: 2,
+        };
+        let res = read_embeds_from(Cursor::new(&buf), &expected).unwrap();
+        assert!(res.is_none(), "old format v2 cache must yield None");
     }
 
     #[test]
@@ -567,7 +649,7 @@ mod tests {
             embedder: &id,
             index_schema_version: 7,
             fingerprint: "fnv1a64:0",
-            expected_count: 0,
+            expected_file_count: 0,
         };
         let res = read_embeds(tmp.path(), &expected).unwrap();
         assert!(res.is_none());
@@ -584,13 +666,15 @@ mod tests {
             embedder: &cache.embedder,
             index_schema_version: cache.index_schema_version,
             fingerprint: &cache.fingerprint,
-            expected_count: cache.vectors.len(),
+            expected_file_count: cache.vectors.len(),
         };
         let read = read_embeds(tmp.path(), &expected)
             .unwrap()
             .expect("cache should round-trip via filesystem");
         assert_eq!(read.embedder, cache.embedder);
         assert_eq!(read.vectors.len(), cache.vectors.len());
+        assert_eq!(read.chunk_owners, cache.chunk_owners);
+        assert_eq!(read.chunk_symbols, cache.chunk_symbols);
     }
 
     #[test]
@@ -601,7 +685,7 @@ mod tests {
             embedder: &id,
             index_schema_version: 1,
             fingerprint: "fnv1a64:0",
-            expected_count: 0,
+            expected_file_count: 0,
         };
         let res = read_embeds_from(Cursor::new(&buf[..]), &expected).unwrap();
         assert!(res.is_none(), "bad magic must yield None");
@@ -653,6 +737,8 @@ mod tests {
             fingerprint: "fnv1a64:abc".to_string(),
             dim: 8,
             vectors: e.embed(&["a", "b", "c"]).unwrap(),
+            chunk_owners: vec![0, 1, 1],
+            chunk_symbols: vec![None, Some("sym:b".to_string()), Some("sym:c".to_string())],
         };
         let mut buf = Vec::new();
         write_embeds_to(&mut buf, &cache, true).unwrap();
@@ -660,7 +746,7 @@ mod tests {
             embedder: &id,
             index_schema_version: 7,
             fingerprint: &cache.fingerprint,
-            expected_count: cache.vectors.len(),
+            expected_file_count: cache.vectors.len(),
         };
         let read = read_embeds_from(Cursor::new(&buf), &expected)
             .unwrap()

@@ -1,3 +1,4 @@
+pub mod git;
 pub mod imports;
 pub mod language;
 pub mod lsp;
@@ -23,7 +24,7 @@ use crate::store::{
 
 use self::language::Language;
 
-pub const SCHEMA_VERSION: u32 = 7;
+pub const SCHEMA_VERSION: u32 = 8;
 
 #[derive(Debug, Clone)]
 pub struct IndexOptions {
@@ -61,6 +62,7 @@ pub fn build_index_with_options(root: &Path, options: IndexOptions) -> Result<Co
     let mut file_contents = Vec::new();
     let ownership_resolver = self::ownership::OwnershipResolver::from_repo_root(&root)
         .filter(|resolver| !resolver.is_empty());
+    let git_signals = self::git::collect_git_signals(&root);
 
     for relative_path in walker::source_files(&root)? {
         let absolute_path = root.join(&relative_path);
@@ -104,6 +106,7 @@ pub fn build_index_with_options(root: &Path, options: IndexOptions) -> Result<Co
             module_path: module_path(&relative_path),
             content_terms: content_terms(&content, language),
             ownership,
+            git: git_signals.get(&path_string).cloned(),
         };
 
         if language.is_code() {
@@ -789,6 +792,53 @@ impl From<&ReferenceRecord> for ReferenceKey {
 mod tests {
     use super::*;
     use std::fs;
+    use std::process::Command;
+
+    fn run_git(repo: &std::path::Path, args: &[&str]) {
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(args)
+            .status()
+            .expect("git should be runnable in tests");
+        assert!(status.success(), "git {args:?} failed");
+    }
+
+    #[test]
+    fn build_index_attaches_git_signals_from_history() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        run_git(root, &["init", "-q"]);
+        fs::write(root.join("lib.rs"), "pub fn one() {}\n").unwrap();
+        run_git(root, &["add", "."]);
+        run_git(
+            root,
+            &[
+                "-c",
+                "user.name=CallSieve Tests",
+                "-c",
+                "user.email=tests@callsieve.invalid",
+                "commit",
+                "-q",
+                "-m",
+                "initial",
+            ],
+        );
+
+        let index = build_index(root).unwrap();
+        let file = index
+            .files
+            .iter()
+            .find(|file| file.path == "lib.rs")
+            .expect("lib.rs indexed");
+        let git = file
+            .git
+            .as_ref()
+            .expect("recent commit should yield a git signal");
+        assert_eq!(git.commits_90d, 1);
+        assert_eq!(git.distinct_authors_90d, 1);
+        assert!(git.last_modified_unix > 0);
+    }
 
     #[test]
     fn top_level_and_nested_test_dirs_are_detected() {

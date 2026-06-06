@@ -2,7 +2,7 @@ pub mod json_store;
 
 use serde::{Deserialize, Serialize};
 
-use crate::indexer::{language::Language, ownership::Ownership};
+use crate::indexer::{git::GitSignal, language::Language, ownership::Ownership};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CodeIndex {
@@ -79,6 +79,8 @@ pub struct FileRecord {
     pub content_terms: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ownership: Option<Ownership>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git: Option<GitSignal>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

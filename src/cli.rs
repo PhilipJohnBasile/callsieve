@@ -219,6 +219,14 @@ pub enum Command {
         /// Opt into local hybrid retrieval when built with --features embed.
         #[arg(long)]
         embeddings: bool,
+
+        /// Path to a stack trace / error log; files it names are surfaced first.
+        #[arg(long, value_name = "FILE")]
+        error: Option<PathBuf>,
+
+        /// Nudge recently-changed / hot files up the ranking using git history.
+        #[arg(long)]
+        git_boost: bool,
     },
 
     /// Build an index, return a sample context packet, and report context reduction.
@@ -2855,11 +2863,22 @@ pub fn run() -> Result<()> {
             token_budget,
             format,
             embeddings,
+            error,
+            git_boost,
         } => {
             let embeddings = embeddings || embeddings_env_enabled();
             if embeddings {
                 ensure_embeddings_supported()?;
             }
+            let error_frames = match error {
+                Some(error_path) => {
+                    let text = std::fs::read_to_string(&error_path).with_context(|| {
+                        format!("failed to read error file {}", error_path.display())
+                    })?;
+                    query::stacktrace::parse_stack_trace(&text)
+                }
+                None => Vec::new(),
+            };
             let retrieval_task = effective_task_for_retrieval(&path, &task);
             let (index, index_load_ms) = load_index_timed(&path)?;
             let mut context = query::build_context_with(
@@ -2872,6 +2891,8 @@ pub fn run() -> Result<()> {
                     include_snippets: true,
                     why_debug,
                     hybrid: query::HybridOptions::embeddings(embeddings),
+                    error_frames: &error_frames,
+                    git_boost,
                 },
             )?;
             context.add_index_load_time(index_load_ms);

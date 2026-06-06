@@ -83,7 +83,7 @@ callsieve symbols <path>
 callsieve symbol <path> <symbol_name>
 callsieve query <path> "<question>" [--why-debug]
 callsieve context <path> "<task>" [--limit <n>] [--snippets-per-file <n>] [--no-snippets] [--profile skim|normal|full] [--token-budget <n>] [--why-debug] [--format json|markdown]
-callsieve agent-context <path> "<task>" [--limit <n>] [--snippets-per-file <n>] [--profile skim|normal|full] [--token-budget <n>] [--why-debug] [--format json|markdown]
+callsieve agent-context <path> "<task>" [--limit <n>] [--snippets-per-file <n>] [--profile skim|normal|full] [--token-budget <n>] [--why-debug] [--error <file>] [--git-boost] [--format json|markdown]
 callsieve focus <path> --file <file> [--symbol <symbol>]
 callsieve related <path> --file <file>
 callsieve tests <path> --file <file>

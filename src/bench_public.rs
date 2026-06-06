@@ -211,6 +211,15 @@ pub struct CompareIssueResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resolving_pr: Option<u64>,
     pub k: usize,
+    /// "identifier" or "natural_language" (from `query::classify::query_kind`).
+    /// Lets us report the hybrid lift on the NL subset separately from the
+    /// identifier guardrail. Defaulted for back-compat with older result JSON.
+    #[serde(default)]
+    pub query_kind: String,
+    /// Deterministic ripgrep baseline arm. `None` when `rg` is unavailable or
+    /// the issue is skipped. Gives a non-self comparison alongside lexical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grep: Option<CompareArmResult>,
     pub lexical: CompareArmResult,
     pub hybrid: CompareArmResult,
     pub delta: f64,
@@ -238,6 +247,29 @@ pub struct CompareAggregate {
     pub wins: usize,
     pub losses: usize,
     pub ties: usize,
+    /// Per-query-type breakdown. The hybrid bet is "lift natural-language tasks
+    /// while holding identifier tasks flat", so the headline lives in
+    /// `natural_language` and the guardrail in `identifier`.
+    pub natural_language: QueryKindAggregate,
+    pub identifier: QueryKindAggregate,
+    /// Deterministic ripgrep baseline over issues that produced a grep arm.
+    /// `None` when `rg` was unavailable for the whole run.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grep_first_correct_file_rate_at_k: Option<f64>,
+    /// `hybrid_rate - grep_rate` over the same grep-evaluated issues.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hybrid_minus_grep: Option<f64>,
+    /// Issues that produced a grep arm (denominator for the grep rate).
+    pub grep_evaluated: usize,
+}
+
+/// Lexical-vs-hybrid rates and delta restricted to one `QueryKind`.
+#[derive(Debug, Clone, Serialize)]
+pub struct QueryKindAggregate {
+    pub evaluated: usize,
+    pub lexical_first_correct_file_rate_at_k: f64,
+    pub hybrid_first_correct_file_rate_at_k: f64,
+    pub delta: f64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1102,6 +1134,8 @@ fn evaluate_issue(
             include_snippets: false,
             why_debug: false,
             hybrid: hybrid_options_from_run_options(options),
+            error_frames: &[],
+            git_boost: false,
         },
     )
     .with_context(|| format!("failed to build context for {}", issue.id))?;
@@ -1190,6 +1224,8 @@ fn evaluate_issue_compare(
             include_snippets: false,
             why_debug: false,
             hybrid: query::HybridOptions::with_embedder(true, embedder),
+            error_frames: &[],
+            git_boost: false,
         },
     )
     .with_context(|| format!("failed to build hybrid context for {}", issue.id))?;
@@ -1200,6 +1236,7 @@ fn evaluate_issue_compare(
 
     let lexical = compare_arm_from_context(&lexical_context, issue, k)?;
     let hybrid = compare_arm_from_context(&hybrid_context, issue, k)?;
+    let grep = grep_arm(&repo_path, issue, k);
     let delta = hybrid.first_correct_file_rate_at_k - lexical.first_correct_file_rate_at_k;
     let outcome = if delta > 0.0 {
         "win"
@@ -1209,6 +1246,11 @@ fn evaluate_issue_compare(
         "tie"
     };
 
+    let query_kind =
+        query::classify::query_kind(&issue.task, &query::ranker::query_tokens(&issue.task))
+            .as_str()
+            .to_string();
+
     Ok(CompareIssueResult {
         id: issue.id.clone(),
         repo: issue.repo.clone(),
@@ -1217,12 +1259,83 @@ fn evaluate_issue_compare(
         ground_truth_files: issue.ground_truth_files.clone(),
         resolving_pr: issue.resolving_pr,
         k,
+        query_kind,
+        grep,
         lexical,
         hybrid,
         delta,
         outcome: outcome.to_string(),
         skipped: None,
     })
+}
+
+/// Deterministic ripgrep baseline arm: tokenize the task, find files matching
+/// each content token, rank by distinct-token match count (path tiebreak), take
+/// top-K, and score against ground truth. Returns `None` when `rg` is missing,
+/// so the run degrades gracefully to lexical-vs-hybrid only.
+#[cfg(feature = "embed")]
+fn grep_arm(repo_path: &Path, issue: &Issue, k: usize) -> Option<CompareArmResult> {
+    if !ripgrep_available() {
+        return None;
+    }
+    let tokens = query::ranker::query_tokens(&issue.task);
+    // distinct-token match count per repo-relative file path.
+    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+    for token in &tokens {
+        let output = ProcessCommand::new("rg")
+            .arg("--files-with-matches")
+            .arg("--no-messages")
+            .arg("-i")
+            .arg("--")
+            .arg(token)
+            .current_dir(repo_path)
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            // rg exits 1 when there are no matches; that is not an error here.
+            continue;
+        }
+        let mut seen: BTreeSet<String> = BTreeSet::new();
+        for line in String::from_utf8_lossy(&output.stdout).lines() {
+            let path = line.trim_start_matches("./").to_string();
+            if path.is_empty() || !seen.insert(path.clone()) {
+                continue;
+            }
+            *counts.entry(path).or_insert(0) += 1;
+        }
+    }
+    // Rank by match count desc, then path asc for a deterministic order.
+    let mut ranked: Vec<(String, usize)> = counts.into_iter().collect();
+    ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    let selected_files_count = ranked.len();
+    let top_k: Vec<String> = ranked.into_iter().take(k).map(|(path, _)| path).collect();
+    let ground: BTreeSet<&str> = issue
+        .ground_truth_files
+        .iter()
+        .map(String::as_str)
+        .collect();
+    let matched_files: Vec<String> = top_k
+        .iter()
+        .filter(|file| ground.contains(file.as_str()))
+        .cloned()
+        .collect();
+    let first_correct_file_rate_at_k =
+        first_correct_file_rate_at_k(&top_k, &issue.ground_truth_files, k);
+    Some(CompareArmResult {
+        top_k_files: top_k,
+        selected_files_count,
+        first_correct_file_rate_at_k,
+        matched_files,
+    })
+}
+
+#[cfg(feature = "embed")]
+fn ripgrep_available() -> bool {
+    ProcessCommand::new("rg")
+        .arg("--version")
+        .output()
+        .map(|out| out.status.success())
+        .unwrap_or(false)
 }
 
 #[cfg(feature = "embed")]
@@ -1271,6 +1384,13 @@ fn skipped_compare_issue(issue: &Issue, k: usize, reason: String) -> CompareIssu
         ground_truth_files: issue.ground_truth_files.clone(),
         resolving_pr: issue.resolving_pr,
         k,
+        query_kind: query::classify::query_kind(
+            &issue.task,
+            &query::ranker::query_tokens(&issue.task),
+        )
+        .as_str()
+        .to_string(),
+        grep: None,
         lexical: empty.clone(),
         hybrid: empty,
         delta: 0.0,
@@ -1405,6 +1525,32 @@ pub fn aggregate_compare(issues: &[CompareIssueResult]) -> CompareAggregate {
         hybrid_hits as f64 / evaluated as f64
     };
 
+    let natural_language = query_kind_aggregate(issues, "natural_language");
+    let identifier = query_kind_aggregate(issues, "identifier");
+
+    // Grep baseline over the subset of evaluated issues that produced a grep arm.
+    let mut grep_evaluated = 0usize;
+    let mut grep_hits = 0usize;
+    let mut hybrid_on_grep_hits = 0usize;
+    for issue in issues.iter().filter(|issue| issue.skipped.is_none()) {
+        if let Some(grep) = &issue.grep {
+            grep_evaluated += 1;
+            if grep.first_correct_file_rate_at_k >= 0.5 {
+                grep_hits += 1;
+            }
+            if issue.hybrid.first_correct_file_rate_at_k >= 0.5 {
+                hybrid_on_grep_hits += 1;
+            }
+        }
+    }
+    let (grep_rate, hybrid_minus_grep) = if grep_evaluated == 0 {
+        (None, None)
+    } else {
+        let grep_rate = grep_hits as f64 / grep_evaluated as f64;
+        let hybrid_rate_on_grep = hybrid_on_grep_hits as f64 / grep_evaluated as f64;
+        (Some(grep_rate), Some(hybrid_rate_on_grep - grep_rate))
+    };
+
     CompareAggregate {
         evaluated,
         skipped,
@@ -1415,6 +1561,46 @@ pub fn aggregate_compare(issues: &[CompareIssueResult]) -> CompareAggregate {
         wins,
         losses,
         ties,
+        natural_language,
+        identifier,
+        grep_first_correct_file_rate_at_k: grep_rate,
+        hybrid_minus_grep,
+        grep_evaluated,
+    }
+}
+
+/// Lexical/hybrid rates and delta restricted to evaluated issues whose
+/// `query_kind` matches `kind`.
+#[cfg(feature = "embed")]
+fn query_kind_aggregate(issues: &[CompareIssueResult], kind: &str) -> QueryKindAggregate {
+    let mut evaluated = 0usize;
+    let mut lexical_hits = 0usize;
+    let mut hybrid_hits = 0usize;
+    for issue in issues
+        .iter()
+        .filter(|issue| issue.skipped.is_none() && issue.query_kind == kind)
+    {
+        evaluated += 1;
+        if issue.lexical.first_correct_file_rate_at_k >= 0.5 {
+            lexical_hits += 1;
+        }
+        if issue.hybrid.first_correct_file_rate_at_k >= 0.5 {
+            hybrid_hits += 1;
+        }
+    }
+    let (lexical_rate, hybrid_rate) = if evaluated == 0 {
+        (0.0, 0.0)
+    } else {
+        (
+            lexical_hits as f64 / evaluated as f64,
+            hybrid_hits as f64 / evaluated as f64,
+        )
+    };
+    QueryKindAggregate {
+        evaluated,
+        lexical_first_correct_file_rate_at_k: lexical_rate,
+        hybrid_first_correct_file_rate_at_k: hybrid_rate,
+        delta: hybrid_rate - lexical_rate,
     }
 }
 
@@ -1972,6 +2158,91 @@ mod tests {
     }
 
     #[cfg(feature = "embed")]
+    #[test]
+    fn aggregate_compare_splits_by_query_kind_and_scores_grep() {
+        fn arm(rate: f64) -> CompareArmResult {
+            CompareArmResult {
+                top_k_files: Vec::new(),
+                selected_files_count: 0,
+                first_correct_file_rate_at_k: rate,
+                matched_files: Vec::new(),
+            }
+        }
+        fn issue(
+            id: &str,
+            query_kind: &str,
+            lexical: f64,
+            hybrid: f64,
+            grep: Option<f64>,
+        ) -> CompareIssueResult {
+            let delta = hybrid - lexical;
+            CompareIssueResult {
+                id: id.to_string(),
+                repo: "owner/name".to_string(),
+                base_commit: "abc".to_string(),
+                task: "t".to_string(),
+                ground_truth_files: Vec::new(),
+                resolving_pr: None,
+                k: 5,
+                query_kind: query_kind.to_string(),
+                grep: grep.map(arm),
+                lexical: arm(lexical),
+                hybrid: arm(hybrid),
+                delta,
+                outcome: if delta > 0.0 {
+                    "win"
+                } else if delta < 0.0 {
+                    "loss"
+                } else {
+                    "tie"
+                }
+                .to_string(),
+                skipped: None,
+            }
+        }
+
+        let issues = vec![
+            // NL: hybrid lifts both, grep weaker.
+            issue("nl1", "natural_language", 0.0, 1.0, Some(0.0)),
+            issue("nl2", "natural_language", 1.0, 1.0, Some(1.0)),
+            // identifier: hybrid holds flat (guardrail).
+            issue("id1", "identifier", 1.0, 1.0, Some(1.0)),
+            // skipped issues never count.
+            {
+                let mut s = issue("skip", "identifier", 0.0, 0.0, None);
+                s.skipped = Some("repo not cloned".to_string());
+                s
+            },
+        ];
+
+        let agg = aggregate_compare(&issues);
+        assert_eq!(agg.evaluated, 3);
+        assert_eq!(agg.skipped, 1);
+
+        // NL subset: lexical 1/2 = 0.5, hybrid 2/2 = 1.0, delta +0.5.
+        assert_eq!(agg.natural_language.evaluated, 2);
+        assert_eq!(
+            agg.natural_language.lexical_first_correct_file_rate_at_k,
+            0.5
+        );
+        assert_eq!(
+            agg.natural_language.hybrid_first_correct_file_rate_at_k,
+            1.0
+        );
+        assert_eq!(agg.natural_language.delta, 0.5);
+
+        // identifier subset: flat at 1.0, delta 0.0 (guardrail).
+        assert_eq!(agg.identifier.evaluated, 1);
+        assert_eq!(agg.identifier.delta, 0.0);
+
+        // grep aggregate over the 3 evaluated issues with a grep arm.
+        assert_eq!(agg.grep_evaluated, 3);
+        assert_eq!(agg.grep_first_correct_file_rate_at_k, Some(2.0 / 3.0));
+        // hybrid hits all 3 of those, so hybrid - grep = 1.0 - 2/3.
+        assert_eq!(agg.hybrid_minus_grep, Some(1.0 - 2.0 / 3.0));
+    }
+
+    #[cfg(feature = "embed")]
     fn git(repo: &Path, args: &[&str]) -> String {
         let output = ProcessCommand::new("git")
             .arg("-C")
@@ -2028,6 +2299,8 @@ mod tests {
             ground_truth_files,
             resolving_pr: None,
             k: 1,
+            query_kind: "natural_language".to_string(),
+            grep: None,
             lexical: arm.clone(),
             hybrid: arm,
             delta: 0.0,

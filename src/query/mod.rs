@@ -6,6 +6,7 @@ pub mod embed;
 pub mod embed_build;
 pub mod formatter;
 pub mod ranker;
+pub mod stacktrace;
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -40,6 +41,17 @@ const MAX_TASK_MEMORY_RECOMMENDED_FILES: usize = 8;
 const MAX_TASK_MEMORY_RECOMMENDED_SYMBOLS: usize = 12;
 pub const DEFAULT_AGENT_CONTEXT_TOKEN_BUDGET: usize = 1200;
 
+#[cfg(feature = "embed")]
+type SemanticScoreMap = BTreeMap<String, SemanticScore>;
+
+#[cfg(feature = "embed")]
+#[derive(Debug, Clone)]
+struct SemanticScore {
+    cosine: f32,
+    semantic: f64,
+    chunk_symbol: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum ContextProfile {
     Skim,
@@ -70,6 +82,13 @@ pub struct ContextOptions<'a> {
     pub include_snippets: bool,
     pub why_debug: bool,
     pub hybrid: HybridOptions<'a>,
+    /// Frames parsed from `--error <file>`. Empty (the default) is a no-op, so
+    /// the lexical path is byte-identical when no stack trace is supplied.
+    pub error_frames: &'a [stacktrace::StackFrame],
+    /// Opt-in: nudge recently-changed / hot files up using git signals. Off by
+    /// default so the lexical baseline and the retrieval benchmark are unchanged
+    /// until the boost is validated; the git data is surfaced regardless.
+    pub git_boost: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -88,6 +107,8 @@ impl Default for ContextOptions<'_> {
             include_snippets: true,
             why_debug: false,
             hybrid: HybridOptions::default(),
+            error_frames: &[],
+            git_boost: false,
         }
     }
 }
@@ -283,6 +304,8 @@ struct ContextFile {
     related_tests: Vec<RelatedTest>,
     #[serde(skip_serializing_if = "Option::is_none")]
     ownership: Option<Ownership>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    git: Option<crate::indexer::git::GitSignal>,
     why: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     why_debug: Vec<ranker::ScoreComponent>,
@@ -1922,6 +1945,8 @@ pub fn build_context_with_options(
             include_snippets,
             why_debug,
             hybrid: HybridOptions::default(),
+            error_frames: &[],
+            git_boost: false,
         },
     )
 }
@@ -1968,6 +1993,20 @@ pub fn build_context_with(
     let mut candidates: Vec<ContextCandidate> = grouped.into_values().collect();
 
     let query_tokens = ranker::query_tokens(task);
+    // Semantic-recall union: when embeddings are enabled, let the embedding
+    // nearest-neighbors inject files that lexical ranking never surfaced. This
+    // runs before the test-offtopic marking below so injected test files get the
+    // same down-scaling, and before the hybrid blend so they can be ranked into
+    // the read-first set. It is a no-op when embeddings are off (determinism).
+    let semantic_scores = add_semantic_candidates(
+        root,
+        index,
+        task,
+        &mut candidates,
+        options.limit,
+        options.hybrid,
+    )?;
+
     // A test file that merely references the relevant source files gets a large
     // graph boost; on a non-test query, scale the whole candidate down so it
     // cannot outrank the implementation it tests.
@@ -1982,6 +2021,12 @@ pub fn build_context_with(
         }
     }
 
+    // Stack-trace evidence (from `--error`) is a strong, explicit signal: the
+    // crash points right at these files. Boost/inject them and clear any
+    // test-offtopic penalty so they rank at the top. No-op when no trace given.
+    apply_error_context(index, &mut candidates, options.error_frames, options.limit);
+    apply_git_boost(index, &mut candidates, options.git_boost);
+
     let mut warnings = stale_warnings(root, index);
     sort_candidates_lexical(&mut candidates, &lookup, &query_tokens);
     apply_hybrid_ranking(
@@ -1992,6 +2037,7 @@ pub fn build_context_with(
         &lookup,
         &mut candidates,
         options.hybrid,
+        semantic_scores.as_ref(),
         &mut warnings,
     )?;
     promote_implementation_companion(&lookup, &mut candidates, options.limit, &query_tokens);
@@ -2088,6 +2134,7 @@ pub fn build_context_with(
                 called_by,
                 related_tests,
                 ownership: file.ownership.clone(),
+                git: file.git.clone(),
                 why,
                 why_debug: debug,
             })
@@ -2146,22 +2193,180 @@ fn sort_candidates_lexical(
     });
 }
 
+/// Lexical score floor given to files named in a `--error` stack trace. Well
+/// above ordinary lexical scores (hundreds) so crash-implicated files lead the
+/// read-first set, while still being a normal score the hybrid blend can reason
+/// about.
+const ERROR_TRACE_SCORE: i32 = 5000;
+
+/// Symbol kinds that are call/reference sites rather than definitions; skipped
+/// when choosing the symbol enclosing a stack-trace line.
+const NON_DEFINITION_SYMBOL_KINDS: &[&str] =
+    &["macro", "call", "reference", "import", "use", "include"];
+
+/// Boost (and, where needed, inject) the files a `--error` stack trace points
+/// at, attaching the symbol that encloses each frame's line. Deterministic and
+/// not embedding-gated; returns immediately when `frames` is empty so the
+/// lexical path is unchanged.
+fn apply_error_context(
+    index: &CodeIndex,
+    candidates: &mut Vec<ContextCandidate>,
+    frames: &[stacktrace::StackFrame],
+    limit: usize,
+) {
+    if frames.is_empty() || limit == 0 {
+        return;
+    }
+    for frame_match in stacktrace::match_frames(frames, index) {
+        let why = match frame_match.line {
+            Some(line) => format!("appears in provided stack trace (line {line})"),
+            None => "appears in provided stack trace".to_string(),
+        };
+
+        let idx = match candidates
+            .iter()
+            .position(|candidate| candidate.file_id == frame_match.file_id)
+        {
+            Some(idx) => idx,
+            None => {
+                let rank = candidates.len();
+                candidates.push(ContextCandidate::new(frame_match.file_id.clone(), 0, rank));
+                candidates.len() - 1
+            }
+        };
+
+        // Resolve the enclosing symbol before borrowing the candidate. Prefer
+        // the tightest *definition* (function/struct/...) over a call/macro that
+        // happens to sit on the same line - a crash points at the function the
+        // agent needs to read, not the `panic!` invocation inside it.
+        let covering_symbol = frame_match.line.and_then(|line| {
+            let enclosing: Vec<&SymbolRecord> = index
+                .symbols
+                .iter()
+                .filter(|symbol| {
+                    symbol.file_id == frame_match.file_id
+                        && symbol.start_line <= line
+                        && line <= symbol.end_line
+                })
+                .collect();
+            enclosing
+                .iter()
+                .filter(|symbol| !NON_DEFINITION_SYMBOL_KINDS.contains(&symbol.kind.as_str()))
+                .min_by_key(|symbol| symbol.end_line.saturating_sub(symbol.start_line))
+                .or_else(|| {
+                    enclosing
+                        .iter()
+                        .min_by_key(|symbol| symbol.end_line.saturating_sub(symbol.start_line))
+                })
+                .map(|symbol| symbol.id.clone())
+        });
+
+        let candidate = &mut candidates[idx];
+        candidate.best_score = candidate.best_score.max(ERROR_TRACE_SCORE);
+        candidate.test_offtopic = false;
+        if candidate.seen_why.insert(why.clone()) {
+            candidate.why.push(why.clone());
+        }
+        candidate.push_debug(ranker::ScoreComponent {
+            name: "stack_trace".to_string(),
+            points: ERROR_TRACE_SCORE,
+            detail: why,
+        });
+        if let Some(symbol_id) = covering_symbol
+            && candidate.symbol_ids.len() < MAX_CONTEXT_SYMBOLS_PER_FILE
+            && !candidate.symbol_ids.contains(&symbol_id)
+        {
+            candidate.symbol_ids.push(symbol_id);
+        }
+    }
+}
+
+/// Points added for a file changed at least once in the last 30 days.
+const GIT_RECENCY_BOOST: i32 = 150;
+/// Points per commit in the last 90 days (capped) - a hotspot signal.
+const GIT_HOTSPOT_PER_COMMIT: i32 = 15;
+const GIT_HOTSPOT_CAP_COMMITS: u32 = 10;
+
+/// Opt-in recency/hotspot boost from git signals. Off by default so the lexical
+/// baseline and the retrieval benchmark stay byte-identical; when enabled it
+/// nudges recently-changed and frequently-touched files up with an explicit
+/// `why` so the boost is auditable.
+fn apply_git_boost(index: &CodeIndex, candidates: &mut [ContextCandidate], enabled: bool) {
+    if !enabled {
+        return;
+    }
+    let signals: BTreeMap<&str, &crate::indexer::git::GitSignal> = index
+        .files
+        .iter()
+        .filter_map(|file| file.git.as_ref().map(|git| (file.id.as_str(), git)))
+        .collect();
+
+    for candidate in candidates.iter_mut() {
+        let Some(git) = signals.get(candidate.file_id.as_str()) else {
+            continue;
+        };
+        let hotspot =
+            (git.commits_90d.min(GIT_HOTSPOT_CAP_COMMITS) as i32) * GIT_HOTSPOT_PER_COMMIT;
+        let recency = if git.commits_30d > 0 {
+            GIT_RECENCY_BOOST
+        } else {
+            0
+        };
+        let boost = hotspot + recency;
+        if boost == 0 {
+            continue;
+        }
+        let why = if recency > 0 {
+            format!(
+                "recently changed ({} commits/30d, {} authors/90d)",
+                git.commits_30d, git.distinct_authors_90d
+            )
+        } else {
+            format!("hot file ({} commits/90d)", git.commits_90d)
+        };
+        candidate.best_score = candidate.best_score.saturating_add(boost);
+        // Front-insert so the reason for the re-ranking survives the skim view's
+        // top-2 `why` truncation - the user opted into this, they should see it.
+        if candidate.seen_why.insert(why.clone()) {
+            candidate.why.insert(0, why.clone());
+        }
+        candidate.push_debug(ranker::ScoreComponent {
+            name: "git_signal".to_string(),
+            points: boost,
+            detail: why,
+        });
+    }
+}
+
+/// Minimum raw cosine for an embedding-only file to be injected as a candidate.
+/// Keeps weak semantic matches out of the read-first pool so the union pass adds
+/// recall without flooding the packet with noise.
 #[cfg(feature = "embed")]
-#[allow(clippy::too_many_arguments)]
-fn apply_hybrid_ranking(
+const SEMANTIC_RECALL_COSINE_FLOOR: f32 = 0.30;
+
+/// Semantic-recall union pass. Reads the embedding cache, scores every indexed
+/// file the lexical ranker did *not* already surface by cosine to the query, and
+/// injects the strongest ones (above [`SEMANTIC_RECALL_COSINE_FLOOR`], capped at
+/// `limit`) as zero-lexical-score candidates. This is what lets hybrid exceed
+/// the lexical recall ceiling instead of merely reordering the lexical set.
+///
+/// Determinism: returns immediately when embeddings are off, and the injected
+/// set is ordered by `(cosine desc, file_id asc)`, so a fixed cache yields a
+/// reproducible result. Cache miss is silent here; `apply_hybrid_ranking` emits
+/// the user-facing warning.
+#[cfg(feature = "embed")]
+fn add_semantic_candidates(
     root: &Path,
     index: &CodeIndex,
     task: &str,
-    query_tokens: &[String],
-    lookup: &IndexLookup<'_>,
-    candidates: &mut [ContextCandidate],
+    candidates: &mut Vec<ContextCandidate>,
+    limit: usize,
     hybrid: HybridOptions<'_>,
-    warnings: &mut Vec<String>,
-) -> Result<()> {
+) -> Result<Option<SemanticScoreMap>> {
     use embed::{ExpectedCache, FastembedEmbedder, LocalEmbedder};
 
-    if !hybrid.embeddings || candidates.is_empty() {
-        return Ok(());
+    if !hybrid.embeddings || limit == 0 {
+        return Ok(None);
     }
 
     let embedder_id = hybrid
@@ -2173,14 +2378,10 @@ fn apply_hybrid_ranking(
         embedder: &embedder_id,
         index_schema_version: SCHEMA_VERSION,
         fingerprint: &fingerprint,
-        expected_count: index.files.len(),
+        expected_file_count: index.files.len(),
     };
     let Some(cache) = embed::read_embeds(root, &expected)? else {
-        warnings.push(
-            "--embeddings requested but .callsieve/embeds.bin is missing or stale; using lexical ranking"
-                .to_string(),
-        );
-        return Ok(());
+        return Ok(None);
     };
 
     let owned_embedder;
@@ -2192,28 +2393,121 @@ fn apply_hybrid_ranking(
     };
     let query_vectors = embedder.embed(&[task])?;
     let Some(query_vector) = query_vectors.first() else {
-        warnings.push("--embeddings produced no query vector; using lexical ranking".to_string());
-        return Ok(());
+        return Ok(None);
     };
     if query_vector.len() != cache.dim {
-        warnings.push(format!(
-            "--embeddings query dim {} does not match cache dim {}; using lexical ranking",
-            query_vector.len(),
-            cache.dim
-        ));
-        return Ok(());
+        return Ok(None);
     }
     let Some(query_unit) = normalize_vector(query_vector) else {
-        warnings.push("--embeddings query vector has zero norm; using lexical ranking".to_string());
+        return Ok(None);
+    };
+    let semantic_scores = semantic_scores_from_cache(index, &cache, &query_unit);
+
+    let existing: BTreeSet<&str> = candidates
+        .iter()
+        .map(|candidate| candidate.file_id.as_str())
+        .collect();
+
+    let mut scored: Vec<(f32, &str)> = Vec::new();
+    for (file_id, score) in &semantic_scores {
+        if existing.contains(file_id.as_str()) {
+            continue;
+        }
+        if score.cosine >= SEMANTIC_RECALL_COSINE_FLOOR {
+            scored.push((score.cosine, file_id.as_str()));
+        }
+    }
+    scored.sort_by(|a, b| b.0.total_cmp(&a.0).then_with(|| a.1.cmp(b.1)));
+
+    let base_rank = candidates.len();
+    for (offset, (cosine, file_id)) in scored.into_iter().take(limit).enumerate() {
+        let mut candidate = ContextCandidate::new(file_id.to_string(), 0, base_rank + offset);
+        let why = format!("surfaced by semantic recall (no lexical match), cosine={cosine:.3}");
+        candidate.seen_why.insert(why.clone());
+        candidate.why.push(why.clone());
+        candidate.push_debug(ranker::ScoreComponent {
+            name: "semantic_recall".to_string(),
+            points: (cosine * 1000.0).round() as i32,
+            detail: why,
+        });
+        candidates.push(candidate);
+    }
+
+    Ok(Some(semantic_scores))
+}
+
+#[cfg(not(feature = "embed"))]
+fn add_semantic_candidates(
+    _root: &Path,
+    _index: &CodeIndex,
+    _task: &str,
+    _candidates: &mut Vec<ContextCandidate>,
+    _limit: usize,
+    _hybrid: HybridOptions<'_>,
+) -> Result<Option<()>> {
+    Ok(None)
+}
+
+#[cfg(feature = "embed")]
+fn semantic_scores_from_cache(
+    index: &CodeIndex,
+    cache: &embed::EmbedCache,
+    query_unit: &[f32],
+) -> SemanticScoreMap {
+    let mut scores = BTreeMap::new();
+    for (chunk_index, vector) in cache.vectors.iter().enumerate() {
+        let Some(owner) = cache.chunk_owners.get(chunk_index) else {
+            continue;
+        };
+        let Some(file) = index.files.get(*owner as usize) else {
+            continue;
+        };
+        let cosine = cosine_with_unit_query(query_unit, vector).unwrap_or(0.0);
+        let semantic = ((cosine as f64 + 1.0) / 2.0).clamp(0.0, 1.0);
+        let chunk_symbol = cache
+            .chunk_symbols
+            .get(chunk_index)
+            .and_then(|symbol| symbol.clone());
+        let next = SemanticScore {
+            cosine,
+            semantic,
+            chunk_symbol,
+        };
+        scores
+            .entry(file.id.clone())
+            .and_modify(|current: &mut SemanticScore| {
+                if next.cosine > current.cosine {
+                    *current = next.clone();
+                }
+            })
+            .or_insert(next);
+    }
+    scores
+}
+
+#[cfg(feature = "embed")]
+#[allow(clippy::too_many_arguments)]
+fn apply_hybrid_ranking(
+    _root: &Path,
+    _index: &CodeIndex,
+    task: &str,
+    query_tokens: &[String],
+    lookup: &IndexLookup<'_>,
+    candidates: &mut [ContextCandidate],
+    hybrid: HybridOptions<'_>,
+    semantic_scores: Option<&SemanticScoreMap>,
+    warnings: &mut Vec<String>,
+) -> Result<()> {
+    if !hybrid.embeddings || candidates.is_empty() {
+        return Ok(());
+    }
+    let Some(semantic_scores) = semantic_scores else {
+        warnings.push(
+            "--embeddings requested but .callsieve/embeds.bin is missing or stale; using lexical ranking"
+                .to_string(),
+        );
         return Ok(());
     };
-
-    let file_vectors: BTreeMap<&str, &[f32]> = index
-        .files
-        .iter()
-        .zip(cache.vectors.iter())
-        .map(|(file, vector)| (file.id.as_str(), vector.as_slice()))
-        .collect();
     let min_score = candidates
         .iter()
         .map(ContextCandidate::score)
@@ -2230,18 +2524,21 @@ fn apply_hybrid_ranking(
 
     for candidate in candidates.iter_mut() {
         let lex_norm = normalized_lexical_score(candidate.score(), min_score, max_score);
-        let (semantic, detail) = if let Some(vector) = file_vectors.get(candidate.file_id.as_str())
-        {
-            let cosine = cosine_with_unit_query(&query_unit, vector).unwrap_or(0.0);
-            let semantic = ((cosine as f64 + 1.0) / 2.0).clamp(0.0, 1.0);
+        let (semantic, detail) = if let Some(score) = semantic_scores.get(&candidate.file_id) {
+            let best_chunk = score
+                .chunk_symbol
+                .as_deref()
+                .map(|symbol| format!(", best_chunk={symbol}"))
+                .unwrap_or_default();
             (
-                semantic,
+                score.semantic,
                 format!(
-                    "query_kind={}, lex_norm={:.3}, sem={:.3}, cosine={:.3}",
+                    "query_kind={}, lex_norm={:.3}, sem={:.3}, cosine={:.3}{}",
                     query_kind.as_str(),
                     lex_norm,
-                    semantic,
-                    cosine
+                    score.semantic,
+                    score.cosine,
+                    best_chunk
                 ),
             )
         } else {
@@ -2298,6 +2595,7 @@ fn apply_hybrid_ranking(
     _lookup: &IndexLookup<'_>,
     _candidates: &mut [ContextCandidate],
     hybrid: HybridOptions<'_>,
+    _semantic_scores: Option<&()>,
     warnings: &mut Vec<String>,
 ) -> Result<()> {
     if hybrid.embeddings {
@@ -2312,7 +2610,12 @@ fn apply_hybrid_ranking(
 #[cfg(feature = "embed")]
 fn normalized_lexical_score(score: i32, min_score: i32, max_score: i32) -> f64 {
     if max_score == min_score {
-        1.0
+        // No spread in lexical scores. When there is no lexical signal at all
+        // (all zero - e.g. a candidate set dominated by semantic-recall
+        // injections), contribute nothing so the semantic term drives ordering.
+        // When the scores are equal but positive the constant cancels out in the
+        // blend, so 1.0 is harmless.
+        if max_score == 0 { 0.0 } else { 1.0 }
     } else {
         f64::from(score - min_score) / f64::from(max_score - min_score)
     }
@@ -2407,7 +2710,7 @@ fn skim_context_value(context: &ContextOutput) -> Value {
         .read_first
         .iter()
         .map(|file| {
-            json!({
+            let mut entry = json!({
                 "rank": file.rank,
                 "score": file.score,
                 "file": file.file,
@@ -2415,7 +2718,12 @@ fn skim_context_value(context: &ContextOutput) -> Value {
                 "symbols": compact_symbols_for_value(&file.symbols),
                 "why": file.why.iter().take(2).cloned().collect::<Vec<_>>(),
                 "impact": compact_impact_for_value(file)
-            })
+            });
+            if let (Some(object), Some(git)) = (entry.as_object_mut(), compact_git_for_value(file))
+            {
+                object.insert("git".to_string(), git);
+            }
+            entry
         })
         .collect();
 
@@ -2445,6 +2753,17 @@ fn compact_symbols_for_value(symbols: &[QuerySymbol]) -> Vec<Value> {
             })
         })
         .collect()
+}
+
+/// Compact git hint for the skim packet: recency, hotness, and bus-factor in
+/// three fields. `None` when the file has no recent history.
+fn compact_git_for_value(file: &ContextFile) -> Option<Value> {
+    let git = file.git.as_ref()?;
+    Some(json!({
+        "last_modified_unix": git.last_modified_unix,
+        "commits_90d": git.commits_90d,
+        "authors_90d": git.distinct_authors_90d
+    }))
 }
 
 fn compact_impact_for_value(file: &ContextFile) -> Value {
@@ -6479,6 +6798,7 @@ mod tests {
             module_path: "src".to_string(),
             content_terms: Vec::new(),
             ownership: None,
+            git: None,
         }
     }
 
@@ -6566,6 +6886,8 @@ mod tests {
             fingerprint: embed::index_fingerprint(index),
             dim: 2,
             vectors: vec![vec![0.0, -1.0], vec![0.0, 1.0]],
+            chunk_owners: vec![0, 1],
+            chunk_symbols: vec![Some("lex".to_string()), Some("sem".to_string())],
         };
         embed::write_embeds(root, &cache, false).unwrap();
     }
@@ -6587,6 +6909,15 @@ mod tests {
             ContextCandidate::new("lex".to_string(), 100, 0),
             ContextCandidate::new("sem".to_string(), 90, 1),
         ];
+        let natural_scores = add_semantic_candidates(
+            temp.path(),
+            &index,
+            "fix relative location header",
+            &mut natural_candidates,
+            5,
+            HybridOptions::with_embedder(true, &embedder),
+        )
+        .unwrap();
         let mut warnings = Vec::new();
         apply_hybrid_ranking(
             temp.path(),
@@ -6596,6 +6927,7 @@ mod tests {
             &lookup,
             &mut natural_candidates,
             HybridOptions::with_embedder(true, &embedder),
+            natural_scores.as_ref(),
             &mut warnings,
         )
         .unwrap();
@@ -6607,6 +6939,15 @@ mod tests {
             ContextCandidate::new("lex".to_string(), 100, 0),
             ContextCandidate::new("sem".to_string(), 90, 1),
         ];
+        let identifier_scores = add_semantic_candidates(
+            temp.path(),
+            &index,
+            "fix RelativeLocationHeader",
+            &mut identifier_candidates,
+            5,
+            HybridOptions::with_embedder(true, &embedder),
+        )
+        .unwrap();
         apply_hybrid_ranking(
             temp.path(),
             &index,
@@ -6615,6 +6956,7 @@ mod tests {
             &lookup,
             &mut identifier_candidates,
             HybridOptions::with_embedder(true, &embedder),
+            identifier_scores.as_ref(),
             &mut Vec::new(),
         )
         .unwrap();
@@ -6643,6 +6985,15 @@ mod tests {
             ContextCandidate::new("sem".to_string(), 90, 1),
         ];
         for candidates in [&mut first, &mut second] {
+            let semantic_scores = add_semantic_candidates(
+                temp.path(),
+                &index,
+                "fix relative location header",
+                candidates,
+                5,
+                HybridOptions::with_embedder(true, &embedder),
+            )
+            .unwrap();
             apply_hybrid_ranking(
                 temp.path(),
                 &index,
@@ -6651,6 +7002,7 @@ mod tests {
                 &lookup,
                 candidates,
                 HybridOptions::with_embedder(true, &embedder),
+                semantic_scores.as_ref(),
                 &mut Vec::new(),
             )
             .unwrap();
@@ -6665,6 +7017,216 @@ mod tests {
             .map(|candidate| candidate.file_id.as_str())
             .collect();
         assert_eq!(first_order, second_order);
+    }
+
+    #[cfg(feature = "embed")]
+    #[test]
+    fn semantic_recall_injects_files_lexical_missed() {
+        let temp = tempfile::tempdir().unwrap();
+        let index = minimal_index(vec![
+            minimal_file("lex", "src/lex.rs"),
+            minimal_file("sem", "src/sem.rs"),
+            minimal_file("noise", "src/noise.rs"),
+        ]);
+        let embedder = FakeEmbedder;
+        // Cache aligned to file order. "sem" lives on the same axis the query
+        // embeds onto; "lex"/"noise" are orthogonal to it.
+        let cache = embed::EmbedCache {
+            embedder: embed::LocalEmbedder::id(&embedder),
+            index_schema_version: SCHEMA_VERSION,
+            fingerprint: embed::index_fingerprint(&index),
+            dim: 2,
+            vectors: vec![vec![1.0, 0.0], vec![0.0, 1.0], vec![1.0, 0.0]],
+            chunk_owners: vec![0, 1, 2],
+            chunk_symbols: vec![
+                Some("lex".to_string()),
+                Some("sem".to_string()),
+                Some("noise".to_string()),
+            ],
+        };
+        embed::write_embeds(temp.path(), &cache, false).unwrap();
+
+        // Only the lexical hit is a candidate; "sem" and "noise" are not, so the
+        // pre-union recall ceiling excludes the semantically-relevant "sem".
+        let mut candidates = vec![ContextCandidate::new("lex".to_string(), 100, 0)];
+
+        // "relative" makes FakeEmbedder return [0,1] -> close to "sem".
+        add_semantic_candidates(
+            temp.path(),
+            &index,
+            "relative redirect handling",
+            &mut candidates,
+            5,
+            HybridOptions::with_embedder(true, &embedder),
+        )
+        .unwrap();
+
+        let ids: Vec<&str> = candidates.iter().map(|c| c.file_id.as_str()).collect();
+        assert!(
+            ids.contains(&"sem"),
+            "semantic recall should inject the file lexical missed, got {ids:?}"
+        );
+        assert!(
+            !ids.contains(&"noise"),
+            "below-floor file must not be injected, got {ids:?}"
+        );
+
+        let injected = candidates.iter().find(|c| c.file_id == "sem").unwrap();
+        assert_eq!(injected.best_score, 0, "injected file has no lexical score");
+        assert!(
+            injected.why.iter().any(|w| w.contains("semantic recall")),
+            "injected file should explain its provenance"
+        );
+    }
+
+    #[cfg(feature = "embed")]
+    #[test]
+    fn semantic_recall_is_noop_when_embeddings_off() {
+        let temp = tempfile::tempdir().unwrap();
+        let index = minimal_index(vec![
+            minimal_file("lex", "src/lex.rs"),
+            minimal_file("sem", "src/sem.rs"),
+        ]);
+        let embedder = FakeEmbedder;
+        let cache = embed::EmbedCache {
+            embedder: embed::LocalEmbedder::id(&embedder),
+            index_schema_version: SCHEMA_VERSION,
+            fingerprint: embed::index_fingerprint(&index),
+            dim: 2,
+            vectors: vec![vec![1.0, 0.0], vec![0.0, 1.0]],
+            chunk_owners: vec![0, 1],
+            chunk_symbols: vec![Some("lex".to_string()), Some("sem".to_string())],
+        };
+        embed::write_embeds(temp.path(), &cache, false).unwrap();
+
+        let mut candidates = vec![ContextCandidate::new("lex".to_string(), 100, 0)];
+        // Default options have embeddings off -> deterministic lexical behavior.
+        add_semantic_candidates(
+            temp.path(),
+            &index,
+            "relative redirect handling",
+            &mut candidates,
+            5,
+            HybridOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(candidates.len(), 1, "no injection when embeddings are off");
+    }
+
+    #[test]
+    fn error_context_surfaces_stack_trace_files_first() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(temp.path().join("src")).unwrap();
+        fs::write(
+            temp.path().join("src/popular.rs"),
+            "pub fn popular_feature() {\n    // popular feature popular feature work\n}\n",
+        )
+        .unwrap();
+        fs::write(
+            temp.path().join("src/crash.rs"),
+            "pub fn handle_request() {\n    panic!(\"boom\");\n}\n",
+        )
+        .unwrap();
+        let index = indexer::build_index(temp.path()).unwrap();
+
+        // Without the trace, the keyword-matching file leads.
+        let baseline = build_context_with(
+            temp.path(),
+            &index,
+            "popular feature work",
+            ContextOptions {
+                limit: 8,
+                snippets_per_file: 0,
+                include_snippets: false,
+                why_debug: false,
+                hybrid: HybridOptions::default(),
+                error_frames: &[],
+                git_boost: false,
+            },
+        )
+        .unwrap();
+        assert_ne!(
+            baseline.read_first.first().map(|f| f.file.as_str()),
+            Some("src/crash.rs"),
+            "crash.rs should not lead without a stack trace"
+        );
+
+        // With the trace, crash.rs is promoted to the top with provenance and
+        // the enclosing symbol attached.
+        let frames = stacktrace::parse_stack_trace("thread 'main' panicked at src/crash.rs:2:5");
+        let context = build_context_with(
+            temp.path(),
+            &index,
+            "popular feature work",
+            ContextOptions {
+                limit: 8,
+                snippets_per_file: 0,
+                include_snippets: false,
+                why_debug: false,
+                hybrid: HybridOptions::default(),
+                error_frames: &frames,
+                git_boost: false,
+            },
+        )
+        .unwrap();
+        let first = context.read_first.first().expect("a read-first file");
+        assert_eq!(first.file, "src/crash.rs", "stack-trace file should lead");
+        assert!(
+            first.why.iter().any(|w| w.contains("stack trace")),
+            "promoted file should explain its provenance, got {:?}",
+            first.why
+        );
+        assert!(
+            first.symbols.iter().any(|s| s.name == "handle_request"),
+            "the symbol enclosing the trace line should be attached"
+        );
+    }
+
+    #[test]
+    fn git_boost_raises_hot_files_only_when_enabled() {
+        let mut hot = minimal_file("hot", "src/hot.rs");
+        hot.git = Some(crate::indexer::git::GitSignal {
+            last_modified_unix: 100,
+            commits_30d: 4,
+            commits_90d: 8,
+            distinct_authors_90d: 3,
+            churn_90d: 200,
+        });
+        let cold = minimal_file("cold", "src/cold.rs");
+        let index = minimal_index(vec![hot, cold]);
+
+        let make = || {
+            vec![
+                ContextCandidate::new("cold".to_string(), 100, 0),
+                ContextCandidate::new("hot".to_string(), 100, 1),
+            ]
+        };
+        let score_of = |candidates: &[ContextCandidate], id: &str| {
+            candidates
+                .iter()
+                .find(|candidate| candidate.file_id == id)
+                .unwrap()
+                .score()
+        };
+
+        // Disabled: equal lexical scores stay equal (no-op, determinism).
+        let mut off = make();
+        apply_git_boost(&index, &mut off, false);
+        assert_eq!(score_of(&off, "hot"), score_of(&off, "cold"));
+
+        // Enabled: the hot file is raised above the cold one and explains why.
+        let mut on = make();
+        apply_git_boost(&index, &mut on, true);
+        assert!(score_of(&on, "hot") > score_of(&on, "cold"));
+        let hot_candidate = on.iter().find(|c| c.file_id == "hot").unwrap();
+        assert!(
+            hot_candidate
+                .why
+                .iter()
+                .any(|w| w.contains("recently changed")),
+            "boosted file should explain the git signal, got {:?}",
+            hot_candidate.why
+        );
     }
 
     #[test]

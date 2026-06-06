@@ -1070,6 +1070,7 @@ mod tests {
             module_path: path.to_string(),
             content_terms: Vec::new(),
             ownership: None,
+            git: None,
         }
     }
 
