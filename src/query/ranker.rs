@@ -554,6 +554,18 @@ fn score_file(
     }
 
     if is_docs_file(file) {
+        if let Some(score_boost) =
+            competitive_positioning_doc_score(file, query_tokens, &content_terms)
+        {
+            add_score_component(
+                &mut score,
+                &mut why,
+                &mut score_debug,
+                "competitive_positioning_doc",
+                score_boost,
+                "competitive positioning doc intent".to_string(),
+            );
+        }
         if has_docs_intent(query_tokens) {
             add_score_component(
                 &mut score,
@@ -684,6 +696,26 @@ const DOCS_INTENT: &[&str] = &[
     "workflow",
 ];
 
+const COMPETITIVE_POSITIONING_INTENT: &[&str] = &[
+    "aider",
+    "better",
+    "claude",
+    "cody",
+    "competition",
+    "competitive",
+    "competitor",
+    "competitors",
+    "continue",
+    "copilot",
+    "cursor",
+    "devin",
+    "greptile",
+    "market",
+    "positioning",
+    "sourcegraph",
+    "windsurf",
+];
+
 const COMMAND_SURFACE_INTENT: &[&str] = &[
     "cli",
     "command",
@@ -760,6 +792,49 @@ fn has_docs_intent(query_tokens: &[String]) -> bool {
     query_tokens
         .iter()
         .any(|token| DOCS_INTENT.contains(&token.as_str()))
+}
+
+fn competitive_positioning_doc_score(
+    file: &FileRecord,
+    query_tokens: &[String],
+    content_terms: &BTreeSet<&str>,
+) -> Option<i32> {
+    let query_topic_count = query_tokens
+        .iter()
+        .filter(|token| COMPETITIVE_POSITIONING_INTENT.contains(&token.as_str()))
+        .count();
+    if query_topic_count == 0 {
+        return None;
+    }
+
+    let path_terms: BTreeSet<String> = path_tokens(&file.path).into_iter().collect();
+    let has_positioning_anchor = [
+        "competition",
+        "competitive",
+        "competitor",
+        "competitors",
+        "market",
+        "positioning",
+    ]
+    .iter()
+    .any(|token| path_terms.contains(*token) || content_terms.contains(*token));
+    if !has_positioning_anchor {
+        return None;
+    }
+
+    let file_topic_count = COMPETITIVE_POSITIONING_INTENT
+        .iter()
+        .filter(|token| path_terms.contains(**token) || content_terms.contains(**token))
+        .count();
+    if file_topic_count < 2 {
+        return None;
+    }
+
+    let mut score = 360 + (query_topic_count.min(4) as i32 * 45);
+    if path_terms.contains("competitive") || path_terms.contains("competitor") {
+        score += 220;
+    }
+    Some(score)
 }
 
 fn has_command_surface_intent(query_tokens: &[String]) -> bool {
@@ -903,6 +978,13 @@ fn push_token_variant(expanded: &mut BTreeSet<String>, token: &str) {
         "stats" => {
             expanded.insert("statistics".to_string());
             expanded.insert("statistic".to_string());
+        }
+        "competition" | "competitive" | "competitor" | "competitors" => {
+            expanded.insert("competition".to_string());
+            expanded.insert("competitive".to_string());
+            expanded.insert("competitor".to_string());
+            expanded.insert("competitors".to_string());
+            expanded.insert("positioning".to_string());
         }
         _ => {}
     }
@@ -1181,6 +1263,48 @@ mod tests {
         assert!(
             stale_pos < common_pos,
             "rare token `stale` (1/5 files) should outrank ubiquitous `index` (4/5 files)"
+        );
+    }
+
+    #[test]
+    fn competitive_positioning_doc_beats_generic_cli_context() {
+        let mut competitive = file("competitive", "docs/COMPETITIVE.md");
+        competitive.language = Language::Markdown;
+        competitive.content_terms = formatter::tokenize(
+            "competitors cursor copilot sourcegraph cody windsurf devin greptile aider local token savings positioning",
+        );
+        let mut agent_cli = file("agent_cli", "docs/AGENT_CLI.md");
+        agent_cli.language = Language::Markdown;
+        agent_cli.content_terms =
+            formatter::tokenize("agent cli mcp context local token proof setup hooks commands");
+        let index = build(
+            vec![competitive, agent_cli, file("cli", "src/cli.rs")],
+            vec![
+                symbol("agent_context", "cli", "AgentContextOutput"),
+                symbol("local_first", "cli", "agent_local_first_expansion"),
+            ],
+        );
+
+        let ranked = rank(
+            &index,
+            "competitive analysis local token savings agent context proof mcp cli",
+            10,
+        );
+
+        assert_eq!(
+            ranked.first().map(|match_| match_.file_id.as_str()),
+            Some("competitive"),
+            "competitor tasks should select the positioning doc before generic setup surfaces"
+        );
+        assert!(
+            ranked
+                .first()
+                .map(|match_| match_
+                    .why
+                    .iter()
+                    .any(|reason| reason == "competitive positioning doc intent"))
+                .unwrap_or(false),
+            "top match should explain the competitive positioning signal"
         );
     }
 

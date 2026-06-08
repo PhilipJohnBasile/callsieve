@@ -245,13 +245,16 @@ fn module_path(path: &Path) -> String {
     path.parent().map(path_to_string).unwrap_or_default()
 }
 
-fn is_test_file(path: &str) -> bool {
+pub(crate) fn is_test_file(path: &str) -> bool {
     let lower = path.replace('\\', "/").to_ascii_lowercase();
-    // Match both nested (`src/tests/`) and top-level (`tests/`) test dirs; paths
-    // are repo-relative with no leading slash, so a `/tests/` check alone misses
-    // the common top-level `tests/` and `__tests__/` convention.
+    // Match both nested (`src/tests/`, `src/test/`) and top-level (`tests/`,
+    // `test/`) test dirs; paths are repo-relative with no leading slash, so a
+    // `/tests/` check alone misses the common top-level `tests/` and
+    // `__tests__/` convention.
     lower.contains("/__tests__/")
         || lower.starts_with("__tests__/")
+        || lower.contains("/test/")
+        || lower.starts_with("test/")
         || lower.contains("/tests/")
         || lower.starts_with("tests/")
         || lower.contains("_test.")
@@ -843,8 +846,10 @@ mod tests {
     #[test]
     fn top_level_and_nested_test_dirs_are_detected() {
         assert!(is_test_file("tests/cli.rs"));
+        assert!(is_test_file("test/cli.rs"));
         assert!(is_test_file(r"tests\cli.rs"));
         assert!(is_test_file("src/tests/helpers.rs"));
+        assert!(is_test_file("src/test/helpers.rs"));
         assert!(is_test_file(r"src\tests\helpers.rs"));
         assert!(is_test_file("__tests__/app.tsx"));
         assert!(is_test_file("src/auth/session.test.ts"));

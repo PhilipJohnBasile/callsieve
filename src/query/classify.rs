@@ -51,6 +51,13 @@ impl QueryKind {
             Self::NaturalLanguage => "natural_language",
         }
     }
+
+    pub fn cosine_floor(self) -> f32 {
+        match self {
+            Self::NaturalLanguage => 0.15,
+            Self::Identifier => 0.25,
+        }
+    }
 }
 
 fn has_symbol_lookup_intent(query_tokens: &[String]) -> bool {
