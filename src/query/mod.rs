@@ -30,6 +30,13 @@ const MAX_CONTEXT_RELATION_FILES: usize = 5;
 const MAX_CONTEXT_GRAPH_EDGES: usize = 1;
 const MAX_CONTEXT_RELATED_TESTS: usize = 3;
 const MAX_CONTEXT_RELATED_TEST_SYMBOLS: usize = 5;
+const MAX_SELECTION_SUMMARY_NEXT_FILES: usize = 2;
+const MAX_SKIM_SELECTION_NEXT_FILES: usize = 1;
+const MAX_SKIM_GRAPH_HINTS_PER_DIRECTION: usize = 1;
+const MAX_SKIM_CALL_PATHS_PER_DIRECTION: usize = 2;
+const MAX_SKIM_SYMBOLS_PER_FILE: usize = 1;
+const MAX_FOCUS_SYMBOL_SNIPPET_LINES: usize = 120;
+const MAX_FOCUS_GRAPH_EDGES: usize = 4;
 const MAX_CONTEXT_GRAPH_SCORE: i32 = 240;
 const MIN_CONTEXT_CANDIDATE_MATCHES: usize = 128;
 const MIN_TASK_SPECIFIC_TEST_SCORE: i32 = 2;
@@ -40,6 +47,7 @@ const MAX_TASK_MEMORY_SIMILAR_TASKS: usize = 3;
 const MAX_TASK_MEMORY_RECOMMENDED_FILES: usize = 8;
 const MAX_TASK_MEMORY_RECOMMENDED_SYMBOLS: usize = 12;
 pub const DEFAULT_AGENT_CONTEXT_TOKEN_BUDGET: usize = 1200;
+pub const DEFAULT_AGENT_CONTEXT_LIMIT: usize = 5;
 
 #[cfg(feature = "embed")]
 type SemanticScoreMap = BTreeMap<String, SemanticScore>;
@@ -73,6 +81,8 @@ impl ContextProfile {
 pub struct ContextViewOptions {
     pub profile: ContextProfile,
     pub token_budget: Option<usize>,
+    pub include_git: bool,
+    pub include_call_paths: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -87,7 +97,8 @@ pub struct ContextOptions<'a> {
     pub error_frames: &'a [stacktrace::StackFrame],
     /// Opt-in: nudge recently-changed / hot files up using git signals. Off by
     /// default so the lexical baseline and the retrieval benchmark are unchanged
-    /// until the boost is validated; the git data is surfaced regardless.
+    /// until the boost is validated; default skim output omits git hints unless
+    /// this boost is active.
     pub git_boost: bool,
 }
 
@@ -246,12 +257,20 @@ struct QuerySymbol {
 struct Snippet {
     lines: [usize; 2],
     text: String,
+    #[serde(skip_serializing_if = "is_false")]
+    truncated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    omitted_lines: Option<usize>,
 }
 
 #[derive(Debug, Serialize)]
 struct RelatedTest {
     file: String,
     symbols: Vec<String>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(Debug, Serialize)]
@@ -275,11 +294,40 @@ pub struct ContextOutput {
     task: String,
     root: String,
     retrieval_cost: RetrievalCost,
+    selection_summary: ContextSelectionSummary,
     read_first: Vec<ContextFile>,
     stats: ContextStats,
     timing: TimingStats,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     warnings: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct ContextSelectionSummary {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    top_file: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    top_score: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    top_reason: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    top_signals: Vec<SelectionScoreComponent>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    next_files: Vec<SelectionSummaryFile>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct SelectionSummaryFile {
+    file: String,
+    score: i32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct SelectionScoreComponent {
+    name: String,
+    points: i32,
 }
 
 #[derive(Debug, Serialize)]
@@ -352,6 +400,15 @@ struct ContextStats {
     selected_files: usize,
     selected_symbols: usize,
     related_tests: usize,
+    #[serde(skip_serializing)]
+    local_work: LocalWorkStats,
+}
+
+#[derive(Debug, Serialize)]
+struct LocalWorkStats {
+    indexed_files: usize,
+    indexed_symbols: usize,
+    indexed_references: usize,
 }
 
 impl QueryOutput {
@@ -366,6 +423,16 @@ impl ContextOutput {
         self.timing.index_load_ms = index_load_ms;
         self.timing.total_ms = self.timing.total_ms.saturating_add(index_load_ms);
     }
+
+    pub fn add_warning(&mut self, warning: impl Into<String>) {
+        self.warnings.push(warning.into());
+    }
+}
+
+impl IndexStatusOutput {
+    pub fn is_fresh(&self) -> bool {
+        self.fresh
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -373,8 +440,11 @@ pub struct TaskMemoryOutput {
     cache_hit: bool,
     path: String,
     policy: &'static str,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     similar_tasks: Vec<TaskMemorySimilarTask>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     recommended_files: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     recommended_symbols: Vec<String>,
 }
 
@@ -543,6 +613,11 @@ struct BenchmarkSuiteTaskOutput {
     selected_files: Vec<String>,
     expected_files_found: Vec<String>,
     expected_files_missing: Vec<String>,
+    first_correct_file_hit: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    first_correct_file: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    first_correct_file_rank: Option<usize>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     miss_reasons: Vec<String>,
     expected_file_recall: f64,
@@ -560,6 +635,9 @@ struct BenchmarkSuiteSummary {
     expected_files_found: usize,
     missed_expected_files: usize,
     expected_file_recall: f64,
+    first_correct_file_hits: usize,
+    first_correct_file_tasks: usize,
+    first_correct_file_rate_at_k: f64,
     baseline_context_payload_tokens_estimate: usize,
     callsieve_context_payload_tokens_estimate: usize,
     context_payload_reduction: ContextPayloadReduction,
@@ -606,6 +684,11 @@ struct EvalRetrievalTaskOutput {
     expected_files_missing: Vec<String>,
     critical_files_found: Vec<String>,
     critical_files_missing: Vec<String>,
+    first_correct_file_hit: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    first_correct_file: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    first_correct_file_rank: Option<usize>,
     recall_at_k: f64,
     critical_recall: f64,
     selected_tokens: usize,
@@ -622,6 +705,9 @@ struct EvalRetrievalSummary {
     expected_files_found: usize,
     missed_expected_files: usize,
     recall_at_k: f64,
+    first_correct_file_hits: usize,
+    first_correct_file_tasks: usize,
+    first_correct_file_rate_at_k: f64,
     critical_files: usize,
     critical_files_found: usize,
     missed_critical_files: usize,
@@ -976,6 +1062,9 @@ struct BenchmarkReportRepoOutput {
     expected_files: usize,
     expected_files_found: usize,
     missed_expected_files: usize,
+    first_correct_file_hits: usize,
+    first_correct_file_tasks: usize,
+    first_correct_file_rate_at_k: f64,
     baseline_context_payload_tokens_estimate: usize,
     callsieve_context_payload_tokens_estimate: usize,
     context_payload_reduction: ContextPayloadReduction,
@@ -997,6 +1086,9 @@ struct BenchmarkReportSummary {
     expected_files_found: usize,
     missed_expected_files: usize,
     expected_file_recall: f64,
+    first_correct_file_hits: usize,
+    first_correct_file_tasks: usize,
+    first_correct_file_rate_at_k: f64,
     baseline_context_payload_tokens_estimate: usize,
     callsieve_context_payload_tokens_estimate: usize,
     context_payload_reduction: ContextPayloadReduction,
@@ -1571,7 +1663,26 @@ pub struct FocusOutput {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     snippets: Vec<Snippet>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
+    calls: Vec<FocusEdge>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    references: Vec<FocusEdge>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    called_by: Vec<FocusEdge>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    related_tests: Vec<RelatedTest>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     warnings: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct FocusEdge {
+    file: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    symbol: Option<String>,
+    target: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target_file: Option<String>,
+    line: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -1703,32 +1814,55 @@ pub fn focus_file(
     index: &CodeIndex,
     file_path: &str,
     symbol_name: Option<&str>,
+    line: Option<usize>,
+    include_references: bool,
     snippets_per_symbol: usize,
 ) -> Result<FocusOutput> {
     let lookup = IndexLookup::new(index);
     let file = lookup
         .file_by_path(file_path)
         .ok_or_else(|| anyhow!("file is not indexed: {file_path}"))?;
-    let symbol_name_lower = symbol_name.map(str::to_ascii_lowercase);
-    let mut symbol_records: Vec<&SymbolRecord> = lookup
-        .symbols_for_file(&file.id)
-        .iter()
-        .copied()
-        .filter(|symbol| {
-            symbol_name_lower.as_ref().is_none_or(|name| {
-                symbol.name.eq_ignore_ascii_case(name)
-                    || symbol.name.to_ascii_lowercase().contains(name)
-            })
-        })
-        .collect();
+    let all_symbols = lookup.symbols_for_file(&file.id);
+    let mut symbol_records: Vec<&SymbolRecord> = if let Some(symbol_name) = symbol_name {
+        let exact_matches = all_symbols
+            .iter()
+            .copied()
+            .filter(|symbol| symbol.name.eq_ignore_ascii_case(symbol_name))
+            .collect::<Vec<_>>();
+        if exact_matches.is_empty() {
+            let symbol_name_lower = symbol_name.to_ascii_lowercase();
+            all_symbols
+                .iter()
+                .copied()
+                .filter(|symbol| {
+                    symbol
+                        .name
+                        .to_ascii_lowercase()
+                        .contains(&symbol_name_lower)
+                })
+                .collect()
+        } else {
+            exact_matches
+        }
+    } else {
+        all_symbols.to_vec()
+    };
+    if let Some(line) = line {
+        symbol_records.retain(|symbol| symbol.start_line <= line && line <= symbol.end_line);
+    }
     symbol_records.sort_by_key(|symbol| symbol.start_line);
-    if symbol_name.is_some() && symbol_records.is_empty() {
+    if (symbol_name.is_some() || line.is_some()) && symbol_records.is_empty() {
+        let selector = match (symbol_name, line) {
+            (Some(symbol), Some(line)) => format!("{symbol} at line {line}"),
+            (Some(symbol), None) => symbol.to_string(),
+            (None, Some(line)) => format!("line {line}"),
+            (None, None) => String::new(),
+        };
         return Err(anyhow!(
-            "symbol was not found in indexed file {file_path}: {}",
-            symbol_name.unwrap_or_default()
+            "symbol selector was not found in indexed file {file_path}: {selector}"
         ));
     }
-    if symbol_name.is_none() {
+    if symbol_name.is_none() && line.is_none() {
         symbol_records.truncate(MAX_CONTEXT_SYMBOLS_PER_FILE);
     }
 
@@ -1742,13 +1876,35 @@ pub fn focus_file(
             signature: symbol.signature.clone(),
         })
         .collect();
-    let snippets = context_snippets(
-        root,
-        file,
-        &symbol_records,
-        snippets_per_symbol,
-        snippets_per_symbol > 0,
-    );
+    let snippets = if symbol_name.is_some() || line.is_some() {
+        focused_symbol_snippets(root, file, &symbol_records, snippets_per_symbol)
+    } else {
+        context_snippets(
+            root,
+            file,
+            &symbol_records,
+            snippets_per_symbol,
+            snippets_per_symbol > 0,
+        )
+    };
+    let (calls, references, called_by) = if symbol_name.is_some() || line.is_some() {
+        (
+            focus_edges_for_symbols(&lookup, &symbol_records, FocusEdgeKind::Calls),
+            if include_references {
+                focus_edges_for_symbols(&lookup, &symbol_records, FocusEdgeKind::References)
+            } else {
+                Vec::new()
+            },
+            focus_edges_for_symbols(&lookup, &symbol_records, FocusEdgeKind::CalledBy),
+        )
+    } else {
+        (Vec::new(), Vec::new(), Vec::new())
+    };
+    let related_tests = if symbol_name.is_some() || line.is_some() {
+        compact_related_tests(related_tests(&lookup, file))
+    } else {
+        Vec::new()
+    };
 
     Ok(FocusOutput {
         root: root_label(root),
@@ -1756,6 +1912,10 @@ pub fn focus_file(
         language: file.language,
         symbols,
         snippets,
+        calls,
+        references,
+        called_by,
+        related_tests,
         warnings: stale_warnings(root, index),
     })
 }
@@ -2004,6 +2164,7 @@ pub fn build_context_with(
         task,
         &mut candidates,
         options.limit,
+        &query_tokens,
         options.hybrid,
     )?;
 
@@ -2046,6 +2207,7 @@ pub fn build_context_with(
     let mut selected_symbols = 0;
     let mut selected_related_tests = 0;
     let mut snippet_elapsed = Duration::ZERO;
+    let mut selection_summary = empty_context_selection_summary();
     let read_first: Vec<ContextFile> = candidates
         .into_iter()
         .take(options.limit)
@@ -2111,6 +2273,14 @@ pub fn build_context_with(
             let related_tests = compact_related_tests(related_tests_all);
             let score = candidate.score();
             let why = take_strings(candidate.why, MAX_CONTEXT_WHY);
+            let top_score_components = compact_selection_score_components(&candidate.why_debug);
+            push_context_selection_summary(
+                &mut selection_summary,
+                file,
+                score,
+                &why,
+                top_score_components.clone(),
+            );
             let debug = if options.why_debug {
                 candidate.why_debug.into_iter().take(16).collect()
             } else {
@@ -2145,11 +2315,17 @@ pub fn build_context_with(
         task: task.to_string(),
         root: root_label(root),
         retrieval_cost: zero_token_retrieval_cost(),
+        selection_summary,
         stats: ContextStats {
             candidate_matches: ranked.len(),
             selected_files: read_first.len(),
             selected_symbols,
             related_tests: selected_related_tests,
+            local_work: LocalWorkStats {
+                indexed_files: index.files.len(),
+                indexed_symbols: index.symbols.len(),
+                indexed_references: index.references.len(),
+            },
         },
         timing: TimingStats {
             index_load_ms: 0,
@@ -2169,6 +2345,93 @@ pub fn context_read_first_files(context: &ContextOutput) -> Vec<String> {
         .iter()
         .map(|file| file.file.clone())
         .collect()
+}
+
+#[derive(Debug, Clone)]
+pub struct FocusTarget {
+    pub file: String,
+    pub symbol: Option<String>,
+    pub line: Option<usize>,
+    pub is_code: bool,
+}
+
+pub fn context_read_first_targets(context: &ContextOutput) -> Vec<FocusTarget> {
+    context
+        .read_first
+        .iter()
+        .map(|file| {
+            let symbol = focus_symbol_for_context_file(file);
+            FocusTarget {
+                file: file.file.clone(),
+                symbol: symbol.map(|symbol| symbol.name.clone()),
+                line: symbol.map(|symbol| symbol.lines[0]),
+                is_code: file.language.is_code(),
+            }
+        })
+        .collect()
+}
+
+fn focus_symbol_for_context_file(file: &ContextFile) -> Option<&QuerySymbol> {
+    file.symbols.iter().find(|symbol| {
+        !matches!(
+            symbol.kind.as_str(),
+            "macro" | "call" | "reference" | "import" | "use" | "include"
+        )
+    })
+}
+
+fn empty_context_selection_summary() -> ContextSelectionSummary {
+    ContextSelectionSummary {
+        top_file: None,
+        top_score: None,
+        top_reason: None,
+        top_signals: Vec::new(),
+        next_files: Vec::new(),
+    }
+}
+
+fn push_context_selection_summary(
+    summary: &mut ContextSelectionSummary,
+    file: &FileRecord,
+    score: i32,
+    why: &[String],
+    top_score_components: Vec<SelectionScoreComponent>,
+) {
+    let file_summary = SelectionSummaryFile {
+        file: file.path.clone(),
+        score,
+        reason: why.first().cloned(),
+    };
+    if summary.top_file.is_none() {
+        summary.top_file = Some(file_summary.file.clone());
+        summary.top_score = Some(file_summary.score);
+        summary.top_reason = file_summary.reason.clone();
+        summary.top_signals = top_score_components;
+    } else if summary.next_files.len() < MAX_SELECTION_SUMMARY_NEXT_FILES {
+        summary.next_files.push(file_summary);
+    }
+}
+
+fn compact_selection_score_components(
+    components: &[ranker::ScoreComponent],
+) -> Vec<SelectionScoreComponent> {
+    let mut components = components
+        .iter()
+        .filter(|component| component.points > 0)
+        .map(|component| SelectionScoreComponent {
+            name: component.name.clone(),
+            points: component.points,
+        })
+        .collect::<Vec<_>>();
+    components.sort_by(|left, right| {
+        right
+            .points
+            .cmp(&left.points)
+            .then(left.name.cmp(&right.name))
+    });
+    components.dedup_by(|left, right| left.name == right.name && left.points == right.points);
+    components.truncate(1);
+    components
 }
 
 fn sort_candidates_lexical(
@@ -2338,15 +2601,9 @@ fn apply_git_boost(index: &CodeIndex, candidates: &mut [ContextCandidate], enabl
     }
 }
 
-/// Minimum raw cosine for an embedding-only file to be injected as a candidate.
-/// Keeps weak semantic matches out of the read-first pool so the union pass adds
-/// recall without flooding the packet with noise.
-#[cfg(feature = "embed")]
-const SEMANTIC_RECALL_COSINE_FLOOR: f32 = 0.30;
-
 /// Semantic-recall union pass. Reads the embedding cache, scores every indexed
 /// file the lexical ranker did *not* already surface by cosine to the query, and
-/// injects the strongest ones (above [`SEMANTIC_RECALL_COSINE_FLOOR`], capped at
+/// injects the strongest ones (above `query_kind.cosine_floor()`, capped at
 /// `limit`) as zero-lexical-score candidates. This is what lets hybrid exceed
 /// the lexical recall ceiling instead of merely reordering the lexical set.
 ///
@@ -2361,6 +2618,7 @@ fn add_semantic_candidates(
     task: &str,
     candidates: &mut Vec<ContextCandidate>,
     limit: usize,
+    query_tokens: &[String],
     hybrid: HybridOptions<'_>,
 ) -> Result<Option<SemanticScoreMap>> {
     use embed::{ExpectedCache, FastembedEmbedder, LocalEmbedder};
@@ -2408,12 +2666,13 @@ fn add_semantic_candidates(
         .map(|candidate| candidate.file_id.as_str())
         .collect();
 
+    let cosine_floor = classify::query_kind(task, query_tokens).cosine_floor();
     let mut scored: Vec<(f32, &str, Option<&str>)> = Vec::new();
     for (file_id, score) in &semantic_scores {
         if existing.contains(file_id.as_str()) {
             continue;
         }
-        if score.cosine >= SEMANTIC_RECALL_COSINE_FLOOR {
+        if score.cosine >= cosine_floor {
             scored.push((
                 score.cosine,
                 file_id.as_str(),
@@ -2704,11 +2963,15 @@ fn ownership_rank(
 
 pub fn context_value(context: &ContextOutput, options: ContextViewOptions) -> Result<Value> {
     let mut value = match options.profile {
-        ContextProfile::Skim => skim_context_value(context),
+        ContextProfile::Skim => {
+            skim_context_value(context, options.include_git, options.include_call_paths)
+        }
         ContextProfile::Normal | ContextProfile::Full => serde_json::to_value(context)?,
     };
     if options.profile == ContextProfile::Normal {
         add_compact_impact_to_full_context(&mut value);
+    } else if options.profile == ContextProfile::Full {
+        remove_redundant_full_selection_summary(&mut value);
     }
     annotate_context_stats(&mut value, options.profile, options.token_budget, false)?;
     let trimmed = apply_context_token_budget(&mut value, options.token_budget)?;
@@ -2716,58 +2979,312 @@ pub fn context_value(context: &ContextOutput, options: ContextViewOptions) -> Re
     Ok(value)
 }
 
+fn remove_redundant_full_selection_summary(value: &mut Value) {
+    if let Some(summary) = value
+        .get_mut("selection_summary")
+        .and_then(Value::as_object_mut)
+    {
+        summary.remove("next_files");
+    }
+}
+
 pub fn value_estimated_tokens(value: &Value) -> Result<usize> {
     Ok(estimate_tokens(&serde_json::to_string(value)?))
 }
 
-fn skim_context_value(context: &ContextOutput) -> Value {
+fn skim_context_value(
+    context: &ContextOutput,
+    include_git: bool,
+    include_call_paths: bool,
+) -> Value {
+    let read_first_path_indexes = context
+        .read_first
+        .iter()
+        .enumerate()
+        .map(|(index, file)| (file.file.as_str(), index))
+        .collect::<BTreeMap<_, _>>();
+    let compact_top_selection_reason = context
+        .selection_summary
+        .top_reason
+        .as_deref()
+        .map(compact_reason_for_value);
     let read_first: Vec<Value> = context
         .read_first
         .iter()
-        .map(|file| {
-            let mut entry = json!({
-                "rank": file.rank,
-                "score": file.score,
-                "file": file.file,
-                "language": file.language,
-                "symbols": compact_symbols_for_value(&file.symbols),
-                "why": file.why.iter().take(2).cloned().collect::<Vec<_>>(),
-                "impact": compact_impact_for_value(file)
-            });
-            if let (Some(object), Some(git)) = (entry.as_object_mut(), compact_git_for_value(file))
-            {
-                object.insert("git".to_string(), git);
+        .enumerate()
+        .map(|(index, file)| {
+            let mut entry = serde_json::Map::new();
+            entry.insert("f".to_string(), json!(file.file));
+            let symbols = compact_symbols_for_value(&file.symbols);
+            if !symbols.is_empty() {
+                entry.insert("sy".to_string(), json!(symbols));
             }
-            entry
+            let mut why = compact_why_for_value(&file.why);
+            if index == 0
+                && let Some(top_reason) = &compact_top_selection_reason
+            {
+                why.retain(|reason| reason != top_reason);
+            }
+            if index == 0 && !why.is_empty() {
+                entry.insert("w".to_string(), json!(why));
+            }
+            entry.insert(
+                "i".to_string(),
+                compact_impact_for_value(file, &read_first_path_indexes),
+            );
+            if include_git && let Some(git) = compact_git_for_value(file) {
+                entry.insert("git".to_string(), git);
+            }
+            if index == 0
+                && let Some(graph_hints) = compact_graph_hints_for_value(file)
+            {
+                entry.insert("g".to_string(), graph_hints);
+            }
+            if include_call_paths && let Some(call_paths) = compact_call_paths_for_value(file) {
+                entry.insert("cp".to_string(), call_paths);
+            }
+            Value::Object(entry)
         })
         .collect();
 
-    json!({
-        "task": context.task,
+    let selection_summary =
+        compact_selection_summary_for_value(&context.selection_summary, &read_first_path_indexes);
+    let mut value = json!({
         "root": context.root,
-        "retrieval_cost": context.retrieval_cost,
+        "retrieval_cost": compact_retrieval_cost_for_value(&context.retrieval_cost),
         "read_first": read_first,
         "stats": {
-            "candidate_matches": context.stats.candidate_matches,
-            "selected_files": context.stats.selected_files,
-            "selected_symbols": context.stats.selected_symbols,
-            "related_tests": context.stats.related_tests
-        },
-        "warnings": context.warnings
+            "local": compact_local_work_for_value(&context.stats.local_work)
+        }
+    });
+    if should_include_skim_task(&context.task)
+        && let Some(object) = value.as_object_mut()
+    {
+        object.insert("task".to_string(), json!(context.task));
+    }
+    if !selection_summary
+        .as_object()
+        .is_some_and(serde_json::Map::is_empty)
+        && let Some(object) = value.as_object_mut()
+    {
+        object.insert("sel".to_string(), selection_summary);
+    }
+    if !context.warnings.is_empty()
+        && let Some(object) = value.as_object_mut()
+    {
+        object.insert("warnings".to_string(), json!(context.warnings));
+    }
+    value
+}
+
+fn should_include_skim_task(task: &str) -> bool {
+    task.contains("Follow-up:")
+}
+
+fn compact_selection_summary_for_value(
+    summary: &ContextSelectionSummary,
+    path_indexes: &BTreeMap<&str, usize>,
+) -> Value {
+    let mut value = serde_json::Map::new();
+    if let Some(top_file) = &summary.top_file {
+        let top = compact_selection_entry_for_value(
+            top_file,
+            summary.top_score,
+            summary.top_reason.as_deref(),
+            path_indexes,
+        );
+        value.insert("top".to_string(), Value::Array(top));
+    }
+    if !summary.top_signals.is_empty() {
+        value.insert(
+            "sig".to_string(),
+            json!(compact_selection_score_components_for_value(
+                &summary.top_signals
+            )),
+        );
+    }
+    let next_files = summary
+        .next_files
+        .iter()
+        .take(MAX_SKIM_SELECTION_NEXT_FILES)
+        .map(|file| {
+            Value::Array(compact_selection_entry_for_value(
+                &file.file,
+                Some(file.score),
+                file.reason.as_deref(),
+                path_indexes,
+            ))
+        })
+        .collect::<Vec<_>>();
+    if !next_files.is_empty() {
+        value.insert("next".to_string(), json!(next_files));
+    }
+    Value::Object(value)
+}
+
+fn compact_selection_entry_for_value(
+    file: &str,
+    score: Option<i32>,
+    reason: Option<&str>,
+    path_indexes: &BTreeMap<&str, usize>,
+) -> Vec<Value> {
+    if let Some(index) = path_indexes.get(file) {
+        let mut entry = vec![json!(index)];
+        if let Some(reason) = reason {
+            entry.push(json!(compact_reason_for_value(reason)));
+        }
+        return entry;
+    }
+
+    let mut entry = vec![json!(file)];
+    if score.is_some() || reason.is_some() {
+        entry.push(json!(score.unwrap_or_default()));
+    }
+    if let Some(reason) = reason {
+        entry.push(json!(compact_reason_for_value(reason)));
+    }
+    entry
+}
+
+fn compact_selection_score_components_for_value(
+    components: &[SelectionScoreComponent],
+) -> Vec<Value> {
+    components
+        .iter()
+        .map(|component| json!(compact_selection_signal_for_value(&component.name)))
+        .collect()
+}
+
+fn compact_selection_signal_for_value(name: &str) -> &str {
+    match name {
+        "exact_symbol" => "sym",
+        "symbol_name_keyword_cluster" => "sy",
+        "symbol_substring" => "sub",
+        "keyword_overlap" => "kw",
+        "path_filename" => "p",
+        "path_keyword_overlap" => "pt",
+        "module_anchor" => "mod",
+        "path_intent_cluster" => "pi",
+        "filename_keyword_cluster" => "fn",
+        "content_keyword_overlap" => "ct",
+        "test_file" => "tf",
+        "test_proximity" => "test",
+        "config_file" => "cfg",
+        "config_dependency_intent" => "cfgdep",
+        "dependency_manifest_intent" => "dep",
+        "benchmark_evidence_file_intent" => "bench",
+        "readme_evidence_file_intent" => "readme",
+        "competitive_positioning_doc" => "comp",
+        "docs_intent" => "doc",
+        "docs_path_intent" => "docp",
+        "command_surface_intent" => "cmd",
+        "hook_meta_intent" => "hook",
+        "graph_imported_file" => "im",
+        "graph_referencing_file" => "ref",
+        "graph_callee" => "call",
+        "graph_caller" => "caller",
+        "stack_trace" => "trace",
+        "git_signal" => "git",
+        "semantic_recall" => "semr",
+        "semantic_embedding" => "seme",
+        _ => name,
+    }
+}
+
+fn compact_why_for_value(reasons: &[String]) -> Vec<String> {
+    let mut compact = Vec::new();
+    for reason in reasons
+        .iter()
+        .take(2)
+        .map(|reason| compact_reason_for_value(reason))
+    {
+        if compact_reason_is_redundant(&compact, &reason) {
+            continue;
+        }
+        compact.push(reason);
+        if compact.len() >= 2 {
+            break;
+        }
+    }
+    compact
+}
+
+fn compact_reason_is_redundant(existing: &[String], candidate: &str) -> bool {
+    existing.iter().any(|reason| {
+        reason == candidate
+            || matching_symbol_and_keyword_terms(reason, candidate)
+            || matching_symbol_and_keyword_terms(candidate, reason)
+    })
+}
+
+fn matching_symbol_and_keyword_terms(left: &str, right: &str) -> bool {
+    let Some(symbol_terms) = left.strip_prefix("sy:") else {
+        return false;
+    };
+    right.strip_prefix("kw:") == Some(symbol_terms)
+}
+
+fn compact_reason_for_value(reason: &str) -> String {
+    for (prefix, compact_prefix) in [
+        ("path or filename match: ", "p:"),
+        ("path keyword overlap: ", "pt:"),
+        ("symbol name keyword cluster: ", "sy:"),
+        ("keyword overlap: ", "kw:"),
+        ("content keyword overlap: ", "ct:"),
+        ("exact symbol match: ", "sym:"),
+        ("symbol doc keyword cluster: ", "doc:"),
+        ("import graph proximity: ", "im:"),
+        ("reference graph proximity: ", "ref:"),
+        ("call graph proximity: ", "call:"),
+        ("test companion: ", "test:"),
+    ] {
+        if let Some(rest) = reason.strip_prefix(prefix) {
+            return format!("{compact_prefix}{rest}");
+        }
+    }
+    match reason {
+        "dependency manifest intent" => "manifest intent".to_string(),
+        _ => reason.to_string(),
+    }
+}
+
+fn compact_retrieval_cost_for_value(retrieval_cost: &RetrievalCost) -> Value {
+    json!({
+        "retrieval_model_tokens": retrieval_cost.retrieval_model_tokens
     })
 }
 
 fn compact_symbols_for_value(symbols: &[QuerySymbol]) -> Vec<Value> {
     symbols
         .iter()
+        .take(MAX_SKIM_SYMBOLS_PER_FILE)
         .map(|symbol| {
-            json!({
-                "name": symbol.name,
-                "kind": symbol.kind,
-                "lines": symbol.lines
-            })
+            let mut value = vec![json!(symbol.name)];
+            value.push(json!(symbol.lines[0]));
+            if symbol.kind != "function" {
+                value.push(json!(compact_symbol_kind_for_value(&symbol.kind)));
+            }
+            Value::Array(value)
         })
         .collect()
+}
+
+fn compact_symbol_kind_for_value(kind: &str) -> &str {
+    match kind {
+        "class" => "cl",
+        "method" => "m",
+        "interface" => "if",
+        "type" => "t",
+        "struct" => "s",
+        "enum" => "e",
+        "trait" => "tr",
+        "impl" => "im",
+        "constant" => "c",
+        "module" => "mod",
+        "macro" => "mac",
+        "component" => "cmp",
+        _ => kind,
+    }
 }
 
 /// Compact git hint for the skim packet: recency, hotness, and bus-factor in
@@ -2775,22 +3292,220 @@ fn compact_symbols_for_value(symbols: &[QuerySymbol]) -> Vec<Value> {
 fn compact_git_for_value(file: &ContextFile) -> Option<Value> {
     let git = file.git.as_ref()?;
     Some(json!({
-        "last_modified_unix": git.last_modified_unix,
-        "commits_90d": git.commits_90d,
-        "authors_90d": git.distinct_authors_90d
+        "lm": git.last_modified_unix,
+        "c90": git.commits_90d,
+        "a90": git.distinct_authors_90d
     }))
 }
 
-fn compact_impact_for_value(file: &ContextFile) -> Value {
+fn compact_local_work_for_value(local_work: &LocalWorkStats) -> Value {
+    json!({
+        "f": local_work.indexed_files,
+        "sy": local_work.indexed_symbols,
+        "r": local_work.indexed_references
+    })
+}
+
+fn compact_impact_for_value(file: &ContextFile, path_indexes: &BTreeMap<&str, usize>) -> Value {
     let mut tests = BTreeSet::new();
     tests.extend(file.blast_radius.tests.iter().cloned());
     tests.extend(file.related_tests.iter().map(|test| test.file.clone()));
-    json!({
-        "risk": file.blast_radius.risk,
-        "tests": tests.into_iter().take(MAX_CONTEXT_RELATED_TESTS).collect::<Vec<_>>(),
-        "upstream_count": file.imports.len() + file.calls.len(),
-        "downstream_count": file.referenced_by.len() + file.called_by.len()
-    })
+    let tests = tests
+        .into_iter()
+        .take(MAX_CONTEXT_RELATED_TESTS)
+        .collect::<Vec<_>>();
+    let mut test_refs = Vec::new();
+    for test in &tests {
+        if let Some(index) = path_indexes.get(test.as_str()) {
+            test_refs.push(json!(index));
+        } else {
+            test_refs.push(json!(test));
+        }
+    }
+    let upstream_count = file.imports.len() + file.calls.len();
+    let downstream_count = file.referenced_by.len() + file.called_by.len();
+
+    let mut impact = vec![json!(compact_risk_for_value(&file.blast_radius.risk))];
+    if !test_refs.is_empty() {
+        if test_refs.len() == 1 {
+            impact.push(test_refs.remove(0));
+        } else {
+            impact.push(Value::Array(test_refs));
+        }
+    }
+    if upstream_count > 0 || downstream_count > 0 {
+        impact.push(json!(upstream_count));
+    }
+    if downstream_count > 0 {
+        impact.push(json!(downstream_count));
+    }
+    Value::Array(impact)
+}
+
+fn compact_risk_for_value(risk: &str) -> &str {
+    match risk {
+        "low" => "l",
+        "medium" => "m",
+        "high" => "h",
+        _ => risk,
+    }
+}
+
+fn compact_graph_hints_for_value(file: &ContextFile) -> Option<Value> {
+    let related_tests = file
+        .related_tests
+        .iter()
+        .map(|test| test.file.as_str())
+        .collect::<BTreeSet<_>>();
+    let upstream = compact_graph_hint_paths(
+        file.blast_radius
+            .imports
+            .iter()
+            .chain(file.blast_radius.calls.iter()),
+        &file.file,
+        &related_tests,
+    );
+    let downstream = compact_graph_hint_paths(
+        file.blast_radius
+            .referenced_by
+            .iter()
+            .chain(file.blast_radius.called_by.iter()),
+        &file.file,
+        &related_tests,
+    );
+
+    if upstream.is_empty() && downstream.is_empty() {
+        return None;
+    }
+
+    let mut hints = serde_json::Map::new();
+    if !upstream.is_empty() {
+        hints.insert("u".to_string(), json!(upstream));
+    }
+    if !downstream.is_empty() {
+        hints.insert("d".to_string(), json!(downstream));
+    }
+    Some(Value::Object(hints))
+}
+
+fn compact_graph_hint_paths<'a>(
+    paths: impl Iterator<Item = &'a String>,
+    current_file: &str,
+    related_tests: &BTreeSet<&str>,
+) -> Vec<String> {
+    paths
+        .filter(|path| path.as_str() != current_file)
+        .filter(|path| !related_tests.contains(path.as_str()))
+        .filter(|path| !crate::indexer::is_test_file(path))
+        .filter(|path| is_code_graph_hint_path(path))
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .take(MAX_SKIM_GRAPH_HINTS_PER_DIRECTION)
+        .collect()
+}
+
+fn compact_call_paths_for_value(file: &ContextFile) -> Option<Value> {
+    let calls = compact_call_path_edges(
+        file.calls.iter(),
+        CompactCallDirection::Outgoing,
+        &file.file,
+    );
+    let called_by = compact_call_path_edges(
+        file.called_by.iter(),
+        CompactCallDirection::Incoming,
+        &file.file,
+    );
+
+    if calls.is_empty() && called_by.is_empty() {
+        return None;
+    }
+
+    let mut paths = serde_json::Map::new();
+    if !calls.is_empty() {
+        paths.insert("c".to_string(), json!(calls));
+    }
+    if !called_by.is_empty() {
+        paths.insert("by".to_string(), json!(called_by));
+    }
+    Some(Value::Object(paths))
+}
+
+#[derive(Clone, Copy)]
+enum CompactCallDirection {
+    Outgoing,
+    Incoming,
+}
+
+fn compact_call_path_edges<'a>(
+    edges: impl Iterator<Item = &'a ReferenceEdge>,
+    direction: CompactCallDirection,
+    current_file: &str,
+) -> Vec<Value> {
+    let mut seen = BTreeSet::new();
+    let mut paths = Vec::new();
+    for edge in edges {
+        let related_file = match direction {
+            CompactCallDirection::Outgoing => edge.target_file.as_deref(),
+            CompactCallDirection::Incoming => Some(edge.file.as_str()),
+        };
+        let Some(related_file) = related_file else {
+            continue;
+        };
+        if related_file == current_file || !is_code_graph_hint_path(related_file) {
+            continue;
+        }
+        let from = edge.symbol.as_deref().unwrap_or_default();
+        let key = format!("{related_file}\0{from}\0{}\0{}", edge.target, edge.line);
+        if !seen.insert(key) {
+            continue;
+        }
+
+        let mut item = serde_json::Map::new();
+        item.insert("f".to_string(), json!(related_file));
+        if !from.is_empty() {
+            item.insert("fr".to_string(), json!(from));
+        }
+        item.insert("t".to_string(), json!(edge.target));
+        item.insert("l".to_string(), json!(edge.line));
+        paths.push(Value::Object(item));
+        if paths.len() >= MAX_SKIM_CALL_PATHS_PER_DIRECTION {
+            break;
+        }
+    }
+    paths
+}
+
+fn is_code_graph_hint_path(path: &str) -> bool {
+    matches!(
+        Path::new(path)
+            .extension()
+            .and_then(|extension| extension.to_str()),
+        Some(
+            "ts" | "tsx"
+                | "js"
+                | "jsx"
+                | "mjs"
+                | "cjs"
+                | "py"
+                | "rs"
+                | "go"
+                | "java"
+                | "kt"
+                | "kts"
+                | "swift"
+                | "c"
+                | "cc"
+                | "cpp"
+                | "h"
+                | "hpp"
+                | "cs"
+                | "rb"
+                | "php"
+                | "svelte"
+                | "vue"
+        )
+    )
 }
 
 fn add_compact_impact_to_full_context(value: &mut Value) {
@@ -2855,18 +3570,50 @@ fn annotate_context_stats(
         object.insert("stats".to_string(), json!({}));
     }
     if let Some(stats) = value.get_mut("stats").and_then(Value::as_object_mut) {
-        stats.insert("profile".to_string(), json!(profile.as_str()));
-        stats.insert("trimmed".to_string(), json!(trimmed));
-        if let Some(token_budget) = token_budget {
-            stats.insert("token_budget".to_string(), json!(token_budget));
+        if profile == ContextProfile::Skim {
+            if trimmed {
+                stats.insert("trimmed".to_string(), json!(true));
+            } else {
+                stats.remove("trimmed");
+            }
+            if let Some(token_budget) = token_budget {
+                stats.insert("b".to_string(), json!(token_budget));
+            } else {
+                stats.remove("b");
+            }
+            for field in [
+                "candidate_matches",
+                "profile",
+                "selected_files",
+                "selected_symbols",
+                "related_tests",
+                "budget",
+                "token_budget",
+                "estimated_tokens",
+                "tokens",
+                "local_work",
+            ] {
+                stats.remove(field);
+            }
         } else {
-            stats.remove("token_budget");
+            stats.insert("profile".to_string(), json!(profile.as_str()));
+            stats.insert("trimmed".to_string(), json!(trimmed));
+            if let Some(token_budget) = token_budget {
+                stats.insert("token_budget".to_string(), json!(token_budget));
+            } else {
+                stats.remove("token_budget");
+            }
+            stats.remove("estimated_tokens");
         }
-        stats.remove("estimated_tokens");
     }
     let estimated_tokens = value_estimated_tokens(value)?;
     if let Some(stats) = value.get_mut("stats").and_then(Value::as_object_mut) {
-        stats.insert("estimated_tokens".to_string(), json!(estimated_tokens));
+        let token_field = if profile == ContextProfile::Skim {
+            "t"
+        } else {
+            "estimated_tokens"
+        };
+        stats.insert(token_field.to_string(), json!(estimated_tokens));
     }
     Ok(())
 }
@@ -2893,18 +3640,85 @@ fn apply_context_token_budget(value: &mut Value, token_budget: Option<usize>) ->
         }
         files.pop();
     }
+    trim_selection_summary_to_read_first(value);
 
     let selected_files = value
         .get("read_first")
         .and_then(Value::as_array)
         .map(Vec::len);
     if let Some(stats) = value.get_mut("stats").and_then(Value::as_object_mut)
+        && stats.contains_key("selected_files")
         && let Some(selected_files) = selected_files
     {
         stats.insert("selected_files".to_string(), json!(selected_files));
     }
 
     Ok(true)
+}
+
+pub fn trim_selection_summary_to_read_first(value: &mut Value) {
+    let selected_len = value
+        .get("read_first")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or_default();
+    let selected: BTreeSet<String> = value
+        .get("read_first")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|file| {
+            file.get("f")
+                .or_else(|| file.get("file"))
+                .and_then(Value::as_str)
+        })
+        .map(str::to_string)
+        .collect();
+    if selected.is_empty() {
+        return;
+    }
+    let summary = if value.get("sel").is_some() {
+        value.get_mut("sel")
+    } else {
+        value.get_mut("selection_summary")
+    };
+    let Some(summary) = summary.and_then(Value::as_object_mut) else {
+        return;
+    };
+    let next_files = if summary.get("next").is_some() {
+        summary.get_mut("next")
+    } else {
+        summary.get_mut("next_files")
+    };
+    let Some(next_files) = next_files.and_then(Value::as_array_mut) else {
+        return;
+    };
+    next_files.retain(|file| {
+        selection_summary_file_index(file).is_some_and(|index| index < selected_len)
+            || selection_summary_file_path(file).is_some_and(|path| selected.contains(path))
+    });
+}
+
+fn selection_summary_file_index(file: &Value) -> Option<usize> {
+    file.as_u64()
+        .and_then(|index| usize::try_from(index).ok())
+        .or_else(|| {
+            file.as_array()
+                .and_then(|items| items.first())
+                .and_then(Value::as_u64)
+                .and_then(|index| usize::try_from(index).ok())
+        })
+}
+
+fn selection_summary_file_path(file: &Value) -> Option<&str> {
+    file.get("f")
+        .or_else(|| file.get("file"))
+        .and_then(Value::as_str)
+        .or_else(|| {
+            file.as_array()
+                .and_then(|items| items.first())
+                .and_then(Value::as_str)
+        })
 }
 
 fn trim_context_detail(value: &mut Value) {
@@ -2922,6 +3736,8 @@ fn trim_context_detail(value: &mut Value) {
         object.remove("imports");
         object.remove("referenced_by");
         object.remove("why_debug");
+        object.remove("graph_hints");
+        object.remove("call_paths");
         if let Some(why) = object.get_mut("why").and_then(Value::as_array_mut) {
             why.truncate(2);
         }
@@ -3393,6 +4209,8 @@ pub fn benchmark_context(
         ContextViewOptions {
             profile: ContextProfile::Full,
             token_budget: None,
+            include_git: false,
+            include_call_paths: false,
         },
     )
 }
@@ -3493,6 +4311,8 @@ pub fn benchmark_suite(
         ContextViewOptions {
             profile: ContextProfile::Full,
             token_budget: None,
+            include_git: false,
+            include_call_paths: false,
         },
     )
 }
@@ -3510,6 +4330,8 @@ pub fn benchmark_suite_with_options(
     let mut total_expected_files = 0;
     let mut total_expected_files_found = 0;
     let mut tasks_with_all_expected_files = 0;
+    let mut first_correct_file_hits = 0;
+    let mut first_correct_file_tasks = 0;
     let mut total_estimated_token_savings = 0;
     let mut total_baseline_context_payload_tokens = 0;
     let mut total_callsieve_context_payload_tokens = 0;
@@ -3557,6 +4379,14 @@ pub fn benchmark_suite_with_options(
             .collect();
         let expected_file_recall =
             recall(expected_files_found_for_task.len(), expected_files_for_task);
+        let first_correct_file = first_correct_file(&selected_files, &task_expected_files);
+        let first_correct_file_hit = first_correct_file.is_some();
+        if expected_files_for_task > 0 {
+            first_correct_file_tasks += 1;
+            if first_correct_file_hit {
+                first_correct_file_hits += 1;
+            }
+        }
         let miss_reasons =
             miss_reasons_for(index, &expected_files_missing, &selected_files, &benchmark);
 
@@ -3595,6 +4425,9 @@ pub fn benchmark_suite_with_options(
             selected_files,
             expected_files_found: expected_files_found_for_task,
             expected_files_missing,
+            first_correct_file_hit,
+            first_correct_file: first_correct_file.as_ref().map(|(file, _)| file.clone()),
+            first_correct_file_rank: first_correct_file.map(|(_, rank)| rank),
             miss_reasons,
             expected_file_recall,
             benchmark,
@@ -3611,6 +4444,9 @@ pub fn benchmark_suite_with_options(
         expected_files_found: total_expected_files_found,
         missed_expected_files: total_expected_files.saturating_sub(total_expected_files_found),
         expected_file_recall: recall(total_expected_files_found, total_expected_files),
+        first_correct_file_hits,
+        first_correct_file_tasks,
+        first_correct_file_rate_at_k: recall(first_correct_file_hits, first_correct_file_tasks),
         baseline_context_payload_tokens_estimate: total_baseline_context_payload_tokens,
         callsieve_context_payload_tokens_estimate: total_callsieve_context_payload_tokens,
         context_payload_reduction: context_payload_reduction(
@@ -3656,6 +4492,8 @@ pub fn eval_retrieval(
         ContextViewOptions {
             profile: ContextProfile::Full,
             token_budget: None,
+            include_git: false,
+            include_call_paths: false,
         },
     )
 }
@@ -3675,6 +4513,8 @@ pub fn eval_retrieval_with_options(
     let mut total_critical_files = 0;
     let mut total_critical_files_found = 0;
     let mut total_selected_tokens = 0;
+    let mut first_correct_file_hits = 0;
+    let mut first_correct_file_tasks = 0;
 
     for task in suite.tasks {
         let BenchmarkSuiteTaskInput {
@@ -3721,6 +4561,8 @@ pub fn eval_retrieval_with_options(
             .filter(|file| !selected_set.contains(file.as_str()))
             .cloned()
             .collect();
+        let first_correct_file = first_correct_file(&selected_files, &expected_files);
+        let first_correct_file_hit = first_correct_file.is_some();
         let enforced_missing = if critical_files.is_empty() {
             &expected_files_missing
         } else {
@@ -3747,6 +4589,12 @@ pub fn eval_retrieval_with_options(
         total_critical_files += critical_files.len();
         total_critical_files_found += critical_files_found.len();
         total_selected_tokens += selected_tokens;
+        if !expected_files.is_empty() {
+            first_correct_file_tasks += 1;
+            if first_correct_file_hit {
+                first_correct_file_hits += 1;
+            }
+        }
 
         task_outputs.push(EvalRetrievalTaskOutput {
             id,
@@ -3759,6 +4607,9 @@ pub fn eval_retrieval_with_options(
             expected_files_missing,
             critical_files_found,
             critical_files_missing,
+            first_correct_file_hit,
+            first_correct_file: first_correct_file.as_ref().map(|(file, _)| file.clone()),
+            first_correct_file_rank: first_correct_file.map(|(_, rank)| rank),
             recall_at_k: recall(
                 expected_files
                     .iter()
@@ -3803,6 +4654,9 @@ pub fn eval_retrieval_with_options(
         expected_files_found: total_expected_files_found,
         missed_expected_files: total_expected_files.saturating_sub(total_expected_files_found),
         recall_at_k: recall(total_expected_files_found, total_expected_files),
+        first_correct_file_hits,
+        first_correct_file_tasks,
+        first_correct_file_rate_at_k: recall(first_correct_file_hits, first_correct_file_tasks),
         critical_files: total_critical_files,
         critical_files_found: total_critical_files_found,
         missed_critical_files: total_critical_files.saturating_sub(total_critical_files_found),
@@ -3948,6 +4802,8 @@ pub fn benchmark_report(
     let mut total_tasks = 0;
     let mut total_expected_files = 0;
     let mut total_expected_files_found = 0;
+    let mut total_first_correct_file_hits = 0;
+    let mut total_first_correct_file_tasks = 0;
     let mut total_estimated_token_savings = 0;
     let mut total_baseline_context_payload_tokens = 0;
     let mut total_callsieve_context_payload_tokens = 0;
@@ -3965,6 +4821,8 @@ pub fn benchmark_report(
         let mut repo_task_count = 0;
         let mut repo_expected_files = 0;
         let mut repo_expected_files_found = 0;
+        let mut repo_first_correct_file_hits = 0;
+        let mut repo_first_correct_file_tasks = 0;
         let mut repo_estimated_token_savings = 0;
         let mut repo_baseline_context_payload_tokens = 0;
         let mut repo_callsieve_context_payload_tokens = 0;
@@ -3989,6 +4847,8 @@ pub fn benchmark_report(
             repo_task_count += output.summary.task_count;
             repo_expected_files += output.summary.expected_files;
             repo_expected_files_found += output.summary.expected_files_found;
+            repo_first_correct_file_hits += output.summary.first_correct_file_hits;
+            repo_first_correct_file_tasks += output.summary.first_correct_file_tasks;
             repo_estimated_token_savings += output.summary.total_estimated_token_savings;
             repo_baseline_context_payload_tokens +=
                 output.summary.baseline_context_payload_tokens_estimate;
@@ -4016,6 +4876,8 @@ pub fn benchmark_report(
         total_tasks += repo_task_count;
         total_expected_files += repo_expected_files;
         total_expected_files_found += repo_expected_files_found;
+        total_first_correct_file_hits += repo_first_correct_file_hits;
+        total_first_correct_file_tasks += repo_first_correct_file_tasks;
         total_estimated_token_savings += repo_estimated_token_savings;
         total_baseline_context_payload_tokens += repo_baseline_context_payload_tokens;
         total_callsieve_context_payload_tokens += repo_callsieve_context_payload_tokens;
@@ -4072,6 +4934,12 @@ pub fn benchmark_report(
             expected_files: repo_expected_files,
             expected_files_found: repo_expected_files_found,
             missed_expected_files: repo_expected_files.saturating_sub(repo_expected_files_found),
+            first_correct_file_hits: repo_first_correct_file_hits,
+            first_correct_file_tasks: repo_first_correct_file_tasks,
+            first_correct_file_rate_at_k: recall(
+                repo_first_correct_file_hits,
+                repo_first_correct_file_tasks,
+            ),
             baseline_context_payload_tokens_estimate: repo_baseline_context_payload_tokens,
             callsieve_context_payload_tokens_estimate: repo_callsieve_context_payload_tokens,
             context_payload_reduction: context_payload_reduction(
@@ -4095,6 +4963,12 @@ pub fn benchmark_report(
         expected_files_found: total_expected_files_found,
         missed_expected_files: total_expected_files.saturating_sub(total_expected_files_found),
         expected_file_recall: recall(total_expected_files_found, total_expected_files),
+        first_correct_file_hits: total_first_correct_file_hits,
+        first_correct_file_tasks: total_first_correct_file_tasks,
+        first_correct_file_rate_at_k: recall(
+            total_first_correct_file_hits,
+            total_first_correct_file_tasks,
+        ),
         baseline_context_payload_tokens_estimate: total_baseline_context_payload_tokens,
         callsieve_context_payload_tokens_estimate: total_callsieve_context_payload_tokens,
         context_payload_reduction: context_payload_reduction(
@@ -6053,6 +6927,21 @@ fn recall(found: usize, total: usize) -> f64 {
     }
 }
 
+fn first_correct_file(
+    selected_files: &[String],
+    expected_files: &[String],
+) -> Option<(String, usize)> {
+    if expected_files.is_empty() {
+        return None;
+    }
+    let expected: BTreeSet<&str> = expected_files.iter().map(String::as_str).collect();
+    selected_files.iter().enumerate().find_map(|(index, file)| {
+        expected
+            .contains(file.as_str())
+            .then(|| (file.clone(), index + 1))
+    })
+}
+
 fn observed_session_output(observed: ObservedSessionComparison) -> ObservedSessionOutput {
     let token_savings = observed.baseline.tokens as isize - observed.callsieve.tokens as isize;
     let token_reduction_percent = if observed.baseline.tokens == 0 {
@@ -6300,6 +7189,8 @@ fn snippet_from_lines(lines: &[&str], symbol: Option<&SymbolRecord>) -> Option<S
     Some(Snippet {
         lines: [start, end],
         text,
+        truncated: false,
+        omitted_lines: None,
     })
 }
 
@@ -6332,6 +7223,82 @@ fn context_snippets(
     }
 
     snippets
+}
+
+fn focused_symbol_snippets(
+    root: &Path,
+    file: &FileRecord,
+    symbols: &[&SymbolRecord],
+    snippets_per_symbol: usize,
+) -> Vec<Snippet> {
+    if snippets_per_symbol == 0 {
+        return Vec::new();
+    }
+
+    let Ok(content) = fs::read_to_string(root.join(&file.path)) else {
+        return Vec::new();
+    };
+    let lines: Vec<&str> = content.lines().collect();
+    symbols
+        .iter()
+        .take(snippets_per_symbol)
+        .filter_map(|symbol| focused_symbol_snippet_from_lines(&lines, symbol))
+        .collect()
+}
+
+fn focused_symbol_snippet_from_lines(lines: &[&str], symbol: &SymbolRecord) -> Option<Snippet> {
+    if lines.is_empty() {
+        return None;
+    }
+    let start = symbol.start_line.max(1).min(lines.len());
+    let symbol_end = symbol.end_line.max(start).min(lines.len());
+    let capped_end = (start + MAX_FOCUS_SYMBOL_SNIPPET_LINES - 1)
+        .min(symbol_end)
+        .max(start);
+    let truncated = capped_end < symbol_end;
+    let text = lines[start - 1..capped_end].join("\n");
+    Some(Snippet {
+        lines: [start, capped_end],
+        text,
+        truncated,
+        omitted_lines: truncated.then_some(symbol_end - capped_end),
+    })
+}
+
+#[derive(Clone, Copy)]
+enum FocusEdgeKind {
+    Calls,
+    References,
+    CalledBy,
+}
+
+fn focus_edges_for_symbols(
+    lookup: &IndexLookup<'_>,
+    symbols: &[&SymbolRecord],
+    kind: FocusEdgeKind,
+) -> Vec<FocusEdge> {
+    symbols
+        .iter()
+        .flat_map(|symbol| {
+            let edges = match kind {
+                FocusEdgeKind::Calls => calls_from_symbol(lookup, symbol),
+                FocusEdgeKind::References => references_from_symbol(lookup, symbol),
+                FocusEdgeKind::CalledBy => called_by_symbol(lookup, symbol),
+            };
+            edges.into_iter().map(focus_edge_from_reference)
+        })
+        .take(MAX_FOCUS_GRAPH_EDGES)
+        .collect()
+}
+
+fn focus_edge_from_reference(edge: ReferenceEdge) -> FocusEdge {
+    FocusEdge {
+        file: edge.file,
+        symbol: edge.symbol,
+        target: edge.target,
+        target_file: edge.target_file,
+        line: edge.line,
+    }
 }
 
 fn related_tests(lookup: &IndexLookup<'_>, file: &FileRecord) -> Vec<RelatedTest> {
@@ -6930,6 +7897,7 @@ mod tests {
             "fix relative location header",
             &mut natural_candidates,
             5,
+            &natural_tokens,
             HybridOptions::with_embedder(true, &embedder),
         )
         .unwrap();
@@ -6960,6 +7928,7 @@ mod tests {
             "fix RelativeLocationHeader",
             &mut identifier_candidates,
             5,
+            &identifier_tokens,
             HybridOptions::with_embedder(true, &embedder),
         )
         .unwrap();
@@ -7006,6 +7975,7 @@ mod tests {
                 "fix relative location header",
                 candidates,
                 5,
+                &tokens,
                 HybridOptions::with_embedder(true, &embedder),
             )
             .unwrap();
@@ -7095,12 +8065,14 @@ mod tests {
         let mut candidates = vec![ContextCandidate::new("lex".to_string(), 100, 0)];
 
         // "relative" makes FakeEmbedder return [0,1] -> close to "sem".
+        let task = "relative redirect handling";
         add_semantic_candidates(
             temp.path(),
             &index,
-            "relative redirect handling",
+            task,
             &mut candidates,
             5,
+            &ranker::query_tokens(task),
             HybridOptions::with_embedder(true, &embedder),
         )
         .unwrap();
@@ -7150,12 +8122,14 @@ mod tests {
 
         let mut candidates = vec![ContextCandidate::new("lex".to_string(), 100, 0)];
         // Default options have embeddings off -> deterministic lexical behavior.
+        let task = "relative redirect handling";
         add_semantic_candidates(
             temp.path(),
             &index,
-            "relative redirect handling",
+            task,
             &mut candidates,
             5,
+            &ranker::query_tokens(task),
             HybridOptions::default(),
         )
         .unwrap();
@@ -7469,6 +8443,372 @@ mod tests {
                 .referenced_by
                 .contains(&"src/auth/session.test.ts".to_string())
         );
+    }
+
+    #[test]
+    fn skim_context_can_surface_compact_call_paths_when_enabled() {
+        let (temp, index) = fixture_index();
+        let output = build_context(
+            temp.path(),
+            &index,
+            "change createSession behavior",
+            8,
+            2,
+            false,
+        )
+        .unwrap();
+        let value = context_value(
+            &output,
+            ContextViewOptions {
+                profile: ContextProfile::Skim,
+                token_budget: Some(DEFAULT_AGENT_CONTEXT_TOKEN_BUDGET),
+                include_git: false,
+                include_call_paths: true,
+            },
+        )
+        .unwrap();
+        let session_file = value["read_first"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|file| file["f"] == "src/auth/session.ts")
+            .unwrap();
+
+        assert!(session_file.get("snippets").is_none());
+        assert!(session_file.get("file").is_none());
+        assert!(session_file.get("call_paths").is_none());
+        let calls = session_file["cp"]["c"].as_array().unwrap();
+        assert!(calls.len() <= MAX_SKIM_CALL_PATHS_PER_DIRECTION);
+        assert!(
+            calls
+                .iter()
+                .any(|edge| { edge["t"] == "tokenFor" && edge["f"] == "src/auth/token.ts" })
+        );
+        let called_by = session_file["cp"]["by"].as_array().unwrap();
+        assert!(called_by.len() <= MAX_SKIM_CALL_PATHS_PER_DIRECTION);
+        assert!(called_by.iter().any(|edge| {
+            edge["t"] == "createSession" && edge["f"] == "src/auth/session.test.ts"
+        }));
+    }
+
+    #[test]
+    fn skim_context_drops_redundant_keyword_reasons() {
+        let reasons = vec![
+            "symbol name keyword cluster: graph, hints".to_string(),
+            "keyword overlap: graph, hints".to_string(),
+            "test companion: tests/cli.rs".to_string(),
+        ];
+
+        assert_eq!(
+            compact_why_for_value(&reasons),
+            vec!["sy:graph, hints".to_string()]
+        );
+    }
+
+    #[test]
+    fn skim_context_uses_short_reason_codes() {
+        assert_eq!(
+            compact_reason_for_value("exact symbol match: createSession"),
+            "sym:createSession"
+        );
+        assert_eq!(
+            compact_reason_for_value("content keyword overlap: token, budget"),
+            "ct:token, budget"
+        );
+        assert_eq!(
+            compact_reason_for_value("path keyword overlap: agent, cli"),
+            "pt:agent, cli"
+        );
+        assert_eq!(
+            compact_reason_for_value("test companion: tests/cli.rs"),
+            "test:tests/cli.rs"
+        );
+    }
+
+    #[test]
+    fn skim_context_uses_short_risk_codes() {
+        assert_eq!(compact_risk_for_value("low"), "l");
+        assert_eq!(compact_risk_for_value("medium"), "m");
+        assert_eq!(compact_risk_for_value("high"), "h");
+        assert_eq!(compact_risk_for_value("unknown"), "unknown");
+    }
+
+    #[test]
+    fn skim_context_uses_short_symbol_kind_codes() {
+        let constant = vec![QuerySymbol {
+            name: "MAX_SKIM_SYMBOLS_PER_FILE".to_string(),
+            kind: "constant".to_string(),
+            lines: [37, 37],
+            visibility: "private".to_string(),
+            signature: "const MAX_SKIM_SYMBOLS_PER_FILE: usize = 1;".to_string(),
+        }];
+        let class = vec![QuerySymbol {
+            name: "Session".to_string(),
+            kind: "class".to_string(),
+            lines: [3, 9],
+            visibility: "exported".to_string(),
+            signature: "export class Session".to_string(),
+        }];
+        let function = vec![QuerySymbol {
+            name: "createSession".to_string(),
+            kind: "function".to_string(),
+            lines: [12, 48],
+            visibility: "exported".to_string(),
+            signature: "export function createSession".to_string(),
+        }];
+
+        assert_eq!(
+            compact_symbols_for_value(&constant),
+            vec![json!(["MAX_SKIM_SYMBOLS_PER_FILE", 37, "c"])]
+        );
+        assert_eq!(
+            compact_symbols_for_value(&class),
+            vec![json!(["Session", 3, "cl"])]
+        );
+        assert_eq!(
+            compact_symbols_for_value(&function),
+            vec![json!(["createSession", 12])]
+        );
+    }
+
+    #[test]
+    fn skim_context_uses_short_selection_signal_codes() {
+        let components = vec![
+            SelectionScoreComponent {
+                name: "symbol_name_keyword_cluster".to_string(),
+                points: 420,
+            },
+            SelectionScoreComponent {
+                name: "competitive_positioning_doc".to_string(),
+                points: 760,
+            },
+        ];
+
+        assert_eq!(
+            compact_selection_score_components_for_value(&components),
+            vec![json!("sy"), json!("comp")]
+        );
+    }
+
+    #[test]
+    fn skim_context_uses_read_first_indexes_for_selection_files() {
+        let summary = ContextSelectionSummary {
+            top_file: Some("src/auth/session.ts".to_string()),
+            top_score: Some(140),
+            top_reason: Some("exact symbol match: createSession".to_string()),
+            top_signals: Vec::new(),
+            next_files: vec![SelectionSummaryFile {
+                file: "src/auth/session.test.ts".to_string(),
+                score: 92,
+                reason: Some("test companion: src/auth/session.test.ts".to_string()),
+            }],
+        };
+        let path_indexes = BTreeMap::from([
+            ("src/auth/session.ts", 0usize),
+            ("src/auth/session.test.ts", 2usize),
+        ]);
+
+        assert_eq!(
+            compact_selection_summary_for_value(&summary, &path_indexes),
+            json!({
+                "top": [0, "sym:createSession"],
+                "next": [[2, "test:src/auth/session.test.ts"]]
+            })
+        );
+        assert_eq!(
+            compact_selection_summary_for_value(&summary, &BTreeMap::new()),
+            json!({
+                "top": ["src/auth/session.ts", 140, "sym:createSession"],
+                "next": [["src/auth/session.test.ts", 92, "test:src/auth/session.test.ts"]]
+            })
+        );
+    }
+
+    #[test]
+    fn selection_summary_trim_preserves_indexed_next_files() {
+        let mut value = json!({
+            "read_first": [
+                {"f": "src/auth/session.ts"},
+                {"f": "src/auth/session.test.ts"}
+            ],
+            "sel": {
+                "next": [
+                    [1, "test:src/auth/session.test.ts"],
+                    [2, "missing"],
+                    ["src/auth/session.test.ts", 92, "test:path"],
+                    ["src/auth/missing.ts", 91, "missing:path"]
+                ]
+            }
+        });
+
+        trim_selection_summary_to_read_first(&mut value);
+
+        assert_eq!(
+            value["sel"]["next"],
+            json!([
+                [1, "test:src/auth/session.test.ts"],
+                ["src/auth/session.test.ts", 92, "test:path"]
+            ])
+        );
+    }
+
+    #[test]
+    fn skim_context_uses_read_first_indexes_for_impact_tests() {
+        let file = ContextFile {
+            rank: 1,
+            score: 42,
+            file: "src/auth/session.ts".to_string(),
+            language: Language::TypeScript,
+            symbols: Vec::new(),
+            snippets: Vec::new(),
+            imports: vec!["src/auth/token.ts".to_string()],
+            referenced_by: Vec::new(),
+            blast_radius: BlastRadius {
+                imports: Vec::new(),
+                referenced_by: Vec::new(),
+                tests: vec!["src/auth/session.test.ts".to_string()],
+                calls: Vec::new(),
+                called_by: Vec::new(),
+                risk: "medium".to_string(),
+            },
+            calls: Vec::new(),
+            called_by: Vec::new(),
+            related_tests: Vec::new(),
+            ownership: None,
+            git: None,
+            why: Vec::new(),
+            why_debug: Vec::new(),
+        };
+        let path_indexes = BTreeMap::from([
+            ("src/auth/session.ts", 0usize),
+            ("src/auth/session.test.ts", 2usize),
+        ]);
+
+        assert_eq!(
+            compact_impact_for_value(&file, &path_indexes),
+            json!(["m", 2, 1])
+        );
+    }
+
+    #[test]
+    fn skim_context_graph_hints_are_non_test_previews() {
+        let file = ContextFile {
+            rank: 1,
+            score: 42,
+            file: "src/auth/session.ts".to_string(),
+            language: Language::TypeScript,
+            symbols: Vec::new(),
+            snippets: Vec::new(),
+            imports: Vec::new(),
+            referenced_by: Vec::new(),
+            blast_radius: BlastRadius {
+                imports: vec![
+                    "src/auth/token.ts".to_string(),
+                    "src/auth/util.ts".to_string(),
+                ],
+                referenced_by: vec![
+                    "editors/vscode/test/suite/index.ts".to_string(),
+                    "src/auth/caller.ts".to_string(),
+                    "src/auth/session.spec.ts".to_string(),
+                    "src/auth/session.test.ts".to_string(),
+                ],
+                tests: Vec::new(),
+                calls: Vec::new(),
+                called_by: Vec::new(),
+                risk: "medium".to_string(),
+            },
+            calls: Vec::new(),
+            called_by: Vec::new(),
+            related_tests: vec![RelatedTest {
+                file: "src/auth/session.test.ts".to_string(),
+                symbols: Vec::new(),
+            }],
+            ownership: None,
+            git: None,
+            why: Vec::new(),
+            why_debug: Vec::new(),
+        };
+
+        let graph = compact_graph_hints_for_value(&file).unwrap();
+        assert_eq!(graph["u"].as_array().unwrap().len(), 1);
+        assert_eq!(graph["u"][0], "src/auth/token.ts");
+        assert_eq!(graph["d"].as_array().unwrap().len(), 1);
+        assert_eq!(graph["d"][0], "src/auth/caller.ts");
+    }
+
+    #[test]
+    fn skim_context_uses_short_git_keys() {
+        let file = ContextFile {
+            rank: 1,
+            score: 42,
+            file: "src/lib.rs".to_string(),
+            language: Language::Rust,
+            symbols: Vec::new(),
+            snippets: Vec::new(),
+            imports: Vec::new(),
+            referenced_by: Vec::new(),
+            blast_radius: BlastRadius {
+                imports: Vec::new(),
+                referenced_by: Vec::new(),
+                tests: Vec::new(),
+                calls: Vec::new(),
+                called_by: Vec::new(),
+                risk: "low".to_string(),
+            },
+            calls: Vec::new(),
+            called_by: Vec::new(),
+            related_tests: Vec::new(),
+            ownership: None,
+            git: Some(crate::indexer::git::GitSignal {
+                last_modified_unix: 1234,
+                commits_30d: 2,
+                commits_90d: 7,
+                distinct_authors_90d: 3,
+                churn_90d: 99,
+            }),
+            why: Vec::new(),
+            why_debug: Vec::new(),
+        };
+
+        let git = compact_git_for_value(&file).unwrap();
+
+        assert_eq!(git["lm"], 1234);
+        assert_eq!(git["c90"], 7);
+        assert_eq!(git["a90"], 3);
+        assert!(git.get("last_modified_unix").is_none());
+        assert!(git.get("commits_90d").is_none());
+        assert!(git.get("authors_90d").is_none());
+
+        let context = ContextOutput {
+            task: "inspect git hints".to_string(),
+            root: ".".to_string(),
+            retrieval_cost: zero_token_retrieval_cost(),
+            selection_summary: ContextSelectionSummary {
+                top_file: None,
+                top_score: None,
+                top_reason: None,
+                top_signals: Vec::new(),
+                next_files: Vec::new(),
+            },
+            read_first: vec![file],
+            stats: ContextStats {
+                candidate_matches: 1,
+                selected_files: 1,
+                selected_symbols: 0,
+                related_tests: 0,
+                local_work: LocalWorkStats {
+                    indexed_files: 1,
+                    indexed_symbols: 0,
+                    indexed_references: 0,
+                },
+            },
+            timing: TimingStats::default(),
+            warnings: Vec::new(),
+        };
+        let default = skim_context_value(&context, false, false);
+        assert!(default["read_first"][0].get("git").is_none());
+        let opt_in = skim_context_value(&context, true, false);
+        assert_eq!(opt_in["read_first"][0]["git"]["lm"], 1234);
     }
 
     #[test]
@@ -7907,6 +9247,15 @@ mod tests {
         assert_eq!(output.summary.expected_file_recall, 1.0);
         assert_eq!(output.summary.tasks_with_all_expected_files, 1);
         assert_eq!(output.summary.tasks_with_misses, 0);
+        assert_eq!(output.summary.first_correct_file_hits, 1);
+        assert_eq!(output.summary.first_correct_file_tasks, 1);
+        assert_eq!(output.summary.first_correct_file_rate_at_k, 1.0);
+        assert!(output.tasks[0].first_correct_file_hit);
+        assert_eq!(
+            output.tasks[0].first_correct_file.as_deref(),
+            Some("src/auth/session.ts")
+        );
+        assert_eq!(output.tasks[0].first_correct_file_rank, Some(1));
         assert_eq!(
             output.summary.context_payload_reduction.label,
             "context_payload_reduction"
