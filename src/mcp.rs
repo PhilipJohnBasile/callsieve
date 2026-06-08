@@ -1,6 +1,6 @@
 use std::{
     io::{self, BufRead, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -106,7 +106,7 @@ fn tools_list_result() -> Value {
                         "limit": {
                             "type": "integer",
                             "minimum": 1,
-                            "default": 8
+                            "default": query::DEFAULT_AGENT_CONTEXT_LIMIT
                         },
                         "snippets_per_file": {
                             "type": "integer",
@@ -156,13 +156,32 @@ fn tools_list_result() -> Value {
             },
             {
                 "name": "callsieve_focus",
-                "description": "Return targeted symbols and snippets for one indexed file selected by CallSieve.",
+                "description": "Return targeted symbols, bounded code-unit snippets, compact caller/callee edges, and related tests for one indexed file selected by CallSieve. Pass symbol and line to inspect the exact selected code unit before reading the whole file. Set references true only when non-call reference edges are needed.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "path": {"type": "string"},
-                        "file": {"type": "string"},
-                        "symbol": {"type": "string"},
+                        "path": {
+                            "type": "string",
+                            "description": "Repository root containing .callsieve/index.json."
+                        },
+                        "file": {
+                            "type": "string",
+                            "description": "Indexed file path returned by callsieve_context."
+                        },
+                        "symbol": {
+                            "type": "string",
+                            "description": "Optional symbol name from read_first[].sy[0][0] for skim packets, or from symbols[].name in normal/full packets."
+                        },
+                        "line": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "description": "Optional 1-based line from read_first[].sy[0][1] for skim packets, or symbol line fields in normal/full packets."
+                        },
+                        "references": {
+                            "type": "boolean",
+                            "default": false,
+                            "description": "Include non-call reference edges. Omitted by default to keep focus packets compact."
+                        },
                         "snippets_per_symbol": {
                             "type": "integer",
                             "minimum": 0,
@@ -328,7 +347,7 @@ fn execute_context(arguments: &Value) -> Result<Value> {
     let total_start = Instant::now();
     let path = repo_path(arguments)?;
     let task = required_str(arguments, "task")?;
-    let limit = optional_usize(arguments, "limit", 8)?;
+    let limit = optional_usize(arguments, "limit", query::DEFAULT_AGENT_CONTEXT_LIMIT)?;
     let snippets_per_file = optional_usize(arguments, "snippets_per_file", 0)?;
     let include_snippets = !optional_bool(arguments, "no_snippets", false)?;
     let profile = optional_context_profile(arguments, "profile", query::ContextProfile::Skim)?;
@@ -384,9 +403,15 @@ fn execute_context(arguments: &Value) -> Result<Value> {
         query::ContextViewOptions {
             profile,
             token_budget: Some(token_budget),
+            include_git: false,
+            include_call_paths: false,
         },
     )?;
     if let Some(object) = value.as_object_mut() {
+        object.insert(
+            "instruction".to_string(),
+            mcp_context_instruction(&path, &output),
+        );
         object.insert(
             "freshness".to_string(),
             json!({
@@ -427,8 +452,250 @@ fn execute_context(arguments: &Value) -> Result<Value> {
             }),
         );
     }
+    apply_mcp_context_envelope_budget(&mut value, Some(token_budget))?;
 
     Ok(value)
+}
+
+fn apply_mcp_context_envelope_budget(value: &mut Value, token_budget: Option<usize>) -> Result<()> {
+    let Some(token_budget) = token_budget else {
+        return Ok(());
+    };
+
+    if query::value_estimated_tokens(value)? > token_budget {
+        trim_mcp_expansion_fields(value, &["inspect_next_files"]);
+    }
+    if query::value_estimated_tokens(value)? > token_budget {
+        trim_mcp_expansion_fields(
+            value,
+            &["grep_fallback", "expand_relationships", "inspect_tests"],
+        );
+    }
+    if query::value_estimated_tokens(value)? > token_budget {
+        trim_mcp_graph_hints(value);
+        refresh_mcp_context_stats(value)?;
+    }
+    while query::value_estimated_tokens(value)? > token_budget {
+        let dropped = {
+            let Some(files) = value.get_mut("read_first").and_then(Value::as_array_mut) else {
+                return Ok(());
+            };
+            if files.len() <= 1 {
+                false
+            } else {
+                files.pop();
+                true
+            }
+        };
+        if !dropped {
+            break;
+        }
+        refresh_mcp_context_stats(value)?;
+    }
+    if query::value_estimated_tokens(value)? > token_budget {
+        trim_mcp_expansion_fields(value, &["inspect_top_file"]);
+    }
+    if query::value_estimated_tokens(value)? > token_budget {
+        trim_mcp_retrieval_note(value)?;
+    }
+
+    Ok(())
+}
+
+fn trim_mcp_expansion_fields(value: &mut Value, fields: &[&str]) {
+    if let Some(expansion) = value
+        .get_mut("instruction")
+        .and_then(instruction_expansion_mut)
+        .and_then(Value::as_object_mut)
+    {
+        for field in fields {
+            for alias in expansion_field_aliases(field) {
+                expansion.remove(*alias);
+            }
+        }
+    }
+}
+
+fn instruction_expansion(instruction: &Value) -> Option<&Value> {
+    instruction
+        .get("x")
+        .or_else(|| instruction.get("local_first_expansion"))
+}
+
+fn instruction_expansion_mut(instruction: &mut Value) -> Option<&mut Value> {
+    if instruction.get("x").is_some() {
+        instruction.get_mut("x")
+    } else {
+        instruction.get_mut("local_first_expansion")
+    }
+}
+
+fn expansion_field_aliases(field: &str) -> &'static [&'static str] {
+    match field {
+        "inspect_top_file" | "top" | "o" => &["inspect_top_file", "top", "o"],
+        "inspect_next_files" | "next" | "n" => &["inspect_next_files", "next", "n"],
+        "expand_relationships" | "rel" | "r" => &["expand_relationships", "rel", "r"],
+        "inspect_tests" | "tests" | "t" => &["inspect_tests", "tests", "t"],
+        "grep_fallback" | "grep" => &["grep_fallback", "grep"],
+        _ => &[],
+    }
+}
+
+fn trim_mcp_graph_hints(value: &mut Value) {
+    let Some(files) = value.get_mut("read_first").and_then(Value::as_array_mut) else {
+        return;
+    };
+    for file in files {
+        if let Some(file) = file.as_object_mut() {
+            file.remove("g");
+            file.remove("cp");
+            file.remove("graph_hints");
+            file.remove("call_paths");
+        }
+    }
+}
+
+fn refresh_mcp_context_stats(value: &mut Value) -> Result<()> {
+    query::trim_selection_summary_to_read_first(value);
+    let (selected_files, selected_symbols, related_tests) = value
+        .get("read_first")
+        .and_then(Value::as_array)
+        .map(|files| {
+            let selected_symbols = files
+                .iter()
+                .filter_map(|file| {
+                    file.get("sy")
+                        .or_else(|| file.get("symbols"))
+                        .and_then(Value::as_array)
+                })
+                .map(Vec::len)
+                .sum::<usize>();
+            let related_tests = files
+                .iter()
+                .map(|file| {
+                    file.get("related_tests")
+                        .and_then(Value::as_array)
+                        .map(Vec::len)
+                        .or_else(|| {
+                            file.get("i")
+                                .or_else(|| file.get("impact"))
+                                .and_then(compact_or_legacy_impact_tests_len)
+                        })
+                        .unwrap_or_default()
+                })
+                .sum::<usize>();
+            (files.len(), selected_symbols, related_tests)
+        })
+        .unwrap_or_default();
+
+    if let Some(stats) = value.get_mut("stats").and_then(Value::as_object_mut) {
+        if stats.contains_key("tokens") || stats.contains_key("local") {
+            stats.remove("tokens");
+            stats.remove("t");
+        } else {
+            stats.insert("selected_files".to_string(), json!(selected_files));
+            stats.insert("selected_symbols".to_string(), json!(selected_symbols));
+            stats.insert("related_tests".to_string(), json!(related_tests));
+            stats.remove("estimated_tokens");
+        }
+    }
+    let estimated_tokens = query::value_estimated_tokens(value)?;
+    if let Some(stats) = value.get_mut("stats").and_then(Value::as_object_mut) {
+        if stats.contains_key("local") {
+            stats.insert("t".to_string(), json!(estimated_tokens));
+        } else {
+            stats.insert("estimated_tokens".to_string(), json!(estimated_tokens));
+        }
+    }
+    Ok(())
+}
+
+fn compact_or_legacy_impact_tests_len(impact: &Value) -> Option<usize> {
+    if let Some(tests) = impact.get("t").or_else(|| impact.get("tests")) {
+        return tests
+            .as_array()
+            .map(Vec::len)
+            .or_else(|| tests.as_str().map(|_| 1));
+    }
+    let items = impact.as_array()?;
+    let test_value = items.get(1)?;
+    if test_value.is_string() {
+        Some(1)
+    } else {
+        test_value.as_array().map(Vec::len)
+    }
+}
+
+fn trim_mcp_retrieval_note(value: &mut Value) -> Result<()> {
+    if let Some(retrieval_cost) = value
+        .get_mut("retrieval_cost")
+        .and_then(Value::as_object_mut)
+    {
+        retrieval_cost.remove("note");
+        refresh_mcp_context_stats(value)?;
+    }
+    Ok(())
+}
+
+fn mcp_context_instruction(path: &Path, context: &query::ContextOutput) -> Value {
+    let path = path.display().to_string();
+    let targets = query::context_read_first_targets(context);
+    let top_target = targets.first();
+    let tool_call_for_file = |tool: &str, file: &str| {
+        json!({
+            "tool": tool,
+            "arguments": {
+                "path": path.clone(),
+                "file": file
+            }
+        })
+    };
+    let focus_tool_call_for_target = |target: &query::FocusTarget| {
+        let mut arguments = json!({
+            "path": path.clone(),
+            "file": target.file.clone()
+        });
+        if let Some(arguments) = arguments.as_object_mut() {
+            if let Some(symbol) = target.symbol.as_deref() {
+                arguments.insert("symbol".to_string(), json!(symbol));
+            }
+            if let Some(line) = target.line {
+                arguments.insert("line".to_string(), json!(line));
+            }
+        }
+        json!({
+            "tool": "callsieve_focus",
+            "arguments": arguments
+        })
+    };
+    let tool_call_for_top_code_file = |tool: &str| {
+        top_target
+            .filter(|target| target.is_code)
+            .map(|target| tool_call_for_file(tool, &target.file))
+    };
+    let inspect_next_files = targets
+        .iter()
+        .skip(1)
+        .take(1)
+        .map(focus_tool_call_for_target)
+        .collect::<Vec<_>>();
+
+    let mut expansion = serde_json::Map::new();
+    if let Some(top_target) = top_target {
+        expansion.insert("o".to_string(), focus_tool_call_for_target(top_target));
+    }
+    if !inspect_next_files.is_empty() {
+        expansion.insert("next".to_string(), json!(inspect_next_files));
+    }
+    if let Some(expand_relationships) = tool_call_for_top_code_file("callsieve_related") {
+        expansion.insert("rel".to_string(), expand_relationships);
+    }
+    if let Some(inspect_tests) = tool_call_for_top_code_file("callsieve_tests") {
+        expansion.insert("tests".to_string(), inspect_tests);
+    }
+    json!({
+        "x": expansion
+    })
 }
 
 fn execute_symbol(arguments: &Value) -> Result<Value> {
@@ -445,9 +712,19 @@ fn execute_focus(arguments: &Value) -> Result<Value> {
     let path = repo_path(arguments)?;
     let file = required_str(arguments, "file")?;
     let symbol = arguments.get("symbol").and_then(Value::as_str);
+    let line = optional_usize_opt(arguments, "line")?;
+    let include_references = optional_bool(arguments, "references", false)?;
     let snippets_per_symbol = optional_usize(arguments, "snippets_per_symbol", 1)?;
     let index = store::json_store::load_index(&path)?;
-    let output = query::focus_file(&path, &index, file, symbol, snippets_per_symbol)?;
+    let output = query::focus_file(
+        &path,
+        &index,
+        file,
+        symbol,
+        line,
+        include_references,
+        snippets_per_symbol,
+    )?;
 
     Ok(serde_json::to_value(output)?)
 }
@@ -517,6 +794,8 @@ fn execute_benchmark(arguments: &Value) -> Result<Value> {
         query::ContextViewOptions {
             profile,
             token_budget,
+            include_git: false,
+            include_call_paths: false,
         },
     )?;
 
@@ -631,16 +910,25 @@ fn tool_text_summary(value: &Value) -> String {
     if let Some(files) = value.get("read_first").and_then(Value::as_array) {
         let names = files
             .iter()
-            .filter_map(|file| file.get("file").and_then(Value::as_str))
-            .take(5)
+            .filter_map(|file| {
+                file.get("f")
+                    .or_else(|| file.get("file"))
+                    .and_then(Value::as_str)
+            })
+            .take(3)
             .collect::<Vec<_>>();
         let count = files.len();
+        let packet = packet_token_summary(value);
+        let next = next_local_tools_summary(value);
         if names.is_empty() {
-            return "CallSieve used zero AI model tokens for retrieval and selected no read-first files. See structuredContent.".to_string();
+            return format!(
+                "CallSieve used zero retrieval-model tokens{packet}; selected no read-first files. {next}Details in structuredContent."
+            );
         }
         return format!(
-            "CallSieve used zero AI model tokens for retrieval and selected {count} read-first files: {}. See structuredContent for details.",
-            names.join(", ")
+            "CallSieve used zero retrieval-model tokens{packet}; selected {count} read-first files: {}. {}{next}Details in structuredContent.",
+            names.join(", "),
+            selection_text_summary(value),
         );
     }
 
@@ -656,6 +944,141 @@ fn tool_text_summary(value: &Value) -> String {
     }
 
     "CallSieve tool result is available in structuredContent.".to_string()
+}
+
+fn packet_token_summary(value: &Value) -> String {
+    let Some(stats) = value.get("stats") else {
+        return String::new();
+    };
+    let Some(estimated) = stats
+        .get("t")
+        .or_else(|| stats.get("tokens"))
+        .or_else(|| stats.get("estimated_tokens"))
+        .and_then(Value::as_u64)
+    else {
+        return String::new();
+    };
+    match stats
+        .get("b")
+        .or_else(|| stats.get("budget"))
+        .or_else(|| stats.get("token_budget"))
+        .and_then(Value::as_u64)
+    {
+        Some(budget) => format!("; packet {estimated}/{budget} est. tokens"),
+        None => format!("; packet {estimated} est. tokens"),
+    }
+}
+
+fn next_local_tools_summary(value: &Value) -> String {
+    let Some(expansion) = value.get("instruction").and_then(instruction_expansion) else {
+        return String::new();
+    };
+    let tools = ["inspect_top_file", "expand_relationships", "inspect_tests"]
+        .into_iter()
+        .filter_map(|field| {
+            expansion_field_value(expansion, field)
+                .and_then(|entry| entry.get("tool"))
+                .and_then(Value::as_str)
+                .map(|tool| {
+                    if field == "inspect_top_file"
+                        && entry_has_symbol_argument(expansion_field_value(expansion, field))
+                    {
+                        format!("{tool} (symbol-scoped)")
+                    } else {
+                        tool.to_string()
+                    }
+                })
+        })
+        .collect::<Vec<_>>();
+    if tools.is_empty() {
+        String::new()
+    } else {
+        format!("Use {} before grep. ", tools.join(", "))
+    }
+}
+
+fn expansion_field_value<'a>(expansion: &'a Value, field: &str) -> Option<&'a Value> {
+    expansion_field_aliases(field)
+        .iter()
+        .find_map(|alias| expansion.get(*alias))
+}
+
+fn entry_has_symbol_argument(entry: Option<&Value>) -> bool {
+    entry
+        .and_then(|entry| entry.get("arguments"))
+        .and_then(|arguments| arguments.get("symbol"))
+        .and_then(Value::as_str)
+        .is_some()
+}
+
+fn selection_text_summary(value: &Value) -> String {
+    let Some(selection) = value.get("sel").or_else(|| value.get("selection_summary")) else {
+        return String::new();
+    };
+    let Some(component) = selection
+        .get("sig")
+        .or_else(|| selection.get("top_signals"))
+        .and_then(Value::as_array)
+        .and_then(|components| components.first())
+    else {
+        return String::new();
+    };
+    let Some(name) = selection_signal_name(component) else {
+        return String::new();
+    };
+    format!("Top local signal: {name}. ")
+}
+
+fn selection_signal_name(component: &Value) -> Option<&str> {
+    let name = component.as_str().or_else(|| {
+        component
+            .get("n")
+            .or_else(|| component.get("name"))
+            .and_then(Value::as_str)
+            .or_else(|| {
+                component
+                    .as_array()
+                    .and_then(|items| items.first())
+                    .and_then(Value::as_str)
+            })
+    })?;
+    Some(expand_compact_selection_signal(name))
+}
+
+fn expand_compact_selection_signal(name: &str) -> &str {
+    match name {
+        "sym" => "exact_symbol",
+        "sy" => "symbol_name_keyword_cluster",
+        "sub" => "symbol_substring",
+        "kw" => "keyword_overlap",
+        "p" => "path_filename",
+        "pt" => "path_keyword_overlap",
+        "mod" => "module_anchor",
+        "pi" => "path_intent_cluster",
+        "fn" => "filename_keyword_cluster",
+        "ct" => "content_keyword_overlap",
+        "tf" => "test_file",
+        "test" => "test_proximity",
+        "cfg" => "config_file",
+        "cfgdep" => "config_dependency_intent",
+        "dep" => "dependency_manifest_intent",
+        "bench" => "benchmark_evidence_file_intent",
+        "readme" => "readme_evidence_file_intent",
+        "comp" => "competitive_positioning_doc",
+        "doc" => "docs_intent",
+        "docp" => "docs_path_intent",
+        "cmd" => "command_surface_intent",
+        "hook" => "hook_meta_intent",
+        "im" => "graph_imported_file",
+        "ref" => "graph_referencing_file",
+        "call" => "graph_callee",
+        "caller" => "graph_caller",
+        "trace" => "stack_trace",
+        "git" => "git_signal",
+        "semr" => "semantic_recall",
+        "seme" => "semantic_embedding",
+        _ => name,
+    }
 }
 
 fn tool_execution_error(message: String, fix_command: Option<String>) -> Value {
@@ -717,6 +1140,36 @@ mod tests {
         let tools = response["result"]["tools"].as_array().unwrap();
 
         assert!(tools.iter().any(|tool| tool["name"] == "callsieve_context"));
+        let context = tools
+            .iter()
+            .find(|tool| tool["name"] == "callsieve_context")
+            .expect("callsieve_context should be listed");
+        assert_eq!(
+            context["inputSchema"]["properties"]["limit"]["default"],
+            query::DEFAULT_AGENT_CONTEXT_LIMIT
+        );
+        let focus = tools
+            .iter()
+            .find(|tool| tool["name"] == "callsieve_focus")
+            .expect("callsieve_focus should be listed");
+        assert!(
+            focus["description"]
+                .as_str()
+                .unwrap()
+                .contains("exact selected code unit")
+        );
+        assert!(
+            focus["inputSchema"]["properties"]["symbol"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("sy[0][0]")
+        );
+        assert!(
+            focus["inputSchema"]["properties"]["line"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("sy[0][1]")
+        );
     }
 
     #[test]
@@ -749,8 +1202,63 @@ mod tests {
 
         assert_eq!(response["result"]["isError"], false);
         assert_eq!(
-            response["result"]["structuredContent"]["read_first"][0]["file"],
+            response["result"]["structuredContent"]["read_first"][0]["f"],
             "src/auth/session.ts"
         );
+        assert_eq!(
+            response["result"]["structuredContent"]["instruction"]["x"]["o"]["tool"],
+            "callsieve_focus"
+        );
+        assert!(
+            response["result"]["structuredContent"]["instruction"]["x"]
+                .get("top")
+                .is_none()
+        );
+        assert!(
+            query::value_estimated_tokens(&response["result"]["structuredContent"]).unwrap()
+                <= query::DEFAULT_AGENT_CONTEXT_TOKEN_BUDGET
+        );
+    }
+
+    #[test]
+    fn context_tool_omits_code_followups_for_docs_top_file() {
+        let temp = tempfile::tempdir().unwrap();
+        write(
+            temp.path().join("docs/COMPETITIVE.md"),
+            "# Competitive Notes\n\nCallSieve should beat Cursor and Copilot with local token-saving retrieval before agents spend context.\n",
+        );
+        write(
+            temp.path().join("src/cli.rs"),
+            "pub fn agent_context() {}\n",
+        );
+        let index = indexer::build_index(temp.path()).unwrap();
+        store::json_store::save_index(temp.path(), &index).unwrap();
+        let path = temp.path().to_string_lossy().replace('\\', "\\\\");
+        let request = format!(
+            r#"{{
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {{
+                    "name": "callsieve_context",
+                    "arguments": {{
+                        "path": "{path}",
+                        "task": "competitive local token savings context",
+                        "limit": 3
+                    }}
+                }}
+            }}"#
+        );
+
+        let response = handle_line(&request).unwrap();
+        let structured = &response["result"]["structuredContent"];
+        let expansion = &structured["instruction"]["x"];
+
+        assert_eq!(response["result"]["isError"], false);
+        assert_eq!(structured["read_first"][0]["f"], "docs/COMPETITIVE.md");
+        assert_eq!(expansion["o"]["arguments"]["file"], "docs/COMPETITIVE.md");
+        assert!(expansion.get("top").is_none());
+        assert!(expansion.get("rel").is_none());
+        assert!(expansion.get("tests").is_none());
     }
 }

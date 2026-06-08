@@ -24,6 +24,7 @@ const REHEARSAL_EXTERNAL_MANIFEST: &str = "benchmarks/external-github-manifest.e
 const OBSERVED_CODEX_OSS_50_MANIFEST: &str = "benchmarks/evidence/observed-codex-oss-50.local.json";
 const REHEARSAL_REPORT_LIMIT: usize = 24;
 const REHEARSAL_SNIPPETS_PER_FILE: usize = 2;
+const MAX_LOCAL_EXPANSION_NEXT_FILES: usize = 1;
 
 #[derive(Debug, Clone, Copy, Serialize)]
 struct ExternalBenchmarkFixture {
@@ -118,7 +119,7 @@ pub enum Command {
         limit: usize,
     },
 
-    /// Return targeted symbols and snippets for one indexed file.
+    /// Return targeted symbols, bounded snippets, graph edges, and related tests for one file.
     Focus {
         path: PathBuf,
 
@@ -127,6 +128,12 @@ pub enum Command {
 
         #[arg(long)]
         symbol: Option<String>,
+
+        #[arg(long)]
+        line: Option<usize>,
+
+        #[arg(long)]
+        references: bool,
 
         #[arg(long, default_value_t = 1)]
         snippets_per_symbol: usize,
@@ -197,7 +204,7 @@ pub enum Command {
         path: PathBuf,
         task: String,
 
-        #[arg(long, default_value_t = 8)]
+        #[arg(long, default_value_t = query::DEFAULT_AGENT_CONTEXT_LIMIT)]
         limit: usize,
 
         #[arg(long, default_value_t = 0)]
@@ -1142,7 +1149,7 @@ pub enum Command {
         #[arg(long)]
         run_rg: bool,
 
-        #[arg(long, default_value_t = 8)]
+        #[arg(long, default_value_t = query::DEFAULT_AGENT_CONTEXT_LIMIT)]
         limit: usize,
 
         #[arg(long, default_value_t = 2)]
@@ -1787,10 +1794,76 @@ struct AgentContextOutput {
 
 #[derive(Debug, Serialize)]
 struct AgentContextInstruction {
-    action: &'static str,
-    guidance: &'static str,
-    grep_policy: &'static str,
-    token_policy: &'static str,
+    #[serde(rename = "x")]
+    local_first_expansion: AgentIndexedLocalFirstExpansion,
+}
+
+#[derive(Debug, Serialize)]
+struct AgentIndexedLocalFirstExpansion {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "o")]
+    inspect_top_file: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "n")]
+    inspect_next_file: Option<usize>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(rename = "next")]
+    inspect_next_files: Vec<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "r")]
+    expand_relationships: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "t")]
+    inspect_tests: Option<u8>,
+}
+
+#[derive(Debug, Serialize)]
+struct AgentLocalFirstExpansion {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "o")]
+    inspect_top_file: Option<AgentFocusExpansion>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(rename = "next")]
+    inspect_next_files: Vec<AgentFocusExpansion>,
+    #[serde(skip_serializing_if = "skip_false")]
+    #[serde(rename = "rel")]
+    expand_relationships: bool,
+    #[serde(skip_serializing_if = "skip_false")]
+    #[serde(rename = "tests")]
+    inspect_tests: bool,
+}
+
+#[derive(Debug)]
+struct AgentFocusExpansion {
+    file: String,
+    symbol: Option<String>,
+    line: Option<usize>,
+}
+
+impl Serialize for AgentFocusExpansion {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeSeq;
+
+        let len = if self.line.is_some() {
+            3
+        } else if self.symbol.is_some() {
+            2
+        } else {
+            1
+        };
+        let mut seq = serializer.serialize_seq(Some(len))?;
+        seq.serialize_element(&self.file)?;
+        if self.symbol.is_some() || self.line.is_some() {
+            seq.serialize_element(&self.symbol)?;
+        }
+        if let Some(line) = self.line {
+            seq.serialize_element(&line)?;
+        }
+        seq.end()
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -1895,6 +1968,7 @@ struct GuardOutput {
     root: String,
     task: String,
     policy: &'static str,
+    local_first_expansion: AgentLocalFirstExpansion,
     context: query::ContextOutput,
     trace_event: AuditEvent,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1908,6 +1982,7 @@ struct BeginOutput {
     client: String,
     task: String,
     policy: &'static str,
+    local_first_expansion: AgentLocalFirstExpansion,
     next_step: String,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     proof_next_commands: Vec<String>,
@@ -1925,6 +2000,7 @@ struct CodexSessionOutput {
     model: String,
     task: String,
     policy: &'static str,
+    local_first_expansion: AgentLocalFirstExpansion,
     context: query::ContextOutput,
     trace: query::TraceReplayOutput,
     trace_event: AuditEvent,
@@ -1936,7 +2012,7 @@ struct GrepOutput {
     command: &'static str,
     policy: &'static str,
     rg_status: &'static str,
-    context: query::ContextOutput,
+    context: serde_json::Value,
     audit_event: AuditEvent,
     #[serde(skip_serializing_if = "Option::is_none")]
     rg: Option<RgOutput>,
@@ -2865,7 +2941,7 @@ struct ShimRunOutput {
     #[serde(skip_serializing_if = "Option::is_none")]
     pattern: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    context: Option<query::ContextOutput>,
+    context: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     shim_event: Option<serde_json::Value>,
     passthrough: RgOutput,
@@ -2954,11 +3030,20 @@ pub fn run() -> Result<()> {
             path,
             file,
             symbol,
+            line,
+            references,
             snippets_per_symbol,
         } => {
             let index = store::json_store::load_index(&path)?;
-            let output =
-                query::focus_file(&path, &index, &file, symbol.as_deref(), snippets_per_symbol)?;
+            let output = query::focus_file(
+                &path,
+                &index,
+                &file,
+                symbol.as_deref(),
+                line,
+                references,
+                snippets_per_symbol,
+            )?;
             output::json::print(&output)?;
         }
         Command::Related { path, file } => {
@@ -2998,7 +3083,7 @@ pub fn run() -> Result<()> {
             token_budget,
             format,
         } => {
-            let (index, index_load_ms) = load_index_timed(&path)?;
+            let (index, index_load_ms, refreshed) = load_fresh_index_timed(&path)?;
             let mut output = query::build_context_with_options(
                 &path,
                 &index,
@@ -3009,12 +3094,17 @@ pub fn run() -> Result<()> {
                 why_debug,
             )?;
             output.add_index_load_time(index_load_ms);
+            if refreshed {
+                output.add_warning("rebuilt missing or stale CallSieve index before context");
+            }
             print_context_output(
                 &output,
                 format,
                 query::ContextViewOptions {
                     profile: profile.into(),
                     token_budget,
+                    include_git: false,
+                    include_call_paths: false,
                 },
             )?;
         }
@@ -3045,7 +3135,7 @@ pub fn run() -> Result<()> {
                 None => Vec::new(),
             };
             let retrieval_task = effective_task_for_retrieval(&path, &task);
-            let (index, index_load_ms) = load_index_timed(&path)?;
+            let (index, index_load_ms, refreshed) = load_fresh_index_timed(&path)?;
             let mut context = query::build_context_with(
                 &path,
                 &index,
@@ -3061,13 +3151,13 @@ pub fn run() -> Result<()> {
                 },
             )?;
             context.add_index_load_time(index_load_ms);
+            if refreshed {
+                context.add_warning("rebuilt missing or stale CallSieve index before context");
+            }
             let memory = query::task_memory_for_context(&path, &context, now_unix_seconds())?;
             let output = AgentContextOutput {
                 instruction: AgentContextInstruction {
-                    action: "read_first_before_grep",
-                    guidance: "Read these files first; grep only if insufficient.",
-                    grep_policy: "grep_only_if_context_is_insufficient",
-                    token_policy: "zero_ai_model_tokens_for_retrieval; context_packet_tokens_apply_when_read",
+                    local_first_expansion: agent_indexed_local_first_expansion(&context),
                 },
                 memory,
                 context,
@@ -3078,6 +3168,8 @@ pub fn run() -> Result<()> {
                 query::ContextViewOptions {
                     profile: profile.into(),
                     token_budget: Some(token_budget),
+                    include_git: git_boost,
+                    include_call_paths: false,
                 },
             )?;
         }
@@ -3116,6 +3208,8 @@ pub fn run() -> Result<()> {
                 query::ContextViewOptions {
                     profile: profile.into(),
                     token_budget,
+                    include_git: false,
+                    include_call_paths: false,
                 },
             )?;
             output::json::print(&output)?;
@@ -3144,6 +3238,8 @@ pub fn run() -> Result<()> {
                 query::ContextViewOptions {
                     profile: profile.into(),
                     token_budget,
+                    include_git: false,
+                    include_call_paths: false,
                 },
             )?;
             output::json::print(&output)?;
@@ -3189,6 +3285,8 @@ pub fn run() -> Result<()> {
                 query::ContextViewOptions {
                     profile: profile.into(),
                     token_budget,
+                    include_git: false,
+                    include_call_paths: false,
                 },
             )?;
             let failed = output.failed();
@@ -3995,9 +4093,13 @@ pub fn run() -> Result<()> {
             limit,
             snippets_per_file,
         } => {
-            let index = store::json_store::load_index(&path)?;
-            let context =
+            let (index, index_load_ms, refreshed) = load_fresh_index_timed(&path)?;
+            let mut context =
                 query::build_context(&path, &index, &task, limit, snippets_per_file, true)?;
+            context.add_index_load_time(index_load_ms);
+            if refreshed {
+                context.add_warning("rebuilt missing or stale CallSieve index before context");
+            }
             let trace_path = trace_out
                 .as_ref()
                 .map(|path| write_guard_trace(path, &task, &context))
@@ -4007,6 +4109,7 @@ pub fn run() -> Result<()> {
                 root: root_label(&path),
                 task,
                 policy: "read_first_before_grep; audit broad grep/read with trace-check --strict",
+                local_first_expansion: agent_local_first_expansion(&path, &context),
                 context,
                 trace_event: AuditEvent {
                     tool: "callsieve_guard",
@@ -4049,9 +4152,9 @@ pub fn run() -> Result<()> {
             snippets_per_file,
             no_snippets,
         } => {
-            let index = store::json_store::load_index(&path)?;
+            let (index, index_load_ms, refreshed) = load_fresh_index_timed(&path)?;
             let include_snippets = !no_snippets;
-            let context = query::build_context(
+            let mut context = query::build_context(
                 &path,
                 &index,
                 &task,
@@ -4059,6 +4162,10 @@ pub fn run() -> Result<()> {
                 snippets_per_file,
                 include_snippets,
             )?;
+            context.add_index_load_time(index_load_ms);
+            if refreshed {
+                context.add_warning("rebuilt missing or stale CallSieve index before context");
+            }
             let trace = query::codex_session_trace(
                 &path,
                 &index,
@@ -4087,6 +4194,7 @@ pub fn run() -> Result<()> {
                 model,
                 task,
                 policy: "codex_chatgpt_context_first; read returned files before broad grep or repeated file reads",
+                local_first_expansion: agent_local_first_expansion(&path, &context),
                 context,
                 trace,
                 trace_event: AuditEvent {
@@ -4157,9 +4265,14 @@ pub fn run() -> Result<()> {
             shim_strict,
             shim_command,
         } => {
-            let index = store::json_store::load_index(&path)?;
-            let context =
+            let (index, index_load_ms, refreshed) = load_fresh_index_timed(&path)?;
+            let mut context =
                 query::build_context(&path, &index, &pattern, limit, snippets_per_file, true)?;
+            context.add_index_load_time(index_load_ms);
+            if refreshed {
+                context.add_warning("rebuilt missing or stale CallSieve index before context");
+            }
+            let context = compact_context_value_for_prompt(&context)?;
             let shim_event = if shim_strict {
                 Some(record_shim_grep_event(
                     &path,
@@ -4412,6 +4525,32 @@ fn load_index_timed(path: &Path) -> Result<(store::CodeIndex, u64)> {
     Ok((index, duration_ms(started.elapsed())))
 }
 
+fn load_fresh_index_timed(path: &Path) -> Result<(store::CodeIndex, u64, bool)> {
+    let started = Instant::now();
+    let initial_index = store::json_store::load_index(path).ok();
+    let initial_status = query::index_status(path, initial_index.as_ref());
+    if initial_status.is_fresh() {
+        let index = initial_index.expect("fresh status requires an index");
+        return Ok((index, duration_ms(started.elapsed()), false));
+    }
+
+    let index = indexer::build_index(path).with_context(|| {
+        format!(
+            "failed to rebuild missing or stale CallSieve index for {}; run `callsieve index {}`",
+            path.display(),
+            path.display()
+        )
+    })?;
+    store::json_store::save_index(path, &index).with_context(|| {
+        format!(
+            "failed to save rebuilt CallSieve index for {}; run `callsieve index {}`",
+            path.display(),
+            path.display()
+        )
+    })?;
+    Ok((index, duration_ms(started.elapsed()), true))
+}
+
 fn demo(path: &Path, task: &str, lsp: bool) -> Result<DemoOutput> {
     let index = indexer::build_index_with_options(
         path,
@@ -4459,7 +4598,7 @@ fn print_context_output(
         AgentOutputFormat::Markdown => {
             println!(
                 "{}",
-                context_markdown(&value, "grep_only_if_context_is_insufficient")
+                context_markdown(&value, "grep_only_if_context_is_insufficient", None)
             );
             Ok(())
         }
@@ -4472,11 +4611,21 @@ fn print_agent_context_output(
     view_options: query::ContextViewOptions,
 ) -> Result<()> {
     let context = query::context_value(&output.context, view_options)?;
-    let value = serde_json::json!({
+    let mut value = serde_json::json!({
         "instruction": &output.instruction,
         "memory": &output.memory,
         "context": context
     });
+    if matches!(format, AgentOutputFormat::Json)
+        && view_options.profile == query::ContextProfile::Skim
+    {
+        trim_agent_context_root(&mut value)?;
+    }
+    compact_agent_memory_envelope(
+        &mut value,
+        view_options.profile == query::ContextProfile::Skim,
+    );
+    apply_agent_context_envelope_budget(&mut value, view_options.token_budget)?;
     match format {
         AgentOutputFormat::Json => output::json::print(&value),
         AgentOutputFormat::Markdown => {
@@ -4486,13 +4635,536 @@ fn print_agent_context_output(
                 .and_then(|instruction| instruction.get("grep_policy"))
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or("grep_only_if_context_is_insufficient");
-            println!("{}", context_markdown(context, grep_policy));
+            let local_first_expansion = value.get("instruction").and_then(instruction_expansion);
+            println!(
+                "{}",
+                context_markdown(context, grep_policy, local_first_expansion)
+            );
             Ok(())
         }
     }
 }
 
-fn context_markdown(context: &serde_json::Value, grep_policy: &str) -> String {
+fn trim_agent_context_root(value: &mut serde_json::Value) -> Result<()> {
+    let Some(context) = value.get_mut("context") else {
+        return Ok(());
+    };
+    if let Some(context) = context.as_object_mut() {
+        context.remove("root");
+    }
+    refresh_agent_context_stats(context)?;
+    Ok(())
+}
+
+fn apply_agent_context_envelope_budget(
+    value: &mut serde_json::Value,
+    token_budget: Option<usize>,
+) -> Result<()> {
+    let Some(token_budget) = token_budget else {
+        return Ok(());
+    };
+    if query::value_estimated_tokens(value)? <= token_budget {
+        return Ok(());
+    }
+
+    compact_agent_memory(value, false);
+    if query::value_estimated_tokens(value)? <= token_budget {
+        return Ok(());
+    }
+
+    compact_agent_memory(value, true);
+    if query::value_estimated_tokens(value)? <= token_budget {
+        return Ok(());
+    }
+
+    trim_agent_expansion_fields(value, &["inspect_next_files"]);
+    if query::value_estimated_tokens(value)? <= token_budget {
+        return Ok(());
+    }
+
+    trim_agent_expansion_fields(
+        value,
+        &["grep_fallback", "expand_relationships", "inspect_tests"],
+    );
+    if query::value_estimated_tokens(value)? <= token_budget {
+        return Ok(());
+    }
+
+    trim_agent_graph_hints(value)?;
+    while query::value_estimated_tokens(value)? > token_budget {
+        if !drop_last_agent_context_file(value)? {
+            break;
+        }
+    }
+    if query::value_estimated_tokens(value)? > token_budget {
+        trim_agent_expansion_fields(value, &["inspect_top_file"]);
+    }
+    if query::value_estimated_tokens(value)? > token_budget {
+        compact_agent_memory_minimal(value);
+    }
+    if query::value_estimated_tokens(value)? > token_budget {
+        trim_context_retrieval_note(value)?;
+    }
+
+    Ok(())
+}
+
+fn compact_agent_memory_envelope(value: &mut serde_json::Value, skim: bool) {
+    let selected_files = value
+        .get("context")
+        .map(context_read_first_files)
+        .unwrap_or_default()
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    let selected_symbols = value
+        .get("context")
+        .map(context_read_first_symbol_names)
+        .unwrap_or_default();
+
+    let remove_memory = if let Some(memory) = value
+        .get_mut("memory")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        memory.remove("path");
+        memory.remove("policy");
+        filter_selected_memory_recommendations(memory, &selected_files, &selected_symbols);
+        memory.remove("similar_tasks");
+        rename_memory_field(memory, "cache_hit", "hit");
+        rename_memory_field(memory, "recommended_files", "f");
+        rename_memory_field(memory, "recommended_symbols", "sy");
+        if let Some(files) = memory_array_mut(memory, &["f"]) {
+            files.truncate(2);
+        }
+        if let Some(symbols) = memory_array_mut(memory, &["sy"]) {
+            symbols.truncate(3);
+        }
+        if skim {
+            memory.remove("f");
+            memory.remove("sy");
+        }
+        remove_empty_memory_arrays(memory);
+        skim && memory.keys().all(|key| key == "hit")
+    } else {
+        false
+    };
+    if remove_memory && let Some(object) = value.as_object_mut() {
+        object.remove("memory");
+    }
+}
+
+fn rename_memory_field(
+    memory: &mut serde_json::Map<String, serde_json::Value>,
+    from: &str,
+    to: &str,
+) {
+    if memory.contains_key(to) {
+        memory.remove(from);
+        return;
+    }
+    if let Some(value) = memory.remove(from) {
+        memory.insert(to.to_string(), value);
+    }
+}
+
+fn filter_selected_memory_recommendations(
+    memory: &mut serde_json::Map<String, serde_json::Value>,
+    selected_files: &BTreeSet<String>,
+    selected_symbols: &BTreeSet<String>,
+) {
+    if let Some(files) = memory_array_mut(memory, &["f", "recommended_files"]) {
+        files.retain(|file| {
+            file.as_str()
+                .map(|file| !selected_files.contains(file))
+                .unwrap_or(true)
+        });
+    }
+    if let Some(symbols) = memory_array_mut(memory, &["sy", "recommended_symbols"]) {
+        symbols.retain(|symbol| {
+            symbol
+                .as_str()
+                .map(|symbol| !selected_symbols.contains(symbol))
+                .unwrap_or(true)
+        });
+    }
+}
+
+fn memory_array_mut<'a>(
+    memory: &'a mut serde_json::Map<String, serde_json::Value>,
+    keys: &[&str],
+) -> Option<&'a mut Vec<serde_json::Value>> {
+    for key in keys {
+        if memory
+            .get(*key)
+            .and_then(serde_json::Value::as_array)
+            .is_some()
+        {
+            return memory
+                .get_mut(*key)
+                .and_then(serde_json::Value::as_array_mut);
+        }
+    }
+    None
+}
+
+fn remove_empty_memory_arrays(memory: &mut serde_json::Map<String, serde_json::Value>) {
+    for field in [
+        "similar_tasks",
+        "recommended_files",
+        "recommended_symbols",
+        "sim",
+        "f",
+        "sy",
+    ] {
+        if memory
+            .get(field)
+            .and_then(serde_json::Value::as_array)
+            .map(Vec::is_empty)
+            .unwrap_or(false)
+        {
+            memory.remove(field);
+        }
+    }
+}
+
+fn trim_agent_expansion_fields(value: &mut serde_json::Value, fields: &[&str]) {
+    if let Some(expansion) = value
+        .get_mut("instruction")
+        .and_then(instruction_expansion_mut)
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        for field in fields {
+            for alias in expansion_field_aliases(field) {
+                expansion.remove(*alias);
+            }
+        }
+    }
+}
+
+fn instruction_expansion(instruction: &serde_json::Value) -> Option<&serde_json::Value> {
+    instruction
+        .get("x")
+        .or_else(|| instruction.get("local_first_expansion"))
+}
+
+fn instruction_expansion_mut(
+    instruction: &mut serde_json::Value,
+) -> Option<&mut serde_json::Value> {
+    if instruction.get("x").is_some() {
+        instruction.get_mut("x")
+    } else {
+        instruction.get_mut("local_first_expansion")
+    }
+}
+
+fn expansion_field_aliases(field: &str) -> &'static [&'static str] {
+    match field {
+        "inspect_top_file" | "top" | "o" => &["inspect_top_file", "top", "o"],
+        "inspect_next_files" | "next" | "n" => &["inspect_next_files", "next", "n"],
+        "expand_relationships" | "rel" | "r" => &["expand_relationships", "rel", "r"],
+        "inspect_tests" | "tests" | "t" => &["inspect_tests", "tests", "t"],
+        "grep_fallback" | "grep" => &["grep_fallback", "grep"],
+        _ => &[],
+    }
+}
+
+fn trim_agent_graph_hints(value: &mut serde_json::Value) -> Result<()> {
+    let Some(context) = value.get_mut("context") else {
+        return Ok(());
+    };
+    let Some(files) = context
+        .get_mut("read_first")
+        .and_then(serde_json::Value::as_array_mut)
+    else {
+        return Ok(());
+    };
+    for file in files {
+        if let Some(file) = file.as_object_mut() {
+            file.remove("g");
+            file.remove("cp");
+            file.remove("graph_hints");
+            file.remove("call_paths");
+        }
+    }
+    refresh_agent_context_stats(context)?;
+    Ok(())
+}
+
+fn compact_agent_memory(value: &mut serde_json::Value, aggressive: bool) {
+    let Some(memory) = value
+        .get_mut("memory")
+        .and_then(serde_json::Value::as_object_mut)
+    else {
+        return;
+    };
+
+    if let Some(files) = memory_array_mut(memory, &["f", "recommended_files"]) {
+        files.truncate(if aggressive { 3 } else { 5 });
+    }
+    if let Some(symbols) = memory_array_mut(memory, &["sy", "recommended_symbols"]) {
+        symbols.truncate(if aggressive { 0 } else { 5 });
+    }
+    if let Some(tasks) = memory_array_mut(memory, &["sim", "similar_tasks"]) {
+        if aggressive {
+            tasks.clear();
+        } else {
+            tasks.truncate(1);
+            if let Some(task) = tasks.first_mut().and_then(serde_json::Value::as_object_mut) {
+                if let Some(shared_terms) = task
+                    .get_mut("shared_terms")
+                    .and_then(serde_json::Value::as_array_mut)
+                {
+                    shared_terms.truncate(4);
+                }
+                if let Some(files) = task
+                    .get_mut("read_first_files")
+                    .and_then(serde_json::Value::as_array_mut)
+                {
+                    files.truncate(4);
+                }
+            }
+        }
+    }
+    remove_empty_memory_arrays(memory);
+}
+
+fn compact_agent_memory_minimal(value: &mut serde_json::Value) {
+    let Some(memory) = value
+        .get_mut("memory")
+        .and_then(serde_json::Value::as_object_mut)
+    else {
+        return;
+    };
+    memory.remove("path");
+    memory.remove("policy");
+    if let Some(files) = memory_array_mut(memory, &["f", "recommended_files"]) {
+        files.clear();
+    }
+    if let Some(symbols) = memory_array_mut(memory, &["sy", "recommended_symbols"]) {
+        symbols.clear();
+    }
+    if let Some(tasks) = memory_array_mut(memory, &["sim", "similar_tasks"]) {
+        tasks.clear();
+    }
+    remove_empty_memory_arrays(memory);
+}
+
+fn trim_context_retrieval_note(value: &mut serde_json::Value) -> Result<()> {
+    let Some(context) = value.get_mut("context") else {
+        return Ok(());
+    };
+    if let Some(retrieval_cost) = context
+        .get_mut("retrieval_cost")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        retrieval_cost.remove("note");
+        refresh_agent_context_stats(context)?;
+    }
+    Ok(())
+}
+
+fn drop_last_agent_context_file(value: &mut serde_json::Value) -> Result<bool> {
+    let Some(context) = value.get_mut("context") else {
+        return Ok(false);
+    };
+    let dropped = {
+        let Some(files) = context
+            .get_mut("read_first")
+            .and_then(serde_json::Value::as_array_mut)
+        else {
+            return Ok(false);
+        };
+        if files.len() <= 1 {
+            false
+        } else {
+            files.pop();
+            true
+        }
+    };
+    if dropped {
+        refresh_agent_context_stats(context)?;
+    }
+    Ok(dropped)
+}
+
+fn refresh_agent_context_stats(context: &mut serde_json::Value) -> Result<()> {
+    query::trim_selection_summary_to_read_first(context);
+    let (selected_files, selected_symbols, related_tests) = context
+        .get("read_first")
+        .and_then(serde_json::Value::as_array)
+        .map(|files| {
+            let selected_symbols = files
+                .iter()
+                .filter_map(|file| json_array_any(file, &["sy", "symbols"]))
+                .map(Vec::len)
+                .sum::<usize>();
+            let related_tests = files
+                .iter()
+                .map(|file| {
+                    file.get("related_tests")
+                        .and_then(serde_json::Value::as_array)
+                        .map(Vec::len)
+                        .or_else(|| {
+                            file.get("i")
+                                .or_else(|| file.get("impact"))
+                                .and_then(compact_or_legacy_impact_tests_len)
+                        })
+                        .unwrap_or_default()
+                })
+                .sum::<usize>();
+            (files.len(), selected_symbols, related_tests)
+        })
+        .unwrap_or_default();
+
+    if let Some(stats) = context
+        .get_mut("stats")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        if stats.contains_key("tokens") || stats.contains_key("local") {
+            stats.remove("tokens");
+            stats.remove("t");
+        } else {
+            stats.insert(
+                "selected_files".to_string(),
+                serde_json::json!(selected_files),
+            );
+            stats.insert(
+                "selected_symbols".to_string(),
+                serde_json::json!(selected_symbols),
+            );
+            stats.insert(
+                "related_tests".to_string(),
+                serde_json::json!(related_tests),
+            );
+            stats.remove("estimated_tokens");
+        }
+    }
+    let estimated_tokens = query::value_estimated_tokens(context)?;
+    if let Some(stats) = context
+        .get_mut("stats")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        if stats.contains_key("local") {
+            stats.insert("t".to_string(), serde_json::json!(estimated_tokens));
+        } else {
+            stats.insert(
+                "estimated_tokens".to_string(),
+                serde_json::json!(estimated_tokens),
+            );
+        }
+    }
+    Ok(())
+}
+
+fn agent_local_first_expansion(
+    _path: &Path,
+    context: &query::ContextOutput,
+) -> AgentLocalFirstExpansion {
+    let targets = query::context_read_first_targets(context);
+    let top_target = targets.first().cloned();
+    let top_target_is_code = top_target.as_ref().is_some_and(|target| target.is_code);
+    let inspect_next_files = targets
+        .iter()
+        .skip(1)
+        .take(MAX_LOCAL_EXPANSION_NEXT_FILES)
+        .map(agent_focus_expansion)
+        .collect();
+
+    AgentLocalFirstExpansion {
+        inspect_top_file: top_target.as_ref().map(agent_focus_expansion),
+        inspect_next_files,
+        expand_relationships: top_target_is_code,
+        inspect_tests: top_target_is_code,
+    }
+}
+
+fn agent_indexed_local_first_expansion(
+    context: &query::ContextOutput,
+) -> AgentIndexedLocalFirstExpansion {
+    let targets = query::context_read_first_targets(context);
+    let top_target_is_code = targets.first().is_some_and(|target| target.is_code);
+    let inspect_next_indexes = targets
+        .iter()
+        .enumerate()
+        .skip(1)
+        .take(MAX_LOCAL_EXPANSION_NEXT_FILES)
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    let (inspect_next_file, inspect_next_files) = match inspect_next_indexes.as_slice() {
+        [index] => (Some(*index), Vec::new()),
+        _ => (None, inspect_next_indexes),
+    };
+
+    AgentIndexedLocalFirstExpansion {
+        inspect_top_file: (!targets.is_empty()).then_some(0),
+        inspect_next_file,
+        inspect_next_files,
+        expand_relationships: top_target_is_code.then_some(1),
+        inspect_tests: top_target_is_code.then_some(1),
+    }
+}
+
+fn local_first_expansion_for_context_value(
+    _root: &Path,
+    context: &serde_json::Value,
+) -> Option<serde_json::Value> {
+    let targets = context_value_read_first_targets(context);
+    let top_target = targets.first()?;
+    let inspect_next_files = targets
+        .iter()
+        .skip(1)
+        .take(MAX_LOCAL_EXPANSION_NEXT_FILES)
+        .map(agent_focus_expansion_value)
+        .collect::<Vec<_>>();
+    let mut expansion = serde_json::json!({
+        "o": agent_focus_expansion_value(top_target)
+    });
+    if top_target.is_code
+        && let Some(object) = expansion.as_object_mut()
+    {
+        object.insert("rel".to_string(), serde_json::json!(true));
+        object.insert("tests".to_string(), serde_json::json!(true));
+    }
+    if !inspect_next_files.is_empty()
+        && let Some(object) = expansion.as_object_mut()
+    {
+        object.insert("next".to_string(), serde_json::json!(inspect_next_files));
+    }
+    Some(expansion)
+}
+
+fn agent_focus_expansion(target: &query::FocusTarget) -> AgentFocusExpansion {
+    AgentFocusExpansion {
+        file: target.file.clone(),
+        symbol: target.symbol.clone(),
+        line: target.line,
+    }
+}
+
+fn agent_focus_expansion_value(target: &query::FocusTarget) -> serde_json::Value {
+    serde_json::to_value(agent_focus_expansion(target)).unwrap_or_else(|_| serde_json::json!({}))
+}
+
+fn skip_false(value: &bool) -> bool {
+    !*value
+}
+
+fn compact_context_value_for_prompt(context: &query::ContextOutput) -> Result<serde_json::Value> {
+    query::context_value(
+        context,
+        query::ContextViewOptions {
+            profile: query::ContextProfile::Skim,
+            token_budget: Some(query::DEFAULT_AGENT_CONTEXT_TOKEN_BUDGET),
+            include_git: false,
+            include_call_paths: false,
+        },
+    )
+}
+
+fn context_markdown(
+    context: &serde_json::Value,
+    grep_policy: &str,
+    local_first_expansion: Option<&serde_json::Value>,
+) -> String {
     let task = json_string(context, &["task"]).unwrap_or_default();
     let root = json_string(context, &["root"]).unwrap_or_default();
     let mut output = String::new();
@@ -4509,6 +5181,44 @@ fn context_markdown(context: &serde_json::Value, grep_policy: &str) -> String {
             "Retrieval cost: {tokens} AI model tokens for local retrieval. Returned context still counts when read.\n\n"
         ));
     }
+    if let Some(estimated) = json_usize(context, &["stats", "t"])
+        .or_else(|| json_usize(context, &["stats", "tokens"]))
+        .or_else(|| json_usize(context, &["stats", "estimated_tokens"]))
+    {
+        match json_usize(context, &["stats", "b"])
+            .or_else(|| json_usize(context, &["stats", "budget"]))
+            .or_else(|| json_usize(context, &["stats", "token_budget"]))
+        {
+            Some(budget) => {
+                output.push_str(&format!(
+                    "Packet estimate: {estimated}/{budget} tokens.\n\n"
+                ));
+            }
+            None => {
+                output.push_str(&format!("Packet estimate: {estimated} tokens.\n\n"));
+            }
+        }
+    }
+    if let Some(expansion) = local_first_expansion {
+        output.push_str("## Local Expansion\n");
+        if let Some(policy) = expansion.get("policy").and_then(serde_json::Value::as_str) {
+            output.push_str(&format!("Policy: {policy}\n"));
+        }
+        if let Some(command) =
+            expansion_command(expansion, "inspect_top_file", &root, Some(context))
+        {
+            output.push_str(&format!("- `{command}`\n"));
+        }
+        for command in expansion_commands(expansion, "inspect_next_files", &root, Some(context)) {
+            output.push_str(&format!("- `{command}`\n"));
+        }
+        for key in ["expand_relationships", "inspect_tests", "grep_fallback"] {
+            if let Some(command) = expansion_command(expansion, key, &root, Some(context)) {
+                output.push_str(&format!("- `{command}`\n"));
+            }
+        }
+        output.push('\n');
+    }
     output.push_str("## Read First\n");
 
     let files = context
@@ -4521,18 +5231,21 @@ fn context_markdown(context: &serde_json::Value, grep_policy: &str) -> String {
         return output;
     }
 
-    for file in files {
-        let rank = json_usize(&file, &["rank"]).unwrap_or_default();
-        let path = json_string(&file, &["file"]).unwrap_or_else(|| "<unknown>".to_string());
+    for (index, file) in files.into_iter().enumerate() {
+        let rank = json_usize(&file, &["rank"]).unwrap_or(index + 1);
+        let path =
+            json_string_any(&file, &["f", "file"]).unwrap_or_else(|| "<unknown>".to_string());
         let language = json_string(&file, &["language"]).unwrap_or_default();
-        let score = json_usize(&file, &["score"]).unwrap_or_default();
+        let score = json_usize_any(&file, &["s", "score"]).unwrap_or_default();
         output.push_str(&format!("\n{rank}. `{path}`"));
         if !language.is_empty() {
             output.push_str(&format!(" ({language}, score {score})"));
+        } else if score > 0 {
+            output.push_str(&format!(" (score {score})"));
         }
         output.push('\n');
 
-        if let Some(why) = file.get("why").and_then(serde_json::Value::as_array)
+        if let Some(why) = json_array_any(&file, &["w", "why"])
             && !why.is_empty()
         {
             output.push_str("   Why: ");
@@ -4545,20 +5258,32 @@ fn context_markdown(context: &serde_json::Value, grep_policy: &str) -> String {
             output.push('\n');
         }
 
-        if let Some(symbols) = file.get("symbols").and_then(serde_json::Value::as_array)
+        if let Some(symbols) = json_array_any(&file, &["sy", "symbols"])
             && !symbols.is_empty()
         {
             let names = symbols
                 .iter()
                 .filter_map(|symbol| {
-                    let name = symbol.get("name")?.as_str()?;
-                    let kind = symbol.get("kind").and_then(serde_json::Value::as_str)?;
+                    let name = symbol_name_from_value(symbol)?;
+                    let kind = symbol_kind_from_value(symbol).unwrap_or("function");
                     Some(format!("{kind} `{name}`"))
                 })
                 .collect::<Vec<_>>();
             if !names.is_empty() {
                 output.push_str(&format!("   Symbols: {}\n", names.join(", ")));
             }
+        }
+
+        let graph_hint_parts = markdown_graph_hints(&file);
+        if !graph_hint_parts.is_empty() {
+            output.push_str(&format!(
+                "   Graph hints: {}\n",
+                graph_hint_parts.join("; ")
+            ));
+        }
+        let call_path_parts = markdown_call_paths(&file);
+        if !call_path_parts.is_empty() {
+            output.push_str(&format!("   Call paths: {}\n", call_path_parts.join("; ")));
         }
 
         if let Some(tests) = file
@@ -4608,6 +5333,231 @@ fn context_markdown(context: &serde_json::Value, grep_policy: &str) -> String {
     output
 }
 
+fn expansion_command_value<'a>(
+    expansion: &'a serde_json::Value,
+    field: &str,
+) -> Option<&'a serde_json::Value> {
+    expansion_field_aliases(field)
+        .iter()
+        .find_map(|alias| expansion.get(*alias))
+}
+
+fn expansion_commands(
+    expansion: &serde_json::Value,
+    field: &str,
+    root: &str,
+    context: Option<&serde_json::Value>,
+) -> Vec<String> {
+    let Some(value) = expansion_command_value(expansion, field) else {
+        return Vec::new();
+    };
+    if let Some(values) = value.as_array() {
+        return values
+            .iter()
+            .filter_map(|value| {
+                expansion_command_from_value(expansion, field, value, root, context)
+            })
+            .collect();
+    }
+    expansion_command_from_value(expansion, field, value, root, context)
+        .into_iter()
+        .collect()
+}
+
+fn expansion_command(
+    expansion: &serde_json::Value,
+    field: &str,
+    root: &str,
+    context: Option<&serde_json::Value>,
+) -> Option<String> {
+    let value = expansion_command_value(expansion, field)?;
+    expansion_command_from_value(expansion, field, value, root, context)
+}
+
+fn expansion_command_from_value(
+    expansion: &serde_json::Value,
+    field: &str,
+    value: &serde_json::Value,
+    root: &str,
+    context: Option<&serde_json::Value>,
+) -> Option<String> {
+    if let Some(command) = value.as_str() {
+        if matches!(field, "expand_relationships" | "inspect_tests") && !looks_like_command(command)
+        {
+            return expansion_file_command(field, root, command);
+        }
+        return Some(command.to_string());
+    }
+    if value.as_bool() == Some(true) || value.as_u64() == Some(1) {
+        let file = expansion_top_file(expansion, context)?;
+        return expansion_file_command(field, root, &file);
+    }
+    if let Some(tool) = value.get("tool").and_then(serde_json::Value::as_str) {
+        return expansion_tool_command(tool, value);
+    }
+    let target = expansion_focus_target(value, context)?;
+    Some(focus_expansion_command(
+        root,
+        &target.file,
+        target.symbol.as_deref(),
+        target.line,
+    ))
+}
+
+fn expansion_file_command(field: &str, root: &str, file: &str) -> Option<String> {
+    let subcommand = match field {
+        "expand_relationships" => "related",
+        "inspect_tests" => "tests",
+        _ => return None,
+    };
+    Some(format_callsieve_command(&[
+        subcommand.to_string(),
+        expansion_root_arg(root),
+        "--file".to_string(),
+        file.to_string(),
+    ]))
+}
+
+fn expansion_tool_command(tool: &str, value: &serde_json::Value) -> Option<String> {
+    let arguments = value.get("arguments").or_else(|| value.get("args"));
+    let file = arguments
+        .and_then(|arguments| arguments.get("file"))
+        .and_then(serde_json::Value::as_str);
+    let symbol = arguments
+        .and_then(|arguments| arguments.get("symbol"))
+        .and_then(serde_json::Value::as_str);
+    let line = arguments
+        .and_then(|arguments| arguments.get("line"))
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|line| usize::try_from(line).ok());
+    let Some(file) = file else {
+        return Some(tool.to_string());
+    };
+    let mut args = vec![tool.to_string(), "--file".to_string(), file.to_string()];
+    if let Some(symbol) = symbol {
+        args.push("--symbol".to_string());
+        args.push(symbol.to_string());
+    }
+    if let Some(line) = line {
+        args.push("--line".to_string());
+        args.push(line.to_string());
+    }
+    Some(format_shell_command(&args))
+}
+
+fn expansion_top_file(
+    expansion: &serde_json::Value,
+    context: Option<&serde_json::Value>,
+) -> Option<String> {
+    expansion_command_value(expansion, "inspect_top_file")
+        .and_then(|value| expansion_target_file(value, context))
+}
+
+fn expansion_target_file(
+    value: &serde_json::Value,
+    context: Option<&serde_json::Value>,
+) -> Option<String> {
+    if let Some(target) = expansion_focus_target(value, context) {
+        return Some(target.file);
+    }
+    if let Some(file) = value
+        .get("f")
+        .or_else(|| value.get("file"))
+        .and_then(serde_json::Value::as_str)
+    {
+        return Some(file.to_string());
+    }
+    value
+        .get("arguments")
+        .or_else(|| value.get("args"))
+        .and_then(|arguments| arguments.get("file"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+}
+
+fn expansion_focus_target(
+    value: &serde_json::Value,
+    context: Option<&serde_json::Value>,
+) -> Option<AgentFocusExpansion> {
+    if let Some(index) = value.as_u64().and_then(|index| usize::try_from(index).ok()) {
+        return expansion_focus_target_from_read_first_index(context?, index);
+    }
+    if let Some(items) = value.as_array() {
+        let file = items.first()?.as_str()?.to_string();
+        let symbol = items
+            .get(1)
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string);
+        let line = items
+            .get(2)
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|line| usize::try_from(line).ok());
+        return Some(AgentFocusExpansion { file, symbol, line });
+    }
+
+    let file = value
+        .get("f")
+        .or_else(|| value.get("file"))
+        .and_then(serde_json::Value::as_str)?
+        .to_string();
+    let symbol = value
+        .get("sy")
+        .or_else(|| value.get("symbol"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    let line = value
+        .get("l")
+        .or_else(|| value.get("line"))
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|line| usize::try_from(line).ok());
+    Some(AgentFocusExpansion { file, symbol, line })
+}
+
+fn expansion_focus_target_from_read_first_index(
+    context: &serde_json::Value,
+    index: usize,
+) -> Option<AgentFocusExpansion> {
+    let target = context_value_read_first_targets(context)
+        .into_iter()
+        .nth(index)?;
+    Some(agent_focus_expansion(&target))
+}
+
+fn focus_expansion_command(
+    root: &str,
+    file: &str,
+    symbol: Option<&str>,
+    line: Option<usize>,
+) -> String {
+    let mut args = vec![
+        "focus".to_string(),
+        expansion_root_arg(root),
+        "--file".to_string(),
+        file.to_string(),
+    ];
+    if let Some(symbol) = symbol {
+        args.push("--symbol".to_string());
+        args.push(symbol.to_string());
+    }
+    if let Some(line) = line {
+        args.push("--line".to_string());
+        args.push(line.to_string());
+    }
+    format_callsieve_command(&args)
+}
+
+fn expansion_root_arg(root: &str) -> String {
+    if root.trim().is_empty() {
+        ".".to_string()
+    } else {
+        root.to_string()
+    }
+}
+
+fn looks_like_command(value: &str) -> bool {
+    value.contains("callsieve ") || value.starts_with("callsieve_")
+}
+
 fn json_string(value: &serde_json::Value, path: &[&str]) -> Option<String> {
     let mut current = value;
     for key in path {
@@ -4616,12 +5566,147 @@ fn json_string(value: &serde_json::Value, path: &[&str]) -> Option<String> {
     current.as_str().map(str::to_string)
 }
 
+fn json_string_any(value: &serde_json::Value, keys: &[&str]) -> Option<String> {
+    keys.iter()
+        .find_map(|key| value.get(*key).and_then(serde_json::Value::as_str))
+        .map(str::to_string)
+}
+
 fn json_usize(value: &serde_json::Value, path: &[&str]) -> Option<usize> {
     let mut current = value;
     for key in path {
         current = current.get(*key)?;
     }
     current.as_u64().map(|number| number as usize)
+}
+
+fn json_usize_any(value: &serde_json::Value, keys: &[&str]) -> Option<usize> {
+    keys.iter()
+        .find_map(|key| value.get(*key).and_then(serde_json::Value::as_u64))
+        .map(|number| number as usize)
+}
+
+fn json_array_any<'a>(
+    value: &'a serde_json::Value,
+    keys: &[&str],
+) -> Option<&'a Vec<serde_json::Value>> {
+    keys.iter()
+        .find_map(|key| value.get(*key).and_then(serde_json::Value::as_array))
+}
+
+fn symbol_name_from_value(symbol: &serde_json::Value) -> Option<&str> {
+    symbol
+        .get("n")
+        .or_else(|| symbol.get("name"))
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| {
+            symbol
+                .as_array()
+                .and_then(|items| items.first())
+                .and_then(serde_json::Value::as_str)
+        })
+}
+
+fn symbol_kind_from_value(symbol: &serde_json::Value) -> Option<&str> {
+    let kind = symbol
+        .get("k")
+        .or_else(|| symbol.get("kind"))
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| {
+            let items = symbol.as_array()?;
+            items
+                .get(3)
+                .or_else(|| items.get(2).filter(|value| value.is_string()))
+                .and_then(serde_json::Value::as_str)
+        })?;
+    Some(expand_compact_symbol_kind(kind))
+}
+
+fn expand_compact_symbol_kind(kind: &str) -> &str {
+    match kind {
+        "cl" => "class",
+        "m" => "method",
+        "if" => "interface",
+        "t" => "type",
+        "s" => "struct",
+        "e" => "enum",
+        "tr" => "trait",
+        "im" => "impl",
+        "c" => "constant",
+        "mod" => "module",
+        "mac" => "macro",
+        "cmp" => "component",
+        _ => kind,
+    }
+}
+
+fn markdown_graph_hints(file: &serde_json::Value) -> Vec<String> {
+    let Some(graph_hints) = file.get("g").or_else(|| file.get("graph_hints")) else {
+        return Vec::new();
+    };
+    let mut parts = Vec::new();
+    let upstream = json_string_array(graph_hints.get("u").or_else(|| graph_hints.get("upstream")));
+    if !upstream.is_empty() {
+        parts.push(format!("upstream {}", upstream.join(", ")));
+    }
+    let downstream = json_string_array(
+        graph_hints
+            .get("d")
+            .or_else(|| graph_hints.get("downstream")),
+    );
+    if !downstream.is_empty() {
+        parts.push(format!("downstream {}", downstream.join(", ")));
+    }
+    parts
+}
+
+fn markdown_call_paths(file: &serde_json::Value) -> Vec<String> {
+    let Some(call_paths) = file.get("cp").or_else(|| file.get("call_paths")) else {
+        return Vec::new();
+    };
+    let mut parts = Vec::new();
+    let calls = json_call_path_array(
+        call_paths.get("c").or_else(|| call_paths.get("calls")),
+        "calls",
+    );
+    if !calls.is_empty() {
+        parts.extend(calls);
+    }
+    let called_by = json_call_path_array(
+        call_paths.get("by").or_else(|| call_paths.get("called_by")),
+        "called_by",
+    );
+    if !called_by.is_empty() {
+        parts.extend(called_by);
+    }
+    parts
+}
+
+fn json_call_path_array(value: Option<&serde_json::Value>, label: &str) -> Vec<String> {
+    value
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|edge| {
+            let file = edge.get("f").or_else(|| edge.get("file"))?.as_str()?;
+            let to = edge.get("t").or_else(|| edge.get("to"))?.as_str()?;
+            let from = edge
+                .get("fr")
+                .or_else(|| edge.get("from"))
+                .and_then(serde_json::Value::as_str);
+            let line = edge
+                .get("l")
+                .or_else(|| edge.get("line"))
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or_default();
+            let relation = if let Some(from) = from {
+                format!("{from}->{to}")
+            } else {
+                to.to_string()
+            };
+            Some(format!("{label} {relation} in {file}:{line}"))
+        })
+        .collect()
 }
 
 fn mcp_config_output(root: &Path, format: McpConfigFormat) -> McpConfigOutput {
@@ -6727,6 +7812,13 @@ fn format_callsieve_command(args: &[String]) -> String {
         .join(" ")
 }
 
+fn format_shell_command(args: &[String]) -> String {
+    args.iter()
+        .map(|arg| quote_cli_arg(arg))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn quote_cli_arg(arg: &str) -> String {
     if !arg.is_empty()
         && arg.chars().all(|ch| {
@@ -7193,9 +8285,12 @@ fn begin_task(
     limit: usize,
     snippets_per_file: usize,
 ) -> Result<BeginOutput> {
-    let (index, index_load_ms) = load_index_timed(root)?;
+    let (index, index_load_ms, refreshed) = load_fresh_index_timed(root)?;
     let mut context = query::build_context(root, &index, task, limit, snippets_per_file, true)?;
     context.add_index_load_time(index_load_ms);
+    if refreshed {
+        context.add_warning("rebuilt missing or stale CallSieve index before context");
+    }
     let context_value = serde_json::to_value(&context)?;
     let context_selected_files = context_read_first_files(&context_value);
     let tokens = serde_json::to_string(&context_value)
@@ -7245,15 +8340,15 @@ fn begin_task(
     let next_step = if let Some(trace_path) = trace_path.as_deref() {
         if proof_trace {
             format!(
-                "Read read_first files before broad grep; append explicit session-event records with tokens and phase, then audit with `callsieve trace-check {trace_path} --strict`."
+                "Read read_first files, review context.sel.next, use instruction.x.o/n/next and local expansion commands for focused detail, then broad grep only if insufficient; append explicit session-event records with tokens and phase, then audit with `callsieve trace-check {trace_path} --strict`."
             )
         } else {
             format!(
-                "Read read_first files before broad grep; audit with `callsieve trace-check {trace_path} --strict`."
+                "Read read_first files, review context.sel.next, use instruction.x.o/n/next and local expansion commands for focused detail, then broad grep only if insufficient; audit with `callsieve trace-check {trace_path} --strict`."
             )
         }
     } else {
-        "Read read_first files before broad grep; pass --trace-out to record an audited trace."
+        "Read read_first files, review context.sel.next, use instruction.x.o/n/next and local expansion commands for focused detail, then broad grep only if insufficient; pass --trace-out to record an audited trace."
             .to_string()
     };
     let proof_next_commands = if proof_trace {
@@ -7278,6 +8373,7 @@ fn begin_task(
         client: agent_client_name(client).to_string(),
         task: task.to_string(),
         policy: "context_first; read returned files before broad grep or repeated file reads",
+        local_first_expansion: agent_local_first_expansion(root, &context),
         next_step,
         proof_next_commands,
         context,
@@ -7433,7 +8529,7 @@ fn setup_missing_agent_files(client: AgentClient, root: &Path) -> Result<SetupAg
         root: root_label(root),
         files: written,
         first_required_command,
-        policy: "Call callsieve_context before broad grep, rg, repository search, or repeated file reads.",
+        policy: "Call callsieve_context before broad grep, rg, repository search, or repeated file reads. Read read_first, review context.sel.next, and use instruction.x.o/n/next plus focus, related, and tests before grep.",
         warnings: agent_client_warnings_for_root(client, root),
     })
 }
@@ -8798,9 +9894,90 @@ fn context_read_first_files(context_value: &serde_json::Value) -> Vec<String> {
         .and_then(serde_json::Value::as_array)
         .into_iter()
         .flatten()
-        .filter_map(|file| file.get("file").and_then(serde_json::Value::as_str))
+        .filter_map(|file| {
+            file.get("f")
+                .or_else(|| file.get("file"))
+                .and_then(serde_json::Value::as_str)
+        })
         .map(str::to_string)
         .collect()
+}
+
+fn context_read_first_symbol_names(context_value: &serde_json::Value) -> BTreeSet<String> {
+    context_value
+        .get("read_first")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|file| json_array_any(file, &["sy", "symbols"]))
+        .flatten()
+        .filter_map(symbol_name_from_value)
+        .map(str::to_string)
+        .collect()
+}
+
+fn context_value_read_first_targets(context_value: &serde_json::Value) -> Vec<query::FocusTarget> {
+    context_value
+        .get("read_first")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|file| {
+            let path = file
+                .get("f")
+                .or_else(|| file.get("file"))
+                .and_then(serde_json::Value::as_str)?;
+            let selected_symbol = file
+                .get("sy")
+                .or_else(|| file.get("symbols"))
+                .and_then(serde_json::Value::as_array)
+                .and_then(|symbols| {
+                    symbols.iter().find(|symbol| {
+                        let kind = symbol_kind_from_value(symbol).unwrap_or_default();
+                        !matches!(
+                            kind,
+                            "macro" | "call" | "reference" | "import" | "use" | "include"
+                        )
+                    })
+                });
+            let symbol = selected_symbol
+                .and_then(symbol_name_from_value)
+                .map(str::to_string);
+            let line = selected_symbol.and_then(symbol_line_from_value);
+            Some(query::FocusTarget {
+                file: path.to_string(),
+                symbol,
+                line,
+                is_code: indexer::language::Language::from_path(Path::new(path))
+                    .map(indexer::language::Language::is_code)
+                    .unwrap_or(false),
+            })
+        })
+        .collect()
+}
+
+fn symbol_line_from_value(symbol: &serde_json::Value) -> Option<usize> {
+    symbol
+        .get("l")
+        .or_else(|| symbol.get("line"))
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|line| usize::try_from(line).ok())
+        .or_else(|| {
+            symbol
+                .get("ls")
+                .or_else(|| symbol.get("lines"))
+                .and_then(serde_json::Value::as_array)
+                .and_then(|lines| lines.first())
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|line| usize::try_from(line).ok())
+        })
+        .or_else(|| {
+            symbol
+                .as_array()
+                .and_then(|items| items.get(1))
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|line| usize::try_from(line).ok())
+        })
 }
 
 fn compact_agent_context_value(context: &serde_json::Value) -> serde_json::Value {
@@ -8820,18 +9997,38 @@ fn compact_agent_context_value(context: &serde_json::Value) -> serde_json::Value
 
 fn compact_context_file_value(file: &serde_json::Value) -> serde_json::Value {
     let symbols = file
-        .get("symbols")
+        .get("sy")
+        .or_else(|| file.get("symbols"))
         .and_then(serde_json::Value::as_array)
         .into_iter()
         .flatten()
         .take(6)
         .map(|symbol| {
-            serde_json::json!({
-                "name": symbol.get("name").cloned().unwrap_or(serde_json::Value::Null),
-                "kind": symbol.get("kind").cloned().unwrap_or(serde_json::Value::Null),
-                "lines": symbol.get("lines").cloned().unwrap_or(serde_json::Value::Null),
-                "signature": symbol.get("signature").cloned().unwrap_or(serde_json::Value::Null)
-            })
+            let mut compact = serde_json::Map::new();
+            if let Some(name) = symbol_name_from_value(symbol) {
+                compact.insert("name".to_string(), serde_json::json!(name));
+            }
+            if let Some(kind) = symbol_kind_from_value(symbol) {
+                compact.insert("kind".to_string(), serde_json::json!(kind));
+            }
+            if let Some(lines) = symbol.get("ls").or_else(|| symbol.get("lines")) {
+                compact.insert("lines".to_string(), lines.clone());
+            } else if let Some(line) = symbol.get("l").or_else(|| symbol.get("line")) {
+                compact.insert("line".to_string(), line.clone());
+            } else if let Some(items) = symbol.as_array()
+                && let (Some(start), Some(end)) = (
+                    items.get(1).and_then(serde_json::Value::as_u64),
+                    items.get(2).and_then(serde_json::Value::as_u64),
+                )
+            {
+                compact.insert("lines".to_string(), serde_json::json!([start, end]));
+            } else if let Some(line) = symbol_line_from_value(symbol) {
+                compact.insert("line".to_string(), serde_json::json!(line));
+            }
+            if let Some(signature) = symbol.get("signature") {
+                compact.insert("signature".to_string(), signature.clone());
+            }
+            serde_json::Value::Object(compact)
         })
         .collect::<Vec<_>>();
     let snippets = file
@@ -8855,7 +10052,8 @@ fn compact_context_file_value(file: &serde_json::Value) -> serde_json::Value {
         })
         .collect::<Vec<_>>();
     let why = file
-        .get("why")
+        .get("w")
+        .or_else(|| file.get("why"))
         .and_then(serde_json::Value::as_array)
         .into_iter()
         .flatten()
@@ -8864,18 +10062,44 @@ fn compact_context_file_value(file: &serde_json::Value) -> serde_json::Value {
         .collect::<Vec<_>>();
     serde_json::json!({
         "rank": file.get("rank").cloned().unwrap_or(serde_json::Value::Null),
-        "score": file.get("score").cloned().unwrap_or(serde_json::Value::Null),
-        "file": file.get("file").cloned().unwrap_or(serde_json::Value::Null),
-        "risk": file
-            .get("blast_radius")
-            .and_then(|blast_radius| blast_radius.get("risk"))
-            .cloned()
-            .unwrap_or(serde_json::Value::Null),
+        "score": file.get("s").or_else(|| file.get("score")).cloned().unwrap_or(serde_json::Value::Null),
+        "file": file.get("f").or_else(|| file.get("file")).cloned().unwrap_or(serde_json::Value::Null),
+        "risk": context_file_risk_value(file).unwrap_or(serde_json::Value::Null),
         "symbols": symbols,
         "snippets": snippets,
         "related_tests": related_tests,
         "why": why
     })
+}
+
+fn compact_or_legacy_impact_tests_len(impact: &serde_json::Value) -> Option<usize> {
+    if let Some(tests) = impact.get("t").or_else(|| impact.get("tests")) {
+        return tests
+            .as_array()
+            .map(Vec::len)
+            .or_else(|| tests.as_str().map(|_| 1));
+    }
+    let items = impact.as_array()?;
+    let test_value = items.get(1)?;
+    if test_value.is_string() {
+        Some(1)
+    } else {
+        test_value.as_array().map(Vec::len)
+    }
+}
+
+fn context_file_risk_value(file: &serde_json::Value) -> Option<serde_json::Value> {
+    if let Some(impact) = file.get("i").or_else(|| file.get("impact")) {
+        if let Some(risk) = impact.get("r").or_else(|| impact.get("risk")) {
+            return Some(risk.clone());
+        }
+        if let Some(risk) = impact.as_array().and_then(|items| items.first()) {
+            return Some(risk.clone());
+        }
+    }
+    file.get("blast_radius")
+        .and_then(|blast_radius| blast_radius.get("risk"))
+        .cloned()
 }
 
 fn write_ollama_artifact(
@@ -10320,7 +11544,7 @@ fn setup_agent(client: AgentClient, root: &Path, force: bool) -> Result<SetupAge
         root: root_label(root),
         files: written,
         first_required_command,
-        policy: "Call callsieve_context before broad grep, rg, repository search, or repeated file reads.",
+        policy: "Call callsieve_context before broad grep, rg, repository search, or repeated file reads. Read read_first, review context.sel.next, and use instruction.x.o/n/next plus focus, related, and tests before grep.",
         warnings,
     })
 }
@@ -10374,7 +11598,7 @@ fn codex_hooks_install(
         index,
         first_required_command: format!("callsieve agent-context {} \"<task>\"", root.display()),
         trust_instruction: "Review and trust project hooks in Codex with /hooks.",
-        policy: "Codex lifecycle hooks inject CallSieve context and block broad search before context.",
+        policy: "Codex lifecycle hooks inject CallSieve context plus local expansion commands and block broad search before context.",
     })
 }
 
@@ -11128,7 +12352,7 @@ fn claude_hooks_install(
         index,
         first_required_command: format!("callsieve agent-context {} \"<task>\"", root.display()),
         trust_instruction: "Review and trust project hooks in Claude Code with /hooks.",
-        policy: "Claude Code lifecycle hooks inject CallSieve context and block broad search before context.",
+        policy: "Claude Code lifecycle hooks inject CallSieve context plus local expansion commands and block broad search before context.",
     })
 }
 
@@ -11820,45 +13044,49 @@ fn codex_hook_user_prompt_submit(
     }
     state.last_prompt = prompt.clone();
 
-    let maybe_index = store::json_store::load_index(root).ok();
-    let status = query::index_status(root, maybe_index.as_ref());
-    let fresh = serde_json::to_value(&status)?
-        .get("fresh")
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false);
-
-    let additional_context = if fresh {
-        let (index, index_load_ms) = load_index_timed(root)?;
-        let mut context = query::build_context(
-            root,
-            &index,
-            &retrieval_prompt,
-            limit,
-            snippets_per_file,
-            true,
-        )?;
-        context.add_index_load_time(index_load_ms);
-        let context_value = serde_json::to_value(&context)?;
-        let files = context_read_first_files(&context_value);
-        let tokens = serde_json::to_string(&context_value)
-            .map(|json| json.len().div_ceil(4))
-            .unwrap_or_default();
-        state.context_seen = true;
-        state.selected_files = files.clone();
-        append_codex_hook_trace_event(
-            root,
-            &state,
-            &retrieval_prompt,
-            hook_injected_context_trace_event(root, &retrieval_prompt, files, tokens),
-        )?;
-        format!(
-            "{}\n\n{}",
-            hook_context_intro(None),
-            context_markdown(&context_value, "grep_only_if_context_is_insufficient")
-        )
-    } else {
-        state.context_seen = false;
-        hook_missing_index_message(root, &retrieval_prompt)
+    let additional_context = match load_fresh_index_timed(root) {
+        Ok((index, index_load_ms, refreshed)) => {
+            let mut context = query::build_context(
+                root,
+                &index,
+                &retrieval_prompt,
+                limit,
+                snippets_per_file,
+                true,
+            )?;
+            context.add_index_load_time(index_load_ms);
+            if refreshed {
+                context.add_warning("rebuilt missing or stale CallSieve index before context");
+            }
+            let context_value = compact_context_value_for_prompt(&context)?;
+            let files = context_read_first_files(&context_value);
+            let tokens = serde_json::to_string(&context_value)
+                .map(|json| json.len().div_ceil(4))
+                .unwrap_or_default();
+            state.context_seen = true;
+            state.selected_files = files.clone();
+            let local_first_expansion =
+                local_first_expansion_for_context_value(root, &context_value);
+            append_codex_hook_trace_event(
+                root,
+                &state,
+                &retrieval_prompt,
+                hook_injected_context_trace_event(root, &retrieval_prompt, files, tokens),
+            )?;
+            format!(
+                "{}\n\n{}",
+                hook_context_intro(None),
+                context_markdown(
+                    &context_value,
+                    "grep_only_if_context_is_insufficient",
+                    local_first_expansion.as_ref(),
+                )
+            )
+        }
+        Err(_) => {
+            state.context_seen = false;
+            hook_missing_index_message(root, &retrieval_prompt)
+        }
     };
 
     save_codex_hook_state(root, &state)?;
@@ -11976,45 +13204,49 @@ fn claude_hook_user_prompt_submit(
     }
     state.last_prompt = prompt.clone();
 
-    let maybe_index = store::json_store::load_index(root).ok();
-    let status = query::index_status(root, maybe_index.as_ref());
-    let fresh = serde_json::to_value(&status)?
-        .get("fresh")
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false);
-
-    let additional_context = if fresh {
-        let (index, index_load_ms) = load_index_timed(root)?;
-        let mut context = query::build_context(
-            root,
-            &index,
-            &retrieval_prompt,
-            limit,
-            snippets_per_file,
-            true,
-        )?;
-        context.add_index_load_time(index_load_ms);
-        let context_value = serde_json::to_value(&context)?;
-        let files = context_read_first_files(&context_value);
-        let tokens = serde_json::to_string(&context_value)
-            .map(|json| json.len().div_ceil(4))
-            .unwrap_or_default();
-        state.context_seen = true;
-        state.selected_files = files.clone();
-        append_claude_hook_trace_event(
-            root,
-            &state,
-            &retrieval_prompt,
-            hook_injected_context_trace_event(root, &retrieval_prompt, files, tokens),
-        )?;
-        format!(
-            "{}\n\n{}",
-            hook_context_intro(Some("Claude")),
-            context_markdown(&context_value, "grep_only_if_context_is_insufficient")
-        )
-    } else {
-        state.context_seen = false;
-        hook_missing_index_message(root, &retrieval_prompt)
+    let additional_context = match load_fresh_index_timed(root) {
+        Ok((index, index_load_ms, refreshed)) => {
+            let mut context = query::build_context(
+                root,
+                &index,
+                &retrieval_prompt,
+                limit,
+                snippets_per_file,
+                true,
+            )?;
+            context.add_index_load_time(index_load_ms);
+            if refreshed {
+                context.add_warning("rebuilt missing or stale CallSieve index before context");
+            }
+            let context_value = compact_context_value_for_prompt(&context)?;
+            let files = context_read_first_files(&context_value);
+            let tokens = serde_json::to_string(&context_value)
+                .map(|json| json.len().div_ceil(4))
+                .unwrap_or_default();
+            state.context_seen = true;
+            state.selected_files = files.clone();
+            let local_first_expansion =
+                local_first_expansion_for_context_value(root, &context_value);
+            append_claude_hook_trace_event(
+                root,
+                &state,
+                &retrieval_prompt,
+                hook_injected_context_trace_event(root, &retrieval_prompt, files, tokens),
+            )?;
+            format!(
+                "{}\n\n{}",
+                hook_context_intro(Some("Claude")),
+                context_markdown(
+                    &context_value,
+                    "grep_only_if_context_is_insufficient",
+                    local_first_expansion.as_ref(),
+                )
+            )
+        }
+        Err(_) => {
+            state.context_seen = false;
+            hook_missing_index_message(root, &retrieval_prompt)
+        }
     };
 
     save_claude_hook_state(root, &state)?;
@@ -12188,46 +13420,50 @@ fn client_hook_user_prompt_submit(
     }
     state.last_prompt = prompt.clone();
 
-    let maybe_index = store::json_store::load_index(root).ok();
-    let status = query::index_status(root, maybe_index.as_ref());
-    let fresh = serde_json::to_value(&status)?
-        .get("fresh")
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false);
-
-    let additional_context = if fresh {
-        let (index, index_load_ms) = load_index_timed(root)?;
-        let mut context = query::build_context(
-            root,
-            &index,
-            &retrieval_prompt,
-            limit,
-            snippets_per_file,
-            true,
-        )?;
-        context.add_index_load_time(index_load_ms);
-        let context_value = serde_json::to_value(&context)?;
-        let files = context_read_first_files(&context_value);
-        let tokens = serde_json::to_string(&context_value)
-            .map(|json| json.len().div_ceil(4))
-            .unwrap_or_default();
-        state.context_seen = true;
-        state.selected_files = files.clone();
-        append_client_hook_trace_event(
-            root,
-            client,
-            &state,
-            &retrieval_prompt,
-            hook_injected_context_trace_event(root, &retrieval_prompt, files, tokens),
-        )?;
-        format!(
-            "{}\n\n{}",
-            hook_context_intro(Some(hook_client_display(client))),
-            context_markdown(&context_value, "grep_only_if_context_is_insufficient")
-        )
-    } else {
-        state.context_seen = false;
-        hook_missing_index_message(root, &retrieval_prompt)
+    let additional_context = match load_fresh_index_timed(root) {
+        Ok((index, index_load_ms, refreshed)) => {
+            let mut context = query::build_context(
+                root,
+                &index,
+                &retrieval_prompt,
+                limit,
+                snippets_per_file,
+                true,
+            )?;
+            context.add_index_load_time(index_load_ms);
+            if refreshed {
+                context.add_warning("rebuilt missing or stale CallSieve index before context");
+            }
+            let context_value = compact_context_value_for_prompt(&context)?;
+            let files = context_read_first_files(&context_value);
+            let tokens = serde_json::to_string(&context_value)
+                .map(|json| json.len().div_ceil(4))
+                .unwrap_or_default();
+            state.context_seen = true;
+            state.selected_files = files.clone();
+            let local_first_expansion =
+                local_first_expansion_for_context_value(root, &context_value);
+            append_client_hook_trace_event(
+                root,
+                client,
+                &state,
+                &retrieval_prompt,
+                hook_injected_context_trace_event(root, &retrieval_prompt, files, tokens),
+            )?;
+            format!(
+                "{}\n\n{}",
+                hook_context_intro(Some(hook_client_display(client))),
+                context_markdown(
+                    &context_value,
+                    "grep_only_if_context_is_insufficient",
+                    local_first_expansion.as_ref(),
+                )
+            )
+        }
+        Err(_) => {
+            state.context_seen = false;
+            hook_missing_index_message(root, &retrieval_prompt)
+        }
     };
 
     save_client_hook_state(root, client, &state)?;
@@ -12815,16 +14051,16 @@ fn hook_client_for_agent(client: AgentClient) -> Option<HookClient> {
 fn hook_client_policy(client: HookClient) -> &'static str {
     match client {
         HookClient::Copilot => {
-            "GitHub Copilot local hooks inject CallSieve context and block broad search before context. Cloud agents are template-only unless CallSieve is installed in the sandbox."
+            "GitHub Copilot local hooks inject CallSieve context plus local expansion commands and block broad search before context. Cloud agents are template-only unless CallSieve is installed in the sandbox."
         }
         HookClient::OpenCode => {
-            "OpenCode plugin hooks inject CallSieve context and block broad grep, glob, read, and shell search before context."
+            "OpenCode plugin hooks inject CallSieve context plus local expansion commands and block broad grep, glob, read, and shell search before context."
         }
         HookClient::Antigravity => {
-            "Antigravity CLI hooks inject CallSieve context and block broad search before context."
+            "Antigravity CLI hooks inject CallSieve context plus local expansion commands and block broad search before context."
         }
         HookClient::Cline => {
-            "Cline lifecycle hooks inject CallSieve context and block broad search before context."
+            "Cline lifecycle hooks inject CallSieve context plus local expansion commands and block broad search before context."
         }
     }
 }
@@ -14037,7 +15273,7 @@ fn editor_hook(root: &Path, editor: EditorKind, force: bool) -> Result<EditorHoo
                 root,
                 &root.join(".callsieve/editor-hook.md"),
                 &format!(
-                    "Run `{daemon_command}` at project open, then call `callsieve agent-context <repo> \"<task>\"` before broad grep or repeated file reads.\n"
+                    "Run `{daemon_command}` at project open, then call `callsieve agent-context <repo> \"<task>\"` before broad grep or repeated file reads. Read `read_first`, review `context.sel.next`, then use `instruction.x.o/n/next`, `callsieve focus`, `callsieve related`, and `callsieve tests` before grep.\n"
                 ),
                 force,
                 &mut files,
@@ -14047,7 +15283,9 @@ fn editor_hook(root: &Path, editor: EditorKind, force: bool) -> Result<EditorHoo
                 &root.join(".callsieve/editor-hook.json"),
                 &serde_json::to_string_pretty(&serde_json::json!({
                     "daemon_command": daemon_command.clone(),
-                    "policy": "callsieve_context before broad grep or repeated file reads"
+                    "policy": "callsieve_context before broad grep or repeated file reads",
+                    "ranked_expansion_before_grep": ["context.sel.next", "instruction.x.o/n/next"],
+                    "local_expansion_before_grep": ["callsieve focus", "callsieve related", "callsieve tests"]
                 }))?,
                 force,
                 &mut files,
@@ -14126,7 +15364,7 @@ fn cursor_task_json() -> String {
 }
 
 fn codex_policy_text() -> &'static str {
-    "CallSieve policy: call callsieve_context with the repository path and task before broad grep, rg, repository-wide search, or repeated file reads. Read read_first files first; grep only if the context packet is insufficient.\n"
+    "CallSieve policy: call callsieve_context with the repository path and task before broad grep, rg, repository-wide search, or repeated file reads. Read read_first files first, review context.sel.next, then use instruction.x.o/n/next plus callsieve_focus, callsieve_related, and callsieve_tests, or CLI callsieve focus, callsieve related, and callsieve tests, before grep. Grep only if the context packet and local expansion are insufficient.\n"
 }
 
 fn editor_name(editor: EditorKind) -> &'static str {
@@ -14632,10 +15870,14 @@ fn agent_policy_text(client: AgentClient, first_required_command: &str) -> Strin
         AgentClient::Warp => {
             "Use the generated Warp local MCP and cloud-agent templates before repository search. Cloud agents need a runtime that can execute the local `callsieve` binary."
         }
-        AgentClient::Cline => "Use the Cline MCP server and this rule before search tools.",
-        AgentClient::Zoo => "Use the Zoo MCP server and `.roo` rule files before search tools.",
+        AgentClient::Cline => {
+            "Use the Cline MCP server, call `callsieve_context`, and follow this rule before search tools."
+        }
+        AgentClient::Zoo => {
+            "Use the Zoo MCP server, call `callsieve_context`, and follow `.roo` rule files before search tools."
+        }
         AgentClient::Roo => {
-            "Use the Zoo-compatible `.roo` MCP server and rules before search tools."
+            "Use the Zoo-compatible `.roo` MCP server, call `callsieve_context`, and follow rules before search tools."
         }
         AgentClient::Generic => "Use `callsieve mcp` for MCP clients when available.",
     };
@@ -14645,9 +15887,9 @@ fn agent_policy_text(client: AgentClient, first_required_command: &str) -> Strin
 1. First command for every coding task: `{first_required_command}`.\n\
 2. {mcp_hint}\n\
 3. Treat `retrieval_cost.retrieval_model_tokens = 0` as retrieval-only; returned context still counts when read.\n\
-4. Read the returned `read_first` files before broad grep, rg, repository-wide search, or repeated file reads.\n\
-5. Use `callsieve_focus`, `callsieve_related`, or `callsieve_tests` for targeted detail before broad search.\n\
-6. Grep only if the context packet is insufficient, and preserve why it was insufficient in the task notes or trace.\n\
+4. Read the returned `read_first` files and review `context.sel.next` before broad grep, rg, repository-wide search, or repeated file reads.\n\
+5. Use `instruction.x.o/n/next`, MCP `callsieve_focus`, `callsieve_related`, and `callsieve_tests`, or CLI `callsieve focus`, `callsieve related`, and `callsieve tests`, for targeted local detail before broad search.\n\
+6. Grep only if the context packet and local expansion are insufficient, and preserve why they were insufficient in the task notes or trace.\n\
 7. For audited sessions, run `callsieve enforce <repo> --client {client_name} --trace <trace.json> --strict`.\n"
     )
 }
@@ -14659,9 +15901,9 @@ fn portable_agent_policy_text(client: AgentClient) -> String {
 1. Before broad grep, rg, repository-wide search, or repeated file reads, call the CallSieve MCP `callsieve_context` tool when it is available.\n\
 2. If MCP tools are unavailable, run `callsieve agent-context <repo> \"<task>\"` from this workspace.\n\
 3. Treat `retrieval_cost.retrieval_model_tokens = 0` as retrieval-only; returned context still counts when read.\n\
-4. Read the returned `read_first` files first.\n\
-5. Use focused CallSieve follow-up tools before broad search.\n\
-6. Grep only if the context packet is insufficient, and record why it was insufficient in task notes or trace.\n"
+4. Read the returned `read_first` files first and review `context.sel.next`.\n\
+5. Use `instruction.x.o/n/next`, MCP `callsieve_focus`, `callsieve_related`, and `callsieve_tests`, or CLI `callsieve focus`, `callsieve related`, and `callsieve tests`, before broad search.\n\
+6. Grep only if the context packet and local expansion are insufficient, and record why they were insufficient in task notes or trace.\n"
     )
 }
 
@@ -14803,7 +16045,8 @@ fn jetbrains_mcp_template_json(callsieve_command: &str) -> String {
         },
         "notes": [
             "JetBrains AI Assistant MCP setup is manual/template-only here.",
-            "Use `callsieve agent-setup <repo> --client junie` for Junie project MCP support."
+            "Use `callsieve agent-setup <repo> --client junie` for Junie project MCP support.",
+            "Before broad search, use callsieve_context, read context.sel.next, then use instruction.x.o/n/next, callsieve_focus, callsieve_related, and callsieve_tests for local detail."
         ]
     }))
     .unwrap_or_else(|_| "{}".to_string())
@@ -14851,20 +16094,20 @@ fn goose_config_yaml(callsieve_command: &str) -> String {
 
 fn goose_deeplink_text(callsieve_command: &str) -> String {
     format!(
-        "CallSieve Goose extension template\n\nCommand: {callsieve_command}\nArgs: mcp\n\nUse `.callsieve/integrations/goose-config.yaml` as the reviewed local template. CallSieve does not mutate user Goose config automatically.\n"
+        "CallSieve Goose extension template\n\nCommand: {callsieve_command}\nArgs: mcp\n\nUse `.callsieve/integrations/goose-config.yaml` as the reviewed local template. Call callsieve_context first, review context.sel.next, then use instruction.x.o/n/next, callsieve_focus, callsieve_related, and callsieve_tests before broad grep. CallSieve does not mutate user Goose config automatically.\n"
     )
 }
 
 fn warp_agent_yaml(callsieve_command: &str) -> String {
     format!(
-        "name: callsieve-local-agent\nsystem_prompt: \"Use CallSieve context before broad repository search or repeated file reads.\"\nmcp_servers:\n  callsieve:\n    command: {}\n    args:\n      - \"mcp\"\n    env: {{}}\n# Cloud agents need an environment where this local callsieve binary is installed and runnable.\n",
+        "name: callsieve-local-agent\nsystem_prompt: \"Use callsieve_context before broad repository search or repeated file reads. Review context.sel.next, then use instruction.x.o/n/next plus callsieve_focus, callsieve_related, and callsieve_tests for local detail before grep.\"\nmcp_servers:\n  callsieve:\n    command: {}\n    args:\n      - \"mcp\"\n    env: {{}}\n# Cloud agents need an environment where this local callsieve binary is installed and runnable.\n",
         yaml_double_quoted(callsieve_command)
     )
 }
 
 fn amp_skill_markdown(policy: &str) -> String {
     format!(
-        "# CallSieve Context\n\nUse this skill when working in this repository with Amp.\n\n{policy}\nThe bundled `mcp.json` starts `callsieve mcp` as a local stdio MCP server. Do not use broad repository search until the CallSieve context packet is insufficient.\n"
+        "# CallSieve Context\n\nUse this skill when working in this repository with Amp.\n\n{policy}\nThe bundled `mcp.json` starts `callsieve mcp` as a local stdio MCP server. Do not use broad repository search until the CallSieve context packet and local expansion commands are insufficient.\n"
     )
 }
 
@@ -14931,9 +16174,9 @@ fn zoo_roomodes_json() -> String {
             {
                 "slug": "callsieve-code",
                 "name": "CallSieve Code",
-                "role": "Use CallSieve context before broad repository search.",
+                "role": "Use CallSieve context and local expansion before broad repository search.",
                 "groups": ["read", "edit", "browser", "command", "mcp"],
-                "customInstructions": "Call callsieve_context or run callsieve agent-context before broad grep, repository-wide search, or repeated file reads."
+                "customInstructions": "Call callsieve_context or run callsieve agent-context before broad grep, repository-wide search, or repeated file reads. Read read_first and context.sel.next, then use instruction.x.o/n/next plus callsieve_focus, callsieve_related, and callsieve_tests, or CLI callsieve focus, callsieve related, and callsieve tests, before grep."
             }
         ]
     }))
@@ -15226,7 +16469,11 @@ fn write_guard_trace(path: &Path, task: &str, context: &query::ContextOutput) ->
         .and_then(serde_json::Value::as_array)
         .into_iter()
         .flatten()
-        .filter_map(|file| file.get("file").and_then(serde_json::Value::as_str))
+        .filter_map(|file| {
+            file.get("f")
+                .or_else(|| file.get("file"))
+                .and_then(serde_json::Value::as_str)
+        })
         .map(str::to_string)
         .collect();
     let context_tokens = serde_json::to_string(&context_value)
@@ -15278,10 +16525,21 @@ fn run_shim_command(
 ) -> Result<ShimRunOutput> {
     let pattern = extract_search_pattern(tool, args);
     let context = if let Some(pattern) = pattern.as_deref() {
-        let index = store::json_store::load_index(root)?;
-        Some(query::build_context_with_options(
-            root, &index, pattern, 8, 2, true, false,
-        )?)
+        let (index, index_load_ms, refreshed) = load_fresh_index_timed(root)?;
+        let mut context = query::build_context_with_options(
+            root,
+            &index,
+            pattern,
+            query::DEFAULT_AGENT_CONTEXT_LIMIT,
+            2,
+            true,
+            false,
+        )?;
+        context.add_index_load_time(index_load_ms);
+        if refreshed {
+            context.add_warning("rebuilt missing or stale CallSieve index before context");
+        }
+        Some(compact_context_value_for_prompt(&context)?)
     } else {
         None
     };

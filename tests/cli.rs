@@ -52,6 +52,401 @@ fn json_allow_failure(output: &Output) -> Value {
     serde_json::from_slice(&output.stdout).expect("stdout should be valid JSON")
 }
 
+fn estimated_json_tokens(value: &Value) -> usize {
+    serde_json::to_string(value).unwrap().len().div_ceil(4)
+}
+
+fn context_stats_tokens(stats: &Value) -> Option<u64> {
+    stats
+        .get("t")
+        .or_else(|| stats.get("tokens"))
+        .or_else(|| stats.get("estimated_tokens"))
+        .and_then(Value::as_u64)
+}
+
+fn context_stats_budget(stats: &Value) -> Option<u64> {
+    stats
+        .get("b")
+        .or_else(|| stats.get("budget"))
+        .or_else(|| stats.get("token_budget"))
+        .and_then(Value::as_u64)
+}
+
+fn context_stats_local_field(stats: &Value, compact: &str, legacy: &str) -> Option<u64> {
+    stats
+        .get("local")
+        .and_then(|local| local.get(compact).or_else(|| local.get(legacy)))
+        .and_then(Value::as_u64)
+}
+
+fn read_first_file_path(file: &Value) -> Option<&str> {
+    file.get("f")
+        .or_else(|| file.get("file"))
+        .and_then(Value::as_str)
+}
+
+fn read_first_symbols(file: &Value) -> Option<&Vec<Value>> {
+    file.get("sy")
+        .or_else(|| file.get("symbols"))
+        .and_then(Value::as_array)
+}
+
+fn read_first_symbol_name(symbol: &Value) -> Option<&str> {
+    symbol
+        .get("n")
+        .or_else(|| symbol.get("name"))
+        .and_then(Value::as_str)
+        .or_else(|| {
+            symbol
+                .as_array()
+                .and_then(|items| items.first())
+                .and_then(Value::as_str)
+        })
+}
+
+fn read_first_symbol_kind(symbol: &Value) -> Option<&str> {
+    let kind = symbol
+        .get("k")
+        .or_else(|| symbol.get("kind"))
+        .and_then(Value::as_str)
+        .or_else(|| {
+            let items = symbol.as_array()?;
+            items
+                .get(3)
+                .or_else(|| items.get(2).filter(|value| value.is_string()))
+                .and_then(Value::as_str)
+        })?;
+    Some(expand_compact_symbol_kind(kind))
+}
+
+fn expand_compact_symbol_kind(kind: &str) -> &str {
+    match kind {
+        "cl" => "class",
+        "m" => "method",
+        "if" => "interface",
+        "t" => "type",
+        "s" => "struct",
+        "e" => "enum",
+        "tr" => "trait",
+        "im" => "impl",
+        "c" => "constant",
+        "mod" => "module",
+        "mac" => "macro",
+        "cmp" => "component",
+        _ => kind,
+    }
+}
+
+fn read_first_symbol_line_value(symbol: &Value) -> Option<&Value> {
+    symbol
+        .get("l")
+        .or_else(|| symbol.get("line"))
+        .or_else(|| symbol.get("ls"))
+        .or_else(|| symbol.get("lines"))
+        .or_else(|| symbol.as_array().and_then(|items| items.get(1)))
+}
+
+fn read_first_impact(file: &Value) -> Option<&Value> {
+    file.get("i").or_else(|| file.get("impact"))
+}
+
+fn read_first_impact_risk(impact: &Value) -> Option<&str> {
+    impact
+        .get("r")
+        .or_else(|| impact.get("risk"))
+        .and_then(Value::as_str)
+        .or_else(|| {
+            impact
+                .as_array()
+                .and_then(|items| items.first())
+                .and_then(Value::as_str)
+        })
+}
+
+fn read_first_impact_tests(impact: &Value) -> Vec<String> {
+    if let Some(tests) = impact.get("t").or_else(|| impact.get("tests")) {
+        if let Some(test) = tests.as_str() {
+            return vec![test.to_string()];
+        }
+        return tests
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+            .collect();
+    }
+    let Some(test_value) = impact.as_array().and_then(|items| items.get(1)) else {
+        return Vec::new();
+    };
+    if let Some(test) = test_value.as_str() {
+        return vec![test.to_string()];
+    }
+    test_value
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_string)
+        .collect()
+}
+
+fn read_first_impact_tests_for_context(context: &Value, impact: &Value) -> Vec<String> {
+    fn resolve_test_ref(context: &Value, value: &Value) -> Option<String> {
+        if let Some(path) = value.as_str() {
+            return Some(path.to_string());
+        }
+        let index = value
+            .as_u64()
+            .and_then(|index| usize::try_from(index).ok())?;
+        context
+            .get("read_first")
+            .and_then(Value::as_array)
+            .and_then(|files| files.get(index))
+            .and_then(read_first_file_path)
+            .map(str::to_string)
+    }
+
+    if let Some(tests) = impact.get("t").or_else(|| impact.get("tests")) {
+        if let Some(test) = resolve_test_ref(context, tests) {
+            return vec![test];
+        }
+        return tests
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|value| resolve_test_ref(context, value))
+            .collect();
+    }
+    let Some(test_value) = impact.as_array().and_then(|items| items.get(1)) else {
+        return Vec::new();
+    };
+    if let Some(test) = resolve_test_ref(context, test_value) {
+        return vec![test];
+    }
+    test_value
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|value| resolve_test_ref(context, value))
+        .collect()
+}
+
+fn expansion_target_file(target: &Value) -> Option<&str> {
+    target
+        .get("f")
+        .or_else(|| target.get("file"))
+        .and_then(Value::as_str)
+        .or_else(|| {
+            target
+                .as_array()
+                .and_then(|items| items.first())
+                .and_then(Value::as_str)
+        })
+}
+
+fn expansion_target_index(target: &Value) -> Option<u64> {
+    target.as_u64()
+}
+
+fn expansion_target_symbol(target: &Value) -> Option<&str> {
+    target
+        .get("sy")
+        .or_else(|| target.get("symbol"))
+        .and_then(Value::as_str)
+        .or_else(|| {
+            target
+                .as_array()
+                .and_then(|items| items.get(1))
+                .and_then(Value::as_str)
+        })
+}
+
+fn expansion_target_line(target: &Value) -> Option<u64> {
+    target
+        .get("l")
+        .or_else(|| target.get("line"))
+        .and_then(Value::as_u64)
+        .or_else(|| {
+            target
+                .as_array()
+                .and_then(|items| items.get(2))
+                .and_then(Value::as_u64)
+        })
+}
+
+fn selection_top_file(selection: &Value) -> Option<&str> {
+    selection
+        .get("top")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            selection
+                .get("top")
+                .and_then(Value::as_array)
+                .and_then(|items| items.first())
+                .and_then(Value::as_str)
+        })
+        .or_else(|| selection.get("top_file").and_then(Value::as_str))
+}
+
+fn selection_ref_file<'a>(context: &'a Value, value: &'a Value) -> Option<&'a str> {
+    if let Some(file) = value.as_str() {
+        return Some(file);
+    }
+    let index = value
+        .as_u64()
+        .and_then(|index| usize::try_from(index).ok())?;
+    context
+        .get("read_first")
+        .and_then(Value::as_array)
+        .and_then(|files| files.get(index))
+        .and_then(read_first_file_path)
+}
+
+fn selection_top_file_for_context<'a>(context: &'a Value, selection: &'a Value) -> Option<&'a str> {
+    if let Some(top) = selection.get("top") {
+        if let Some(file) = selection_ref_file(context, top) {
+            return Some(file);
+        }
+        if let Some(file) = top
+            .as_array()
+            .and_then(|items| items.first())
+            .and_then(|value| selection_ref_file(context, value))
+        {
+            return Some(file);
+        }
+    }
+    selection_top_file(selection)
+}
+
+fn selection_top_reason(selection: &Value) -> Option<&str> {
+    selection
+        .get("why")
+        .or_else(|| selection.get("top_reason"))
+        .and_then(Value::as_str)
+        .or_else(|| {
+            selection
+                .get("top")
+                .and_then(Value::as_array)
+                .and_then(|items| {
+                    items
+                        .get(2)
+                        .and_then(Value::as_str)
+                        .or_else(|| items.get(1).and_then(Value::as_str))
+                })
+        })
+}
+
+fn selection_signal_name(signal: &Value) -> Option<&str> {
+    let name = signal.as_str().or_else(|| {
+        signal
+            .get("n")
+            .or_else(|| signal.get("name"))
+            .and_then(Value::as_str)
+            .or_else(|| {
+                signal
+                    .as_array()
+                    .and_then(|items| items.first())
+                    .and_then(Value::as_str)
+            })
+    })?;
+    Some(expand_compact_selection_signal(name))
+}
+
+fn expand_compact_selection_signal(name: &str) -> &str {
+    match name {
+        "sym" => "exact_symbol",
+        "sy" => "symbol_name_keyword_cluster",
+        "sub" => "symbol_substring",
+        "kw" => "keyword_overlap",
+        "p" => "path_filename",
+        "pt" => "path_keyword_overlap",
+        "mod" => "module_anchor",
+        "pi" => "path_intent_cluster",
+        "fn" => "filename_keyword_cluster",
+        "ct" => "content_keyword_overlap",
+        "tf" => "test_file",
+        "test" => "test_proximity",
+        "cfg" => "config_file",
+        "cfgdep" => "config_dependency_intent",
+        "dep" => "dependency_manifest_intent",
+        "bench" => "benchmark_evidence_file_intent",
+        "readme" => "readme_evidence_file_intent",
+        "comp" => "competitive_positioning_doc",
+        "doc" => "docs_intent",
+        "docp" => "docs_path_intent",
+        "cmd" => "command_surface_intent",
+        "hook" => "hook_meta_intent",
+        "im" => "graph_imported_file",
+        "ref" => "graph_referencing_file",
+        "call" => "graph_callee",
+        "caller" => "graph_caller",
+        "trace" => "stack_trace",
+        "git" => "git_signal",
+        "semr" => "semantic_recall",
+        "seme" => "semantic_embedding",
+        _ => name,
+    }
+}
+
+fn selection_signal_points(signal: &Value) -> Option<i64> {
+    signal
+        .get("p")
+        .or_else(|| signal.get("points"))
+        .and_then(Value::as_i64)
+        .or_else(|| {
+            signal
+                .as_array()
+                .and_then(|items| items.get(1))
+                .and_then(Value::as_i64)
+        })
+}
+
+fn selection_next_file(next: &Value) -> Option<&str> {
+    next.get("f")
+        .or_else(|| next.get("file"))
+        .and_then(Value::as_str)
+        .or_else(|| {
+            next.as_array()
+                .and_then(|items| items.first())
+                .and_then(Value::as_str)
+        })
+}
+
+fn selection_next_file_for_context<'a>(context: &'a Value, next: &'a Value) -> Option<&'a str> {
+    if let Some(file) = selection_next_file(next) {
+        return Some(file);
+    }
+    next.as_array()
+        .and_then(|items| items.first())
+        .and_then(|value| selection_ref_file(context, value))
+}
+
+fn memory_cache_hit(memory: &Value) -> Option<bool> {
+    memory
+        .get("hit")
+        .or_else(|| memory.get("cache_hit"))
+        .and_then(Value::as_bool)
+}
+
+fn memory_recommended_files(memory: &Value) -> Vec<Value> {
+    memory
+        .get("f")
+        .or_else(|| memory.get("recommended_files"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+}
+
+fn memory_recommended_symbols(memory: &Value) -> Vec<Value> {
+    memory
+        .get("sy")
+        .or_else(|| memory.get("recommended_symbols"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+}
+
 fn assert_no_codex_unsupported_top_level(output: &Value) {
     assert!(output.get("suppressOutput").is_none());
     assert!(output.get("decision").is_none());
@@ -97,6 +492,21 @@ fn fixture_repo() -> tempfile::TempDir {
     write(root.join("ignored.ts"), "export function ignored() {}\n");
     write(root.join("vendor/generated.rs"), "pub fn generated() {}\n");
 
+    temp
+}
+
+fn wide_fixture_repo() -> tempfile::TempDir {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    for index in 0..8 {
+        let content = format!(
+            "export function targetFeature{index}() {{\n  return 'token filter local retrieval {index}';\n}}\n"
+        );
+        write(
+            root.join(format!("src/features/feature_{index}.ts")),
+            &content,
+        );
+    }
     temp
 }
 
@@ -337,7 +747,10 @@ fn index_supports_major_language_wave() {
         "--limit",
         "5",
     ]));
-    assert_eq!(context["context"]["read_first"][0]["file"], "app.php");
+    assert_eq!(
+        read_first_file_path(&context["context"]["read_first"][0]).unwrap(),
+        "app.php"
+    );
 }
 
 #[test]
@@ -503,8 +916,8 @@ fn hook_meta_tasks_rank_cli_and_tests_first() {
     ]));
     let files = context["context"]["read_first"].as_array().unwrap();
 
-    assert_eq!(files[0]["file"], "src/cli.rs");
-    assert_eq!(files[1]["file"], "tests/cli.rs");
+    assert_eq!(read_first_file_path(&files[0]).unwrap(), "src/cli.rs");
+    assert_eq!(read_first_file_path(&files[1]).unwrap(), "tests/cli.rs");
 }
 
 #[test]
@@ -559,9 +972,38 @@ fn context_returns_read_first_packet_for_agent_task() {
         "change createSession token behavior",
         "--limit",
         "5",
+        "--token-budget",
+        "2000",
     ]));
 
     let first = &context["read_first"][0];
+    assert_eq!(
+        context["selection_summary"]["top_file"],
+        "src/auth/session.ts"
+    );
+    assert!(context["selection_summary"]["top_score"].as_i64().unwrap() > 0);
+    assert!(
+        !context["selection_summary"]["top_reason"]
+            .as_str()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        context["selection_summary"]["top_signals"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|component| component["name"].as_str().is_some()
+                && component["points"].as_i64().unwrap() > 0)
+    );
+    let next_files = context["selection_summary"]["next_files"]
+        .as_array()
+        .unwrap();
+    assert!(!next_files.is_empty());
+    assert!(next_files.len() <= 2);
+    assert_ne!(next_files[0]["file"], "src/auth/session.ts");
+    assert!(next_files[0]["score"].as_i64().unwrap() > 0);
+    assert!(!next_files[0]["reason"].as_str().unwrap().is_empty());
     assert_eq!(first["file"], "src/auth/session.ts");
     assert!(!first["symbols"].as_array().unwrap().is_empty());
     assert!(
@@ -660,24 +1102,34 @@ fn agent_context_wraps_context_with_before_grep_guidance() {
         "5",
     ]));
 
-    assert!(
-        output["instruction"]["guidance"]
-            .as_str()
-            .unwrap()
-            .contains("grep only if insufficient")
-    );
+    assert!(output["instruction"].get("guidance").is_none());
+    assert!(output["instruction"].get("a").is_none());
+    assert!(output["instruction"].get("grep_policy").is_none());
+    assert!(output["instruction"].get("token_policy").is_none());
+    assert!(output["instruction"].get("local_first_expansion").is_none());
+    let expansion = &output["instruction"]["x"];
+    assert_eq!(expansion_target_index(&expansion["o"]), Some(0));
+    assert!(expansion_target_file(&expansion["o"]).is_none());
+    assert!(expansion.get("top").is_none());
+    let top_read_first = &output["context"]["read_first"][0];
     assert_eq!(
-        output["instruction"]["grep_policy"],
-        "grep_only_if_context_is_insufficient"
-    );
-    assert_eq!(
-        output["instruction"]["token_policy"],
-        "zero_ai_model_tokens_for_retrieval; context_packet_tokens_apply_when_read"
-    );
-    assert_eq!(
-        output["context"]["read_first"][0]["file"],
+        read_first_file_path(top_read_first).unwrap(),
         "src/auth/session.ts"
     );
+    let top_symbol = &top_read_first["sy"][0];
+    assert_eq!(read_first_symbol_name(top_symbol), Some("createSession"));
+    assert_eq!(
+        read_first_symbol_line_value(top_symbol).and_then(Value::as_u64),
+        Some(3)
+    );
+    assert_eq!(expansion_target_index(&expansion["n"]), Some(1));
+    assert!(expansion_target_file(&expansion["n"]).is_none());
+    assert!(expansion.get("next").is_none());
+    assert_eq!(expansion["r"], 1);
+    assert_eq!(expansion["t"], 1);
+    assert!(expansion.get("rel").is_none());
+    assert!(expansion.get("tests").is_none());
+    assert!(expansion.get("grep").is_none());
 }
 
 #[test]
@@ -694,18 +1146,511 @@ fn agent_context_defaults_to_skim_budgeted_packet_without_snippets() {
     let context = &output["context"];
     let first = &context["read_first"][0];
 
-    assert_eq!(context["stats"]["profile"], "skim");
-    assert_eq!(context["stats"]["token_budget"], 1200);
+    assert!(context.get("task").is_none());
+    assert!(context.get("root").is_none());
+    assert!(output.get("memory").is_none());
+    assert!(output["memory"].get("similar_tasks").is_none());
+    assert!(output["memory"].get("recommended_files").is_none());
+    assert!(output["memory"].get("recommended_symbols").is_none());
+    assert!(output["memory"].get("sim").is_none());
+    assert!(output["memory"].get("f").is_none());
+    assert!(output["memory"].get("sy").is_none());
+    assert!(output["memory"].get("path").is_none());
+    assert!(output["memory"].get("policy").is_none());
+    assert!(context.get("warnings").is_none());
+    let stats = &context["stats"];
+    assert!(stats.get("profile").is_none());
+    assert_eq!(context_stats_budget(stats), Some(1200));
+    assert_eq!(context_stats_local_field(stats, "f", "files"), Some(5));
+    assert!(context_stats_local_field(stats, "sy", "symbols").unwrap() > 0);
+    assert!(context_stats_local_field(stats, "r", "refs").unwrap() > 0);
+    assert!(stats["local"].get("files").is_none());
+    assert!(stats["local"].get("symbols").is_none());
+    assert!(stats["local"].get("refs").is_none());
+    for field in [
+        "candidate_matches",
+        "budget",
+        "selected_files",
+        "selected_symbols",
+        "related_tests",
+        "token_budget",
+        "estimated_tokens",
+        "tokens",
+        "local_work",
+    ] {
+        assert!(stats.get(field).is_none(), "skim stats leaked {field}");
+    }
     assert_eq!(context["retrieval_cost"]["retrieval_model_tokens"], 0);
-    assert_eq!(
-        context["retrieval_cost"]["agent_token_cost_scope"],
-        "retrieval_only"
+    assert!(
+        context["retrieval_cost"]
+            .get("agent_token_cost_scope")
+            .is_none()
     );
-    assert!(context["stats"]["estimated_tokens"].as_u64().unwrap() <= 1200);
+    assert!(context["retrieval_cost"].get("retrieval_method").is_none());
+    assert!(context["retrieval_cost"].get("note").is_none());
+    assert!(context.get("selection_summary").is_none());
+    assert_eq!(
+        selection_top_file_for_context(context, &context["sel"]),
+        Some("src/auth/session.ts")
+    );
+    assert!(context["sel"]["top"].as_array().is_some());
+    assert_eq!(
+        context["sel"]["top"]
+            .as_array()
+            .and_then(|items| items.first())
+            .and_then(Value::as_u64),
+        Some(0)
+    );
+    assert!(context["sel"].get("s").is_none());
+    assert!(context["sel"].get("why").is_none());
+    assert!(!selection_top_reason(&context["sel"]).unwrap().is_empty());
+    let top_reason = selection_top_reason(&context["sel"]).unwrap();
+    assert!(!top_reason.contains("keyword overlap:"));
+    assert!(!top_reason.contains("symbol name keyword cluster:"));
+    assert!(!top_reason.contains("exact symbol match:"));
+    assert!(context["sel"]["sig"].as_array().unwrap().len() <= 1);
+    assert!(
+        context["sel"]["sig"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|component| {
+                component.as_str().is_some()
+                    && component.get("name").is_none()
+                    && component.get("points").is_none()
+                    && selection_signal_name(component).is_some()
+                    && selection_signal_points(component).is_none()
+            })
+    );
+    let next_files = context["sel"]["next"].as_array().unwrap();
+    assert!(!next_files.is_empty());
+    assert_eq!(next_files.len(), 1);
+    assert!(next_files[0].as_array().is_some());
+    assert_ne!(
+        selection_next_file_for_context(context, &next_files[0]),
+        Some("src/auth/session.ts")
+    );
+    assert!(context_stats_tokens(stats).unwrap() <= 1200);
+    assert!(estimated_json_tokens(&output) <= 1200);
+    assert_eq!(first["f"], "src/auth/session.ts");
+    assert!(first.get("s").is_none());
+    assert!(first.get("file").is_none());
+    assert!(first.get("score").is_none());
+    assert!(first.get("rank").is_none());
+    assert!(first.get("language").is_none());
+    assert!(first.get("git").is_none());
+    assert!(first.get("why").is_none());
+    if let Some(reasons) = first.get("w").and_then(Value::as_array) {
+        for reason in reasons {
+            let reason = reason.as_str().unwrap();
+            assert_ne!(reason, top_reason);
+            assert!(!reason.contains("keyword overlap:"));
+            assert!(!reason.contains("symbol name keyword cluster:"));
+            assert!(!reason.contains("exact symbol match:"));
+        }
+    }
+    assert!(
+        context["read_first"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .skip(1)
+            .all(|file| file.get("w").is_none())
+    );
     assert!(first.get("snippets").is_none());
     assert!(first.get("imports").is_none());
-    assert!(first["impact"]["risk"].as_str().is_some());
-    assert!(first["symbols"][0].get("signature").is_none());
+    assert!(first.get("symbols").is_none());
+    assert!(first["sy"].as_array().unwrap().len() <= 1);
+    assert!(first.get("graph_hints").is_none());
+    assert!(first.get("call_paths").is_none());
+    assert!(first.get("cp").is_none());
+    assert!(
+        first["g"]["u"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|file| file == "src/auth/token.ts")
+    );
+    assert!(first["g"]["u"].as_array().unwrap().len() <= 1);
+    assert!(
+        first
+            .get("g")
+            .and_then(|graph| graph.get("d"))
+            .and_then(serde_json::Value::as_array)
+            .map(|files| files.len() <= 1
+                && files.iter().all(|file| file != "src/auth/session.test.ts"))
+            .unwrap_or(true)
+    );
+    assert!(
+        context["read_first"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .skip(1)
+            .all(|file| file.get("g").is_none())
+    );
+    assert!(first.get("impact").is_none());
+    let impact = read_first_impact(first).unwrap();
+    assert!(impact.as_array().is_some());
+    assert!(matches!(
+        read_first_impact_risk(impact),
+        Some("l" | "m" | "h")
+    ));
+    assert!(
+        read_first_impact_tests_for_context(context, impact)
+            .iter()
+            .any(|file| file == "src/auth/session.test.ts")
+    );
+    for field in ["risk", "tests", "upstream_count", "downstream_count"] {
+        assert!(impact.get(field).is_none(), "skim impact leaked {field}");
+    }
+    let first_symbol = &first["sy"][0];
+    assert!(first_symbol.as_array().is_some());
+    assert!(first_symbol.get("signature").is_none());
+    assert!(read_first_symbol_name(first_symbol).is_some());
+    assert!(first_symbol.get("n").is_none());
+    assert!(first_symbol.get("name").is_none());
+    assert!(read_first_symbol_kind(first_symbol).is_none());
+    assert!(first_symbol.get("k").is_none());
+    assert!(first_symbol.get("kind").is_none());
+    assert!(read_first_symbol_line_value(first_symbol).is_some());
+    assert!(first_symbol.get("l").is_none());
+    assert!(first_symbol.get("ls").is_none());
+}
+
+#[test]
+fn agent_context_skim_uses_compact_non_function_symbol_kind_codes() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+    json(&run(&["index", root]));
+
+    let output = json(&run(&[
+        "agent-context",
+        root,
+        "change RequestHandler struct behavior",
+    ]));
+    let rust_file = output["context"]["read_first"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|file| read_first_file_path(file) == Some("rust/src/lib.rs"))
+        .expect("rust file should be selected");
+    let symbol = read_first_symbols(rust_file).unwrap().first().unwrap();
+
+    assert_eq!(read_first_symbol_name(symbol), Some("RequestHandler"));
+    assert_eq!(read_first_symbol_kind(symbol), Some("struct"));
+    assert_eq!(symbol.as_array().unwrap().last().unwrap(), "s");
+    assert!(symbol.get("kind").is_none());
+    assert!(symbol.get("k").is_none());
+}
+
+#[test]
+fn agent_context_and_grep_default_to_five_read_first_files() {
+    let repo = wide_fixture_repo();
+    let root = repo.path().to_str().unwrap();
+    json(&run(&["index", root]));
+
+    let default_agent = json(&run(&[
+        "agent-context",
+        root,
+        "change token filter local retrieval behavior",
+    ]));
+    assert_eq!(
+        default_agent["context"]["read_first"]
+            .as_array()
+            .unwrap()
+            .len(),
+        5
+    );
+
+    let expanded_agent = json(&run(&[
+        "agent-context",
+        root,
+        "change token filter local retrieval behavior",
+        "--limit",
+        "7",
+    ]));
+    assert_eq!(
+        expanded_agent["context"]["read_first"]
+            .as_array()
+            .unwrap()
+            .len(),
+        7
+    );
+
+    let default_grep = json(&run(&["grep", root, "targetFeature"]));
+    assert_eq!(
+        default_grep["context"]["read_first"]
+            .as_array()
+            .unwrap()
+            .len(),
+        5
+    );
+
+    let shim = json(&run(&[
+        "shim-run",
+        root,
+        "--tool",
+        "rg",
+        "--",
+        "-n",
+        "targetFeature",
+        "src",
+    ]));
+    assert_eq!(shim["context"]["read_first"].as_array().unwrap().len(), 5);
+}
+
+#[test]
+fn agent_context_prioritizes_competitive_positioning_docs() {
+    let repo = tempfile::tempdir().unwrap();
+    let root = repo.path();
+    write(
+        root.join("docs/COMPETITIVE.md"),
+        "# Competitive Notes\n\nCallSieve should beat Cursor, Copilot, Cody, Windsurf, Devin, Greptile, Continue, and Aider by doing local token-saving retrieval before agents spend context.\n",
+    );
+    write(
+        root.join("docs/AGENT_CLI.md"),
+        "# AI CLI Runbook\n\nCallSieve agent CLI MCP context local token proof setup hooks commands for Cursor, Copilot, Claude, Cody, Windsurf, Continue, and Zed.\n",
+    );
+    write(
+        root.join("src/cli.rs"),
+        "pub struct AgentContextOutput;\npub fn agent_local_first_expansion() {}\n",
+    );
+    write(
+        root.join("src/mcp.rs"),
+        "pub fn callsieve_context() {}\npub fn apply_mcp_context_envelope_budget() {}\n",
+    );
+    let root = root.to_str().unwrap();
+    json(&run(&["index", root]));
+
+    let output = json(&run(&[
+        "agent-context",
+        root,
+        "competitive analysis local token savings agent context proof mcp cli",
+    ]));
+    let context = &output["context"];
+
+    assert_eq!(
+        selection_top_file_for_context(context, &context["sel"]),
+        Some("docs/COMPETITIVE.md")
+    );
+    assert_eq!(
+        read_first_file_path(&context["read_first"][0]).unwrap(),
+        "docs/COMPETITIVE.md"
+    );
+    assert!(context["read_first"][0].get("file").is_none());
+    assert!(context["read_first"][0].get("rank").is_none());
+    assert!(context["read_first"][0].get("language").is_none());
+    assert!(context["read_first"][0].get("symbols").is_none());
+    assert!(context["read_first"][0].get("impact").is_none());
+    assert!(context["read_first"][0]["i"].as_array().is_some());
+    assert!(read_first_impact_tests(&context["read_first"][0]["i"]).is_empty());
+    assert!(
+        context["sel"]["sig"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|signal| selection_signal_name(signal) == Some("competitive_positioning_doc"))
+    );
+    let expansion = &output["instruction"]["x"];
+    assert_eq!(expansion_target_index(&expansion["o"]), Some(0));
+    assert!(expansion_target_file(&expansion["o"]).is_none());
+    assert!(expansion.get("top").is_none());
+    assert!(expansion.get("r").is_none());
+    assert!(expansion.get("t").is_none());
+    assert!(expansion.get("rel").is_none());
+    assert!(expansion.get("tests").is_none());
+}
+
+#[test]
+fn direct_cli_context_commands_rebuild_missing_and_stale_index() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+
+    let agent_context = json(&run(&[
+        "agent-context",
+        root,
+        "change createSession token behavior",
+    ]));
+    assert!(repo.path().join(".callsieve/index.json").is_file());
+    assert_eq!(
+        read_first_file_path(&agent_context["context"]["read_first"][0]).unwrap(),
+        "src/auth/session.ts"
+    );
+    assert!(
+        agent_context["context"]["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| warning
+                .as_str()
+                .unwrap()
+                .contains("rebuilt missing or stale CallSieve index before context"))
+    );
+
+    write(
+        repo.path().join("src/auth/session.ts"),
+        "import { tokenFor } from './token';\n\nexport function createSession(userId: string) {\n  return tokenFor(userId) + ':updated';\n}\n\nexport const refreshSession = () => createSession('demo');\n",
+    );
+
+    let context = json(&run(&[
+        "context",
+        root,
+        "change updated session behavior",
+        "--limit",
+        "5",
+    ]));
+    assert_eq!(context["read_first"][0]["file"], "src/auth/session.ts");
+    assert!(
+        context["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| warning
+                .as_str()
+                .unwrap()
+                .contains("rebuilt missing or stale CallSieve index before context"))
+    );
+
+    let begin_repo = fixture_repo();
+    let begin_root = begin_repo.path().to_str().unwrap();
+    let begin = json(&run(&[
+        "begin",
+        begin_root,
+        "change createSession token behavior",
+        "--limit",
+        "5",
+    ]));
+    assert!(begin_repo.path().join(".callsieve/index.json").is_file());
+    assert_eq!(
+        read_first_file_path(&begin["context"]["read_first"][0]).unwrap(),
+        "src/auth/session.ts"
+    );
+    assert!(
+        begin["context"]["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| warning
+                .as_str()
+                .unwrap()
+                .contains("rebuilt missing or stale CallSieve index before context"))
+    );
+}
+
+#[test]
+fn agent_context_budget_applies_to_full_agent_packet_with_memory() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+    json(&run(&["index", root]));
+
+    for task in [
+        "change createSession token behavior",
+        "update refreshSession auth token behavior",
+        "inspect auth session tests and token helper",
+        "find related auth imports for session handling",
+        "change createSession behavior and related tests",
+    ] {
+        json(&run(&["agent-context", root, task]));
+    }
+
+    let output = json(&run(&[
+        "agent-context",
+        root,
+        "change createSession token behavior",
+        "--token-budget",
+        "1200",
+    ]));
+
+    assert!(output.get("memory").is_none());
+    assert!(estimated_json_tokens(&output) <= 1200);
+    assert!(
+        output["context"]["sel"]["next"].as_array().unwrap().len()
+            <= output["context"]["read_first"]
+                .as_array()
+                .unwrap()
+                .len()
+                .saturating_sub(1)
+    );
+    assert!(
+        !output["context"]["read_first"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "{}",
+        serde_json::to_string_pretty(&output).unwrap()
+    );
+}
+
+#[test]
+fn agent_context_tight_budget_trims_optional_expansion_before_context() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+    json(&run(&["index", root]));
+
+    for task in [
+        "change createSession token behavior",
+        "update refreshSession auth token behavior",
+        "inspect auth session tests and token helper",
+        "find related auth imports for session handling",
+    ] {
+        json(&run(&["agent-context", root, task]));
+    }
+
+    let output = json(&run(&[
+        "agent-context",
+        root,
+        "change createSession token behavior",
+        "--limit",
+        "8",
+        "--token-budget",
+        "450",
+    ]));
+    let expansion = &output["instruction"]["x"];
+
+    assert!(estimated_json_tokens(&output) <= 450);
+    assert!(
+        !output["context"]["read_first"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    if let Some(next) = expansion.get("next") {
+        assert!(next.as_array().unwrap().len() <= 2);
+        assert!(
+            next.as_array()
+                .unwrap()
+                .iter()
+                .all(|entry| expansion_target_index(entry).is_some())
+        );
+    }
+    if let Some(next) = expansion.get("n") {
+        assert!(expansion_target_index(next).is_some());
+        assert!(expansion_target_file(next).is_none());
+    }
+    assert!(expansion.get("grep").is_none());
+    if expansion.get("r").is_some() {
+        assert_eq!(expansion["r"], 1);
+    }
+    if expansion.get("t").is_some() {
+        assert_eq!(expansion["t"], 1);
+    }
+    assert!(expansion.get("rel").is_none());
+    assert!(expansion.get("tests").is_none());
+    assert!(
+        output["context"]["read_first"][0]
+            .get("graph_hints")
+            .is_none()
+    );
+    assert!(
+        output["context"]["read_first"][0]
+            .get("call_paths")
+            .is_none()
+    );
+    if let Some(graph) = output["context"]["read_first"][0].get("g") {
+        assert!(graph.get("upstream").is_none());
+        assert!(graph.get("downstream").is_none());
+    }
 }
 
 #[test]
@@ -728,6 +1673,11 @@ fn full_profile_preserves_rich_context_fields() {
     let first = &output["context"]["read_first"][0];
 
     assert_eq!(output["context"]["stats"]["profile"], "full");
+    assert!(
+        output["context"]["selection_summary"]
+            .get("next_files")
+            .is_none()
+    );
     assert!(
         first["snippets"][0]["text"]
             .as_str()
@@ -790,13 +1740,38 @@ fn context_and_agent_context_support_markdown_output() {
     assert!(agent.status.success());
     let agent_stdout = String::from_utf8_lossy(&agent.stdout);
     assert!(agent_stdout.contains("# CallSieve Context"));
+    assert!(agent_stdout.contains("Packet estimate:"));
+    assert!(agent_stdout.contains("Graph hints:"));
+    assert!(agent_stdout.contains("upstream src/auth/token.ts"));
+    assert!(!agent_stdout.contains("downstream src/auth/session.test.ts"));
+    assert!(agent_stdout.contains("callsieve tests"));
+    assert!(agent_stdout.contains("--file src/auth/session.ts"));
+    assert!(agent_stdout.contains("--symbol createSession"));
     assert!(agent_stdout.contains("function `createSession`"));
 }
 
 #[test]
 fn focused_followup_commands_return_targeted_detail() {
     let repo = fixture_repo();
-    let root = repo.path().to_str().unwrap();
+    let root_path = repo.path();
+    let long_steps = (0..45)
+        .map(|step| format!("  const step{step} = userId.length + {step};\n"))
+        .collect::<String>();
+    write(
+        root_path.join("src/auth/long.ts"),
+        &format!(
+            "export function longFocus(userId: string) {{\n{long_steps}  return step44;\n}}\n"
+        ),
+    );
+    write(
+        root_path.join("src/auth/duplicate.ts"),
+        "export function repeated() {\n  return 'first';\n}\n\nexport function repeated() {\n  return 'second';\n}\n",
+    );
+    write(
+        root_path.join("src/auth/typed.ts"),
+        "export interface SessionUser {\n  id: string;\n}\n\nexport function typedFocus(user: SessionUser) {\n  return user.id;\n}\n",
+    );
+    let root = root_path.to_str().unwrap();
     json(&run(&["index", root]));
 
     let focus = json(&run(&[
@@ -814,6 +1789,113 @@ fn focused_followup_commands_return_targeted_detail() {
             .as_str()
             .unwrap()
             .contains("createSession")
+    );
+    assert!(
+        focus["calls"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|edge| edge["target"] == "tokenFor" && edge["target_file"] == "src/auth/token.ts")
+    );
+    assert!(
+        focus["called_by"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|edge| edge["file"] == "src/auth/session.test.ts"
+                && edge["target"] == "createSession")
+    );
+    let focus_related_tests = focus["related_tests"].as_array().unwrap();
+    assert!(focus_related_tests.len() <= 3);
+    assert!(
+        focus_related_tests
+            .iter()
+            .any(|test| test["file"] == "src/auth/session.test.ts")
+    );
+    assert!(focus.get("references").is_none());
+
+    let focus_with_references = json(&run(&[
+        "focus",
+        root,
+        "--file",
+        "src/auth/typed.ts",
+        "--symbol",
+        "typedFocus",
+        "--line",
+        "5",
+        "--references",
+    ]));
+    assert!(
+        focus_with_references["references"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|edge| edge["target"] == "SessionUser")
+    );
+
+    let long_focus = json(&run(&[
+        "focus",
+        root,
+        "--file",
+        "src/auth/long.ts",
+        "--symbol",
+        "longFocus",
+    ]));
+    let long_snippet = &long_focus["snippets"][0];
+    let long_lines = long_snippet["lines"].as_array().unwrap();
+    let start = long_lines[0].as_u64().unwrap();
+    let end = long_lines[1].as_u64().unwrap();
+    assert!(
+        end - start + 1 > 19,
+        "symbol-focused snippet should exceed generic context snippet cap"
+    );
+    assert!(
+        long_snippet["text"]
+            .as_str()
+            .unwrap()
+            .contains("return step44")
+    );
+    assert!(long_snippet.get("truncated").is_none());
+    assert!(long_snippet.get("omitted_lines").is_none());
+
+    let no_snippet_focus = json(&run(&[
+        "focus",
+        root,
+        "--file",
+        "src/auth/long.ts",
+        "--symbol",
+        "longFocus",
+        "--snippets-per-symbol",
+        "0",
+    ]));
+    assert!(no_snippet_focus.get("snippets").is_none());
+
+    let ambiguous_focus = json(&run(&[
+        "focus",
+        root,
+        "--file",
+        "src/auth/duplicate.ts",
+        "--symbol",
+        "repeated",
+    ]));
+    assert_eq!(ambiguous_focus["symbols"].as_array().unwrap().len(), 2);
+    let line_scoped_focus = json(&run(&[
+        "focus",
+        root,
+        "--file",
+        "src/auth/duplicate.ts",
+        "--symbol",
+        "repeated",
+        "--line",
+        "5",
+    ]));
+    assert_eq!(line_scoped_focus["symbols"].as_array().unwrap().len(), 1);
+    assert_eq!(line_scoped_focus["symbols"][0]["lines"][0], 5);
+    assert!(
+        line_scoped_focus["snippets"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("second")
     );
 
     let related = json(&run(&["related", root, "--file", "src/auth/session.ts"]));
@@ -863,12 +1945,17 @@ fn mcp_lists_and_calls_context_tool() {
     .unwrap();
     writeln!(
         stdin,
-        r#"{{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{{"name":"callsieve_context","arguments":{{"path":"{escaped_root}","task":"change createSession token behavior","limit":5}}}}}}"#
+        r#"{{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{{"name":"callsieve_context","arguments":{{"path":"{escaped_root}","task":"change createSession token behavior","limit":5,"token_budget":2000}}}}}}"#
     )
     .unwrap();
     writeln!(
         stdin,
         r#"{{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{{"name":"callsieve_status","arguments":{{"path":"{escaped_root}"}}}}}}"#
+    )
+    .unwrap();
+    writeln!(
+        stdin,
+        r#"{{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{{"name":"callsieve_context","arguments":{{"path":"{escaped_root}","task":"change createSession token behavior","limit":8,"token_budget":450}}}}}}"#
     )
     .unwrap();
     drop(stdin);
@@ -907,17 +1994,103 @@ fn mcp_lists_and_calls_context_tool() {
     );
     assert_eq!(responses[2]["result"]["isError"], false);
     assert_eq!(
-        responses[2]["result"]["structuredContent"]["read_first"][0]["file"],
+        read_first_file_path(&responses[2]["result"]["structuredContent"]["read_first"][0])
+            .unwrap(),
         "src/auth/session.ts"
     );
     assert_eq!(
         responses[2]["result"]["structuredContent"]["retrieval_cost"]["retrieval_model_tokens"],
         0
     );
+    assert_eq!(
+        selection_top_file_for_context(
+            &responses[2]["result"]["structuredContent"],
+            &responses[2]["result"]["structuredContent"]["sel"],
+        ),
+        Some("src/auth/session.ts")
+    );
+    assert!(
+        !selection_top_reason(&responses[2]["result"]["structuredContent"]["sel"])
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        responses[2]["result"]["structuredContent"]["sel"]["sig"]
+            .as_array()
+            .unwrap()
+            .len()
+            <= 1
+    );
+    let next_files = responses[2]["result"]["structuredContent"]["sel"]["next"]
+        .as_array()
+        .unwrap();
+    assert!(!next_files.is_empty());
+    assert_eq!(next_files.len(), 1);
+    assert_ne!(
+        selection_next_file_for_context(
+            &responses[2]["result"]["structuredContent"],
+            &next_files[0]
+        ),
+        Some("src/auth/session.ts")
+    );
+    assert!(
+        responses[2]["result"]["structuredContent"]["read_first"][0]["g"]["u"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|file| file == "src/auth/token.ts")
+    );
+    assert!(
+        responses[2]["result"]["structuredContent"]["read_first"][0]
+            .get("g")
+            .and_then(|graph| graph.get("d"))
+            .and_then(serde_json::Value::as_array)
+            .map(|files| files.iter().all(|file| file != "src/auth/session.test.ts"))
+            .unwrap_or(true)
+    );
+    assert!(
+        read_first_impact_tests_for_context(
+            &responses[2]["result"]["structuredContent"],
+            &responses[2]["result"]["structuredContent"]["read_first"][0]["i"],
+        )
+        .iter()
+        .any(|file| file == "src/auth/session.test.ts")
+    );
+    assert!(estimated_json_tokens(&responses[2]["result"]["structuredContent"]) <= 2000);
+    assert!(
+        responses[2]["result"]["structuredContent"]["instruction"]
+            .get("a")
+            .is_none()
+    );
+    let mcp_expansion = &responses[2]["result"]["structuredContent"]["instruction"]["x"];
+    assert_eq!(mcp_expansion["o"]["tool"], "callsieve_focus");
+    assert_eq!(mcp_expansion["o"]["arguments"]["symbol"], "createSession");
+    assert_eq!(mcp_expansion["o"]["arguments"]["line"], 3);
+    assert!(mcp_expansion.get("top").is_none());
+    let inspect_next_files = mcp_expansion["next"].as_array().unwrap();
+    assert!(!inspect_next_files.is_empty());
+    assert_eq!(inspect_next_files.len(), 1);
+    assert!(
+        inspect_next_files
+            .iter()
+            .all(|entry| entry["tool"] == "callsieve_focus")
+    );
+    assert!(
+        inspect_next_files
+            .iter()
+            .any(|entry| entry["arguments"]["symbol"].as_str().is_some())
+    );
+    assert_eq!(mcp_expansion["rel"]["tool"], "callsieve_related");
+    assert_eq!(mcp_expansion["tests"]["tool"], "callsieve_tests");
     let mcp_text = responses[2]["result"]["content"][0]["text"]
         .as_str()
         .unwrap();
-    assert!(mcp_text.contains("zero AI model tokens"));
+    assert!(mcp_text.contains("zero retrieval-model tokens"));
+    assert!(mcp_text.contains("packet"));
+    assert!(mcp_text.contains("Top local signal"));
+    assert!(mcp_text.contains("callsieve_focus"));
+    assert!(mcp_text.contains("symbol-scoped"));
+    assert!(mcp_text.contains("before grep"));
     assert!(!mcp_text.contains("\"read_first\""));
     assert_eq!(
         responses[2]["result"]["structuredContent"]["trace_event"]["tool"],
@@ -931,6 +2104,17 @@ fn mcp_lists_and_calls_context_tool() {
     assert_eq!(
         responses[3]["result"]["structuredContent"]["index_exists"],
         true
+    );
+    assert_eq!(responses[4]["result"]["isError"], false);
+    assert!(estimated_json_tokens(&responses[4]["result"]["structuredContent"]) <= 450);
+    let tight_read_first = responses[4]["result"]["structuredContent"]["read_first"]
+        .as_array()
+        .unwrap();
+    assert!(tight_read_first.iter().all(|file| file.get("cp").is_none()));
+    assert!(
+        tight_read_first
+            .iter()
+            .all(|file| file.get("graph_hints").is_none())
     );
 }
 
@@ -1142,7 +2326,7 @@ fn agent_context_reuses_local_task_memory_hints() {
         root,
         "change createSession token behavior",
     ]));
-    assert_eq!(first["memory"]["cache_hit"], false);
+    assert!(first.get("memory").is_none());
     assert!(repo.path().join(".callsieve/task-memory.json").is_file());
 
     let second = json(&run(&[
@@ -1150,13 +2334,37 @@ fn agent_context_reuses_local_task_memory_hints() {
         root,
         "update createSession token behavior",
     ]));
-    assert_eq!(second["memory"]["cache_hit"], true);
+    assert!(second.get("memory").is_none());
     assert!(
-        second["memory"]["recommended_files"]
-            .as_array()
-            .unwrap()
+        memory_recommended_files(&second["memory"]).is_empty(),
+        "default skim should keep task memory local unless a richer packet is requested"
+    );
+    assert!(
+        memory_recommended_symbols(&second["memory"]).is_empty(),
+        "default skim should keep task memory local unless a richer packet is requested"
+    );
+
+    let second_normal = json(&run(&[
+        "agent-context",
+        root,
+        "update createSession token behavior",
+        "--profile",
+        "normal",
+    ]));
+    assert_eq!(memory_cache_hit(&second_normal["memory"]), Some(true));
+    let selected_files = second["context"]["read_first"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(read_first_file_path)
+        .collect::<BTreeSet<_>>();
+    let recommended_files = memory_recommended_files(&second_normal["memory"]);
+    assert!(recommended_files.len() <= 2);
+    assert!(
+        recommended_files
             .iter()
-            .any(|file| file == "src/auth/session.ts")
+            .filter_map(Value::as_str)
+            .all(|file| !selected_files.contains(file))
     );
 
     let followup = json(&run(&["agent-context", root, "fix 1-5"]));
@@ -1171,7 +2379,7 @@ fn agent_context_reuses_local_task_memory_hints() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|file| file["file"] == "src/auth/session.ts")
+            .any(|file| read_first_file_path(file) == Some("src/auth/session.ts"))
     );
 
     let cleared = json(&run(&["memory-clear", root]));
@@ -1184,7 +2392,100 @@ fn agent_context_reuses_local_task_memory_hints() {
         root,
         "update createSession token behavior",
     ]));
-    assert_eq!(after_clear["memory"]["cache_hit"], false);
+    assert!(after_clear.get("memory").is_none());
+}
+
+#[test]
+fn agent_context_omits_memory_hints_already_selected_for_read_first() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+    json(&run(&["index", root]));
+
+    write(
+        repo.path().join(".callsieve/task-memory.json"),
+        r#"{
+  "schema_version": 1,
+  "entries": [
+    {
+      "task": "change createSession token behavior",
+      "task_terms": ["behavior", "change", "createsession", "token"],
+      "created_at": 1,
+      "read_first_files": ["src/auth/session.ts", "rust/src/lib.rs"],
+      "symbols": ["createSession", "historicalOnly"],
+      "tests": []
+    }
+  ]
+}"#,
+    );
+
+    let output = json(&run(&[
+        "agent-context",
+        root,
+        "change createSession token behavior",
+    ]));
+    assert!(output.get("memory").is_none());
+    assert!(
+        memory_recommended_files(&output["memory"]).is_empty(),
+        "default skim should suppress memory file hints"
+    );
+    assert!(
+        memory_recommended_symbols(&output["memory"]).is_empty(),
+        "default skim should suppress memory symbol hints"
+    );
+
+    let output = json(&run(&[
+        "agent-context",
+        root,
+        "change createSession token behavior",
+        "--profile",
+        "normal",
+    ]));
+    assert_eq!(memory_cache_hit(&output["memory"]), Some(true));
+
+    let selected_files = output["context"]["read_first"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(read_first_file_path)
+        .collect::<BTreeSet<_>>();
+    assert!(selected_files.contains("src/auth/session.ts"));
+
+    let recommended_files = memory_recommended_files(&output["memory"]);
+    assert!(
+        recommended_files
+            .iter()
+            .filter_map(Value::as_str)
+            .all(|file| !selected_files.contains(file))
+    );
+    assert!(
+        recommended_files
+            .iter()
+            .any(|file| file == "rust/src/lib.rs")
+    );
+
+    let selected_symbols = output["context"]["read_first"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(read_first_symbols)
+        .flatten()
+        .filter_map(read_first_symbol_name)
+        .collect::<BTreeSet<_>>();
+    assert!(selected_symbols.contains("createSession"));
+
+    let recommended_symbols = memory_recommended_symbols(&output["memory"]);
+    assert!(recommended_symbols.len() <= 3);
+    assert!(
+        recommended_symbols
+            .iter()
+            .filter_map(Value::as_str)
+            .all(|symbol| !selected_symbols.contains(symbol))
+    );
+    assert!(
+        recommended_symbols
+            .iter()
+            .any(|symbol| symbol == "historicalOnly")
+    );
 }
 
 #[test]
@@ -1235,6 +2536,9 @@ fn benchmark_suite_reports_recall_and_observed_session_savings() {
     assert_eq!(suite["summary"]["expected_files"], 2);
     assert_eq!(suite["summary"]["expected_files_found"], 2);
     assert_eq!(suite["summary"]["expected_file_recall"], 1.0);
+    assert_eq!(suite["summary"]["first_correct_file_hits"], 1);
+    assert_eq!(suite["summary"]["first_correct_file_tasks"], 1);
+    assert_eq!(suite["summary"]["first_correct_file_rate_at_k"], 1.0);
     assert_eq!(suite["summary"]["tasks_with_misses"], 0);
     assert!(
         suite["summary"]["total_estimated_avoided_grep_commands"]
@@ -1254,6 +2558,12 @@ fn benchmark_suite_reports_recall_and_observed_session_savings() {
             .len(),
         2
     );
+    assert_eq!(suite["tasks"][0]["first_correct_file_hit"], true);
+    assert_eq!(
+        suite["tasks"][0]["first_correct_file"],
+        "src/auth/session.ts"
+    );
+    assert_eq!(suite["tasks"][0]["first_correct_file_rank"], 1);
 }
 
 #[test]
@@ -1289,6 +2599,13 @@ fn eval_retrieval_reports_recall_and_fails_on_critical_miss() {
     ]));
     assert_eq!(eval["status"], "pass");
     assert_eq!(eval["summary"]["critical_recall"], 1.0);
+    assert_eq!(eval["summary"]["first_correct_file_rate_at_k"], 1.0);
+    assert_eq!(eval["tasks"][0]["first_correct_file_hit"], true);
+    assert_eq!(
+        eval["tasks"][0]["first_correct_file"],
+        "src/auth/session.ts"
+    );
+    assert_eq!(eval["tasks"][0]["first_correct_file_rank"], 1);
     assert!(eval["summary"]["selected_tokens"].as_u64().unwrap() > 0);
 
     let missed_path = repo.path().join("retrieval-eval-miss.json");
@@ -1322,6 +2639,7 @@ fn eval_retrieval_reports_recall_and_fails_on_critical_miss() {
         missed_json["tasks"][0]["critical_files_missing"][0],
         "src/auth/missing.ts"
     );
+    assert_eq!(missed_json["summary"]["first_correct_file_rate_at_k"], 1.0);
 }
 
 #[test]
@@ -1492,9 +2810,22 @@ fn codex_session_writes_model_tagged_trace() {
     assert_eq!(session["client"], "codex-chatgpt");
     assert_eq!(session["model"], "gpt-5-codex");
     assert_eq!(
-        session["context"]["read_first"][0]["file"],
+        read_first_file_path(&session["context"]["read_first"][0]).unwrap(),
         "src/auth/session.ts"
     );
+    assert_eq!(
+        expansion_target_file(&session["local_first_expansion"]["o"]),
+        Some("src/auth/session.ts")
+    );
+    assert_eq!(
+        expansion_target_symbol(&session["local_first_expansion"]["o"]),
+        Some("createSession")
+    );
+    assert_eq!(
+        expansion_target_line(&session["local_first_expansion"]["o"]),
+        Some(3)
+    );
+    assert!(session["local_first_expansion"].get("top").is_none());
     assert_eq!(session["trace"]["metadata"]["model"], "gpt-5-codex");
     assert!(
         session["trace"]["tasks"][0]["session"]["callsieve"]["commands"][0]
@@ -3711,6 +5042,10 @@ fn bootstrap_generic_strict_builds_local_adoption_stack() {
             .unwrap()
             .contains("callsieve agent-context")
     );
+    let policy = fs::read_to_string(repo.path().join(".callsieve/agent-policy.md")).unwrap();
+    assert!(policy.contains("callsieve focus"));
+    assert!(policy.contains("callsieve related"));
+    assert!(policy.contains("callsieve tests"));
 }
 
 #[test]
@@ -3782,6 +5117,30 @@ fn editor_hook_generates_project_local_files_only() {
     assert_eq!(generic["editor"], "generic");
     assert!(repo.path().join(".callsieve/editor-hook.md").is_file());
     assert!(repo.path().join(".callsieve/editor-hook.json").is_file());
+    let hook_text = fs::read_to_string(repo.path().join(".callsieve/editor-hook.md")).unwrap();
+    assert!(hook_text.contains("context.sel.next"));
+    assert!(hook_text.contains("instruction.x.o/n/next"));
+    assert!(hook_text.contains("callsieve focus"));
+    assert!(hook_text.contains("callsieve related"));
+    assert!(hook_text.contains("callsieve tests"));
+    let hook_json: Value = serde_json::from_str(
+        &fs::read_to_string(repo.path().join(".callsieve/editor-hook.json")).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        hook_json["local_expansion_before_grep"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|command| command == "callsieve focus")
+    );
+    assert!(
+        hook_json["ranked_expansion_before_grep"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|field| field == "instruction.x.o/n/next")
+    );
 }
 
 #[test]
@@ -3984,6 +5343,10 @@ fn benchmark_report_aggregates_two_local_repos() {
     assert_eq!(report["summary"]["expected_files"], 3);
     assert_eq!(report["summary"]["expected_files_found"], 3);
     assert_eq!(report["summary"]["expected_file_recall"], 1.0);
+    assert_eq!(report["summary"]["first_correct_file_hits"], 2);
+    assert_eq!(report["summary"]["first_correct_file_tasks"], 2);
+    assert_eq!(report["summary"]["first_correct_file_rate_at_k"], 1.0);
+    assert_eq!(report["repos"][0]["first_correct_file_rate_at_k"], 1.0);
     assert!(
         report["summary"]["total_estimated_token_savings"]
             .as_i64()
@@ -4202,6 +5565,18 @@ fn setup_agent_generates_policy_files() {
 
     assert_eq!(setup["client"], "codex");
     assert!(
+        setup["policy"]
+            .as_str()
+            .unwrap()
+            .contains("context.sel.next")
+    );
+    assert!(
+        setup["policy"]
+            .as_str()
+            .unwrap()
+            .contains("instruction.x.o/n/next")
+    );
+    assert!(
         setup["first_required_command"]
             .as_str()
             .unwrap()
@@ -4217,31 +5592,30 @@ fn setup_agent_generates_policy_files() {
     let config = fs::read_to_string(repo.path().join(".codex/config.toml")).unwrap();
     assert!(config.contains("[mcp_servers.callsieve]"));
     assert!(!config.contains("command = \"callsieve\""));
-    assert!(
-        fs::read_to_string(repo.path().join(".codex/CALLSIEVE.md"))
-            .unwrap()
-            .contains("First command for every coding task")
-    );
-    assert!(
-        fs::read_to_string(repo.path().join(".codex/CALLSIEVE.md"))
-            .unwrap()
-            .contains("callsieve_context")
-    );
-    assert!(
-        fs::read_to_string(repo.path().join(".codex/CALLSIEVE.md"))
-            .unwrap()
-            .contains("retrieval_cost.retrieval_model_tokens = 0")
-    );
+    let codex_policy = fs::read_to_string(repo.path().join(".codex/CALLSIEVE.md")).unwrap();
+    assert!(codex_policy.contains("First command for every coding task"));
+    assert!(codex_policy.contains("callsieve_context"));
+    assert!(codex_policy.contains("retrieval_cost.retrieval_model_tokens = 0"));
+    assert!(codex_policy.contains("context.sel.next"));
+    assert!(codex_policy.contains("instruction.x.o/n/next"));
+    assert!(codex_policy.contains("callsieve_focus"));
+    assert!(codex_policy.contains("callsieve focus"));
+    assert!(codex_policy.contains("callsieve related"));
+    assert!(codex_policy.contains("callsieve tests"));
 
     let repo = tempfile::tempdir().unwrap();
     let root = repo.path().to_str().unwrap();
     let setup = json(&run(&["agent-setup", root, "--client", "roo"]));
     assert_eq!(setup["client"], "roo");
     assert!(repo.path().join(".roo/mcp.json").is_file());
+    let zoo_policy = fs::read_to_string(repo.path().join(".roo/rules/callsieve.md")).unwrap();
+    assert!(zoo_policy.contains("callsieve_context"));
+    assert!(zoo_policy.contains("context.sel.next"));
+    assert!(zoo_policy.contains("instruction.x.o/n/next"));
+    assert!(zoo_policy.contains("callsieve_focus"));
+    assert!(zoo_policy.contains("callsieve focus"));
     assert!(
-        fs::read_to_string(repo.path().join(".roo/rules/callsieve.md"))
-            .unwrap()
-            .contains("Grep only if the context packet is insufficient")
+        zoo_policy.contains("Grep only if the context packet and local expansion are insufficient")
     );
 
     let repo = tempfile::tempdir().unwrap();
@@ -4265,6 +5639,10 @@ fn setup_agent_generates_policy_files() {
             .unwrap()
             .contains("[mcp_servers.callsieve]")
     );
+    let generic_policy =
+        fs::read_to_string(repo.path().join(".callsieve/agent-policy.md")).unwrap();
+    assert!(generic_policy.contains("context.sel.next"));
+    assert!(generic_policy.contains("instruction.x.o/n/next"));
 }
 
 #[test]
@@ -4395,6 +5773,10 @@ fn next_client_agent_setup_generates_expected_files_and_preserves_json() {
             .unwrap()
             .contains(root)
     );
+    let vscode_policy =
+        fs::read_to_string(repo.path().join(".github/copilot-instructions.md")).unwrap();
+    assert!(vscode_policy.contains("context.sel.next"));
+    assert!(vscode_policy.contains("instruction.x.o/n/next"));
 
     let repo = tempfile::tempdir().unwrap();
     let root = repo.path().to_str().unwrap();
@@ -4417,6 +5799,10 @@ fn next_client_agent_setup_generates_expected_files_and_preserves_json() {
     assert!(continue_yaml.contains("mcpServers:"));
     assert!(continue_yaml.contains("      - \"mcp\""));
     assert!(repo.path().join(".continue/rules/callsieve.md").is_file());
+    let continue_policy =
+        fs::read_to_string(repo.path().join(".continue/rules/callsieve.md")).unwrap();
+    assert!(continue_policy.contains("context.sel.next"));
+    assert!(continue_policy.contains("instruction.x.o/n/next"));
 
     let repo = tempfile::tempdir().unwrap();
     write(
@@ -4438,6 +5824,9 @@ fn next_client_agent_setup_generates_expected_files_and_preserves_json() {
             .unwrap()
             .contains(root)
     );
+    let junie_policy = fs::read_to_string(repo.path().join(".junie/guidelines.md")).unwrap();
+    assert!(junie_policy.contains("context.sel.next"));
+    assert!(junie_policy.contains("instruction.x.o/n/next"));
 
     let repo = tempfile::tempdir().unwrap();
     let root = repo.path().to_str().unwrap();
@@ -4448,6 +5837,13 @@ fn next_client_agent_setup_generates_expected_files_and_preserves_json() {
             .join(".callsieve/integrations/jetbrains-mcp.json")
             .is_file()
     );
+    let jetbrains_template = fs::read_to_string(
+        repo.path()
+            .join(".callsieve/integrations/jetbrains-mcp.json"),
+    )
+    .unwrap();
+    assert!(jetbrains_template.contains("context.sel.next"));
+    assert!(jetbrains_template.contains("instruction.x.o/n/next"));
     assert!(
         setup["warnings"]
             .as_array()
@@ -4494,6 +5890,13 @@ fn next_client_agent_setup_generates_expected_files_and_preserves_json() {
             .join(".callsieve/integrations/goose-deeplink.txt")
             .is_file()
     );
+    let goose_deeplink = fs::read_to_string(
+        repo.path()
+            .join(".callsieve/integrations/goose-deeplink.txt"),
+    )
+    .unwrap();
+    assert!(goose_deeplink.contains("context.sel.next"));
+    assert!(goose_deeplink.contains("instruction.x.o/n/next"));
 
     let repo = tempfile::tempdir().unwrap();
     let root = repo.path().to_str().unwrap();
@@ -4509,6 +5912,10 @@ fn next_client_agent_setup_generates_expected_files_and_preserves_json() {
             .join(".callsieve/integrations/warp-agent.yaml")
             .is_file()
     );
+    let warp_agent =
+        fs::read_to_string(repo.path().join(".callsieve/integrations/warp-agent.yaml")).unwrap();
+    assert!(warp_agent.contains("context.sel.next"));
+    assert!(warp_agent.contains("instruction.x.o/n/next"));
     assert!(
         setup["warnings"]
             .as_array()
@@ -4956,7 +6363,6 @@ fn codex_hooks_install_doctor_and_uninstall_manage_lifecycle_hooks() {
 fn codex_hook_user_prompt_submit_injects_callsieve_context() {
     let repo = fixture_repo();
     let root = repo.path().to_str().unwrap();
-    json(&run(&["index", root]));
 
     let input = r#"{
   "session_id": "hook-session",
@@ -4980,16 +6386,23 @@ fn codex_hook_user_prompt_submit_injects_callsieve_context() {
     let context = output["hookSpecificOutput"]["additionalContext"]
         .as_str()
         .unwrap();
+    assert!(repo.path().join(".callsieve/index.json").is_file());
     assert!(context.contains("CallSieve context ready"));
     assert!(context.contains("Use broad search only if this packet is insufficient"));
     assert!(!context.contains("blocked until CallSieve context is established"));
+    assert!(context.contains("## Local Expansion"));
+    assert!(context.contains("callsieve focus"));
+    assert!(context.contains("callsieve related"));
+    assert!(context.contains("callsieve tests"));
     assert!(context.contains("src/auth/session.ts"));
+    assert!(!context.contains("Snippet lines"));
     let trace_path = repo
         .path()
         .join(".callsieve/codex-hooks/hook-session.trace.json");
     assert!(trace_path.is_file());
     let trace: Value = serde_json::from_str(&fs::read_to_string(trace_path).unwrap()).unwrap();
     assert_eq!(trace["session"]["callsieve"]["file_reads"], 0);
+    assert!(trace["session"]["callsieve"]["tokens"].as_u64().unwrap() <= 1200);
     assert!(
         trace["session"]["callsieve"]["files_read"]
             .as_array()
@@ -5653,13 +7066,19 @@ fn claude_hook_user_prompt_submit_injects_callsieve_context() {
     assert!(context.contains("CallSieve context ready for Claude"));
     assert!(context.contains("Use broad search only if this packet is insufficient"));
     assert!(!context.contains("blocked until CallSieve context is established"));
+    assert!(context.contains("## Local Expansion"));
+    assert!(context.contains("callsieve focus"));
+    assert!(context.contains("callsieve related"));
+    assert!(context.contains("callsieve tests"));
     assert!(context.contains("src/auth/session.ts"));
+    assert!(!context.contains("Snippet lines"));
     let trace_path = repo
         .path()
         .join(".callsieve/claude-hooks/claude-hook-session.trace.json");
     assert!(trace_path.is_file());
     let trace: Value = serde_json::from_str(&fs::read_to_string(trace_path).unwrap()).unwrap();
     assert_eq!(trace["session"]["callsieve"]["file_reads"], 0);
+    assert!(trace["session"]["callsieve"]["tokens"].as_u64().unwrap() <= 1200);
     assert!(
         trace["session"]["callsieve"]["files_read"]
             .as_array()
@@ -5884,13 +7303,22 @@ fn new_client_hook_handlers_inject_context_block_search_and_trace() {
             !context.contains("blocked until CallSieve context is established"),
             "{client}"
         );
+        assert!(context.contains("## Local Expansion"), "{client}");
+        assert!(context.contains("callsieve focus"), "{client}");
+        assert!(context.contains("callsieve related"), "{client}");
+        assert!(context.contains("callsieve tests"), "{client}");
         assert!(context.contains("src/auth/session.ts"), "{client}");
+        assert!(!context.contains("Snippet lines"), "{client}");
         let trace_path = repo
             .path()
             .join(format!(".callsieve/{client}-hooks/{session_id}.trace.json"));
         assert!(trace_path.is_file(), "{client}");
         let trace: Value = serde_json::from_str(&fs::read_to_string(trace_path).unwrap()).unwrap();
         assert_eq!(trace["session"]["callsieve"]["file_reads"], 0, "{client}");
+        assert!(
+            trace["session"]["callsieve"]["tokens"].as_u64().unwrap() <= 1200,
+            "{client}"
+        );
         assert!(
             trace["session"]["callsieve"]["files_read"]
                 .as_array()
@@ -6122,7 +7550,6 @@ fn strict_shim_trace_records_grep_before_context_violation() {
 fn shim_run_extracts_pattern_and_returns_context_before_passthrough() {
     let repo = fixture_repo();
     let root = repo.path().to_str().unwrap();
-    json(&run(&["index", root]));
     json(&run(&["shim", "install", root, "--strict"]));
 
     let output = json(&run(&[
@@ -6140,9 +7567,27 @@ fn shim_run_extracts_pattern_and_returns_context_before_passthrough() {
     assert_eq!(output["command"], "shim-run");
     assert_eq!(output["tool"], "rg");
     assert_eq!(output["pattern"], "createSession");
+    assert!(repo.path().join(".callsieve/index.json").is_file());
     assert_eq!(
-        output["context"]["read_first"][0]["file"],
+        read_first_file_path(&output["context"]["read_first"][0]).unwrap(),
         "src/auth/session.ts"
+    );
+    assert!(output["context"]["stats"].get("profile").is_none());
+    assert_eq!(
+        context_stats_budget(&output["context"]["stats"]),
+        Some(1200)
+    );
+    assert!(context_stats_tokens(&output["context"]["stats"]).unwrap() <= 1200);
+    assert!(output["context"]["read_first"][0].get("snippets").is_none());
+    assert!(
+        output["context"]["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| warning
+                .as_str()
+                .unwrap()
+                .contains("rebuilt missing or stale CallSieve index before context"))
     );
     assert_eq!(output["shim_event"]["policy_violation"], true);
     assert!(repo.path().join(".callsieve/shim-trace.json").is_file());
@@ -6167,9 +7612,24 @@ fn guard_returns_context_and_writes_trace_stub() {
     assert_eq!(output["trace_event"]["tool"], "callsieve_guard");
     assert_eq!(output["trace_event"]["context_first"], true);
     assert_eq!(
-        output["context"]["read_first"][0]["file"],
+        read_first_file_path(&output["context"]["read_first"][0]).unwrap(),
         "src/auth/session.ts"
     );
+    assert_eq!(
+        expansion_target_file(&output["local_first_expansion"]["o"]),
+        Some("src/auth/session.ts")
+    );
+    assert_eq!(
+        expansion_target_symbol(&output["local_first_expansion"]["o"]),
+        Some("createSession")
+    );
+    assert_eq!(
+        expansion_target_line(&output["local_first_expansion"]["o"]),
+        Some(3)
+    );
+    assert!(output["local_first_expansion"].get("top").is_none());
+    assert_eq!(output["local_first_expansion"]["rel"], true);
+    assert_eq!(output["local_first_expansion"]["tests"], true);
     assert!(trace_path.is_file());
 
     let check = json(&run(&[
@@ -6213,8 +7673,33 @@ fn begin_returns_context_and_writes_clean_trace_event() {
             .any(|file| file == "src/auth/session.ts")
     );
     assert_eq!(
-        output["context"]["read_first"][0]["file"],
+        read_first_file_path(&output["context"]["read_first"][0]).unwrap(),
         "src/auth/session.ts"
+    );
+    assert_eq!(
+        expansion_target_file(&output["local_first_expansion"]["o"]),
+        Some("src/auth/session.ts")
+    );
+    assert_eq!(
+        expansion_target_symbol(&output["local_first_expansion"]["o"]),
+        Some("createSession")
+    );
+    assert_eq!(
+        expansion_target_line(&output["local_first_expansion"]["o"]),
+        Some(3)
+    );
+    assert!(output["local_first_expansion"].get("top").is_none());
+    assert!(
+        output["next_step"]
+            .as_str()
+            .unwrap()
+            .contains("context.sel.next")
+    );
+    assert!(
+        output["next_step"]
+            .as_str()
+            .unwrap()
+            .contains("instruction.x.o/n/next")
     );
     assert!(trace_path.is_file());
     let trace: Value = serde_json::from_str(&fs::read_to_string(&trace_path).unwrap()).unwrap();
@@ -6329,11 +7814,11 @@ fn begin_proof_trace_labels_explicit_trace_source() {
 fn grep_wrapper_returns_context_before_rg() {
     let repo = fixture_repo();
     let root = repo.path().to_str().unwrap();
-    json(&run(&["index", root]));
 
     let output = json(&run(&["grep", root, "createSession"]));
 
     assert_eq!(output["command"], "grep");
+    assert!(repo.path().join(".callsieve/index.json").is_file());
     assert!(output["rg"].is_null());
     assert!(
         output["rg_status"]
@@ -6344,8 +7829,25 @@ fn grep_wrapper_returns_context_before_rg() {
     assert_eq!(output["audit_event"]["tool"], "callsieve_grep");
     assert_eq!(output["audit_event"]["context_first"], true);
     assert_eq!(
-        output["context"]["read_first"][0]["file"],
+        read_first_file_path(&output["context"]["read_first"][0]).unwrap(),
         "src/auth/session.ts"
+    );
+    assert!(output["context"]["stats"].get("profile").is_none());
+    assert_eq!(
+        context_stats_budget(&output["context"]["stats"]),
+        Some(1200)
+    );
+    assert!(context_stats_tokens(&output["context"]["stats"]).unwrap() <= 1200);
+    assert!(output["context"]["read_first"][0].get("snippets").is_none());
+    assert!(
+        output["context"]["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| warning
+                .as_str()
+                .unwrap()
+                .contains("rebuilt missing or stale CallSieve index before context"))
     );
 }
 
@@ -6408,18 +7910,15 @@ fn context_no_snippets_omits_snippets() {
 }
 
 #[test]
-fn missing_index_returns_json_error() {
+fn missing_index_errors_for_non_context_commands_and_context_self_heals() {
     let repo = tempfile::tempdir().unwrap();
     let root = repo.path().to_str().unwrap();
 
     for args in [
         vec!["stats", root],
         vec!["query", root, "where is auth handled?"],
-        vec!["context", root, "change createSession token behavior"],
-        vec!["agent-context", root, "change createSession token behavior"],
         vec!["benchmark", root, "change createSession token behavior"],
         vec!["benchmark-suite", root, "tasks.json"],
-        vec!["grep", root, "createSession"],
     ] {
         let output = run(&args);
 
@@ -6432,6 +7931,54 @@ fn missing_index_returns_json_error() {
                 .contains("run `callsieve index")
         );
     }
+
+    let context = json(&run(&[
+        "context",
+        root,
+        "change createSession token behavior",
+    ]));
+    assert!(repo.path().join(".callsieve/index.json").is_file());
+    assert!(
+        context["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| warning
+                .as_str()
+                .unwrap()
+                .contains("rebuilt missing or stale CallSieve index before context"))
+    );
+
+    fs::remove_dir_all(repo.path().join(".callsieve")).unwrap();
+    let agent_context = json(&run(&[
+        "agent-context",
+        root,
+        "change createSession token behavior",
+    ]));
+    assert!(
+        agent_context["context"]["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| warning
+                .as_str()
+                .unwrap()
+                .contains("rebuilt missing or stale CallSieve index before context"))
+    );
+
+    fs::remove_dir_all(repo.path().join(".callsieve")).unwrap();
+    let grep = json(&run(&["grep", root, "createSession"]));
+    assert!(repo.path().join(".callsieve/index.json").is_file());
+    assert!(
+        grep["context"]["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| warning
+                .as_str()
+                .unwrap()
+                .contains("rebuilt missing or stale CallSieve index before context"))
+    );
 }
 
 #[test]
