@@ -162,7 +162,7 @@ impl LocalEmbedder for FastembedEmbedder {
 // ---------------------------------------------------------------------------
 
 const MAGIC: &[u8; 4] = b"CSEM";
-const FORMAT_VERSION: u16 = 4;
+const FORMAT_VERSION: u16 = 5;
 const FLAG_F16: u8 = 0b0000_0001;
 
 /// In-memory representation of a loaded `.callsieve/embeds.bin`.

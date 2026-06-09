@@ -54,7 +54,7 @@ impl QueryKind {
 
     pub fn cosine_floor(self) -> f32 {
         match self {
-            Self::NaturalLanguage => 0.15,
+            Self::NaturalLanguage => 0.10,
             Self::Identifier => 0.25,
         }
     }

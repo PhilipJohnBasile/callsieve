@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## v0.3.1 - 2026-06-09
+
+### Changed
+
+- Raised `MAX_SYMBOL_CHUNKS_PER_FILE` from 2 to 8: the embedder now indexes up to 8 top-level symbols per file (largest first by line span) instead of 2, giving the semantic ranker broader symbol coverage of large files.
+- Lowered the `NaturalLanguage` cosine floor from 0.15 to 0.10 (`Identifier` floor stays at 0.25) to let the semantic component contribute when vocabulary-gap cosines are low.
+- Bumped `embeds.bin` to format v5; existing caches rebuild automatically on next run.
+
+### Benchmarks
+
+- Public hybrid A/B re-run (June 2026, chunk-cap-8 + NL-floor-0.10): `56.0%` lexical = `56.0%` hybrid (`+0.0 pp`, 50 ties) on the 50-issue SWE-bench Lite set; `20.0%` lexical → `23.3%` hybrid (`+3.3 pp`, 1 win, 0 losses, 29 ties) on the 30-issue natural-language slice. The NL lift comes from semantic reranking within the existing 8-candidate lexical pool — no union-pass injection fired. BGE-small cosines for vocabulary-gap misses stay below 0.10 even with 4× more indexed symbols per file; a stronger embedding model is the next lever.
+
 ## v0.3.0 - 2026-06-08
 
 ### Added

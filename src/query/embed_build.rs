@@ -17,7 +17,7 @@ const MAX_CONTENT_TERMS: usize = 256;
 const MAX_DOCUMENT_CHARS: usize = 2048;
 const MAX_SYMBOL_BODY_LINES: usize = 40;
 const MAX_SYMBOL_CHARS: usize = 1024;
-const MAX_SYMBOL_CHUNKS_PER_FILE: usize = 2;
+const MAX_SYMBOL_CHUNKS_PER_FILE: usize = 8;
 const EMBED_BATCH_SIZE: usize = 256;
 
 pub fn compose_file_document(file: &FileRecord, symbols: &[&SymbolRecord]) -> String {
