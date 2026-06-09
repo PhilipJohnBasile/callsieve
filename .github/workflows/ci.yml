@@ -42,3 +42,32 @@ jobs:
 
       - name: Run tests
         run: cargo test
+
+  embed:
+    name: Rust (embed feature)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          git init --initial-branch=main .
+          git remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git fetch --depth=1 origin "${GITHUB_REF}"
+          git checkout --detach "${GITHUB_SHA}"
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      # The embed feature gates the hybrid retrieval path (semantic union
+      # pass, embeds.bin cache, format versioning). Tests use a fake embedder,
+      # so no model download is required; the build downloads the ONNX
+      # runtime binary only.
+      - name: Run Clippy (embed)
+        run: cargo clippy --all-targets --features embed -- -D warnings
+
+      - name: Run tests (embed)
+        run: cargo test --features embed
