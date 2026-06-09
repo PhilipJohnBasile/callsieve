@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Changed
+
+- Query-time ranking is faster: `TokenWeights` no longer materialises a full term set per indexed file (cloning content terms and tokenizing every symbol) on each query; a substring prefilter skips symbols that cannot match. Roughly 6-10% faster `agent-context` on a 2.7k-file repo with byte-identical output.
+
 ## v0.3.1 - 2026-06-09
 
 ### Changed
