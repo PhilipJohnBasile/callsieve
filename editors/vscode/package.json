@@ -50,7 +50,7 @@
         },
         "callsieve.limit": {
           "type": "integer",
-          "default": 8,
+          "default": 5,
           "minimum": 1,
           "description": "Number of read-first files to request."
         },
