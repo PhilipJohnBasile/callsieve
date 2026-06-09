@@ -35,7 +35,11 @@ jobs:
             archive: tar.gz
 
     steps:
+      # For workflow_dispatch reruns, build the requested tag's source rather
+      # than the default branch so assets match the tagged release.
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
 
       - uses: dtolnay/rust-toolchain@stable
         with:

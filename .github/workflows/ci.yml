@@ -29,6 +29,11 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      # Release builds use --locked; catch a stale Cargo.lock here instead of
+      # at tag time (a stale lock broke the v0.3.0 and v0.3.1 release builds).
+      - name: Verify Cargo.lock is in sync
+        run: cargo metadata --locked --format-version 1 > /dev/null
+
       - name: Check formatting
         run: cargo fmt --check
 
