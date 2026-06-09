@@ -10,6 +10,15 @@ readme = "README.md"
 keywords = ["token-savings", "coding-agents", "retrieval", "mcp", "local-first"]
 categories = ["command-line-utilities", "development-tools"]
 
+# cargo-binstall resolves release assets uploaded by .github/workflows/release.yml
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/callsieve-{ target }{ archive-suffix }"
+pkg-fmt = "tgz"
+bin-dir = "callsieve-{ target }/{ bin }{ binary-ext }"
+
+[package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
+pkg-fmt = "zip"
+
 [features]
 default = []
 embed = ["dep:fastembed", "dep:half"]
