@@ -4583,7 +4583,7 @@ fn demo(path: &Path, task: &str, lsp: bool) -> Result<DemoOutput> {
             format!("callsieve mcp-config {} --format json", path.display()),
             "callsieve proof-rehearsal --preflight".to_string(),
         ],
-        warnings: index.warnings.clone(),
+        warnings: index.warnings,
     })
 }
 
@@ -7307,7 +7307,7 @@ fn proof_sprint_collect(
     if task.client != "claude" {
         anyhow::bail!("proof-sprint collect currently supports Claude tasks only")
     }
-    let model = task.model.clone();
+    let model = task.model;
     let collect = collect_claude_observed_session(
         manifest,
         task_id,
@@ -8315,7 +8315,7 @@ fn begin_task(
             trace,
             &command,
             Vec::new(),
-            context_selected_files.clone(),
+            context_selected_files,
             Some(tokens),
             Some(SessionPhase::Callsieve),
             None,
@@ -8329,7 +8329,7 @@ fn begin_task(
                 "timestamp": now_unix_seconds(),
                 "command": command,
                 "files_read": [],
-                "context_selected_files": context_selected_files.clone(),
+                "context_selected_files": context_selected_files,
                 "tokens": tokens,
                 "classification": "callsieve_context",
                 "phase": "callsieve"
@@ -10871,8 +10871,7 @@ fn pilot_finalize(
         serde_json::to_vec_pretty(&proof_manifest)?,
     )
     .with_context(|| format!("failed to write {}", proof_manifest_path.display()))?;
-    let proof_manifest: query::BenchmarkReportManifest =
-        serde_json::from_value(proof_manifest.clone())?;
+    let proof_manifest: query::BenchmarkReportManifest = serde_json::from_value(proof_manifest)?;
     let proof = query::proof_report(proof_manifest, limit, snippets_per_file, include_snippets)?;
     if let Some(parent) = out.parent().filter(|parent| !parent.as_os_str().is_empty()) {
         fs::create_dir_all(parent)
@@ -11559,7 +11558,7 @@ fn codex_bootstrap(root: &Path, model: &str, force: bool) -> Result<CodexBootstr
     let launchers = write_codex_launchers(root, &first_required_command, force)?;
     files.extend(launchers.clone());
     let hooks = codex_hooks_install(root, true, force, 6, 1, false)?;
-    files.extend(hooks.files.clone());
+    files.extend(hooks.files);
     files.sort();
     files.dedup();
 
@@ -12293,7 +12292,7 @@ fn codex_hooks_trust_ack(root: &Path) -> Result<CodexHooksTrustAckOutput> {
     let value = serde_json::json!({
         "profile": CODEX_HOOK_PROFILE,
         "hooks_file": repo_relative_display(root, &hooks_path),
-        "hooks_hash": hooks_hash.clone(),
+        "hooks_hash": hooks_hash,
         "reviewed_at": reviewed_at,
         "manual_review": "Human reviewed project hooks in Codex with /hooks before recording this marker."
     });
@@ -12721,7 +12720,7 @@ fn client_hooks_doctor(root: &Path, client: HookClient, strict: bool) -> ClientH
     }
 
     let command_text = if matches!(client, HookClient::Cline) {
-        let mut text = content.clone().unwrap_or_default();
+        let mut text = content.unwrap_or_default();
         for hook_name in CLIENT_HOOK_COMMAND_NAMES {
             for windows in [true, false] {
                 if let Ok(script) =
@@ -12734,7 +12733,7 @@ fn client_hooks_doctor(root: &Path, client: HookClient, strict: bool) -> ClientH
         }
         text
     } else {
-        content.clone().unwrap_or_default()
+        content.unwrap_or_default()
     };
     checks.push(enforce_check(
         format!("{}_hook_commands", hook_client_name(client)),
@@ -13042,7 +13041,7 @@ fn codex_hook_user_prompt_submit(
         save_codex_hook_state(root, &state)?;
         return Ok(hook_skipped_user_prompt_submit_response());
     }
-    state.last_prompt = prompt.clone();
+    state.last_prompt = prompt;
 
     let additional_context = match load_fresh_index_timed(root) {
         Ok((index, index_load_ms, refreshed)) => {
@@ -13202,7 +13201,7 @@ fn claude_hook_user_prompt_submit(
         save_claude_hook_state(root, &state)?;
         return Ok(hook_skipped_user_prompt_submit_response());
     }
-    state.last_prompt = prompt.clone();
+    state.last_prompt = prompt;
 
     let additional_context = match load_fresh_index_timed(root) {
         Ok((index, index_load_ms, refreshed)) => {
@@ -13418,7 +13417,7 @@ fn client_hook_user_prompt_submit(
         save_client_hook_state(root, client, &state)?;
         return Ok(hook_skipped_user_prompt_submit_response());
     }
-    state.last_prompt = prompt.clone();
+    state.last_prompt = prompt;
 
     let additional_context = match load_fresh_index_timed(root) {
         Ok((index, index_load_ms, refreshed)) => {
@@ -15282,7 +15281,7 @@ fn editor_hook(root: &Path, editor: EditorKind, force: bool) -> Result<EditorHoo
                 root,
                 &root.join(".callsieve/editor-hook.json"),
                 &serde_json::to_string_pretty(&serde_json::json!({
-                    "daemon_command": daemon_command.clone(),
+                    "daemon_command": daemon_command,
                     "policy": "callsieve_context before broad grep or repeated file reads",
                     "ranked_expansion_before_grep": ["context.sel.next", "instruction.x.o/n/next"],
                     "local_expansion_before_grep": ["callsieve focus", "callsieve related", "callsieve tests"]
@@ -15598,7 +15597,7 @@ fn agent_files(client: AgentClient, root: &Path) -> Vec<(PathBuf, String)> {
                     toml_basic_string(&callsieve_command)
                 ),
             ),
-            (root.join(".codex/CALLSIEVE.md"), policy.clone()),
+            (root.join(".codex/CALLSIEVE.md"), policy),
         ],
         AgentClient::Claude => vec![
             (
@@ -15615,7 +15614,7 @@ fn agent_files(client: AgentClient, root: &Path) -> Vec<(PathBuf, String)> {
                 }))
                 .unwrap_or_else(|_| "{}".to_string()),
             ),
-            (root.join("CLAUDE.md"), policy.clone()),
+            (root.join("CLAUDE.md"), policy),
         ],
         AgentClient::Copilot => vec![
             (
@@ -15660,7 +15659,7 @@ fn agent_files(client: AgentClient, root: &Path) -> Vec<(PathBuf, String)> {
                     "# CallSieve Context\n\n{policy}\nKeep `GEMINI.md` and `AGENTS.md` compatibility by treating this skill as the local context-first rule.\n"
                 ),
             ),
-            (root.join(".agents/rules/callsieve.md"), policy.clone()),
+            (root.join(".agents/rules/callsieve.md"), policy),
         ],
         AgentClient::Cursor => vec![
             (
@@ -15676,7 +15675,7 @@ fn agent_files(client: AgentClient, root: &Path) -> Vec<(PathBuf, String)> {
                 }))
                 .unwrap_or_else(|_| "{}".to_string()),
             ),
-            (root.join(".cursor/rules/callsieve.mdc"), policy.clone()),
+            (root.join(".cursor/rules/callsieve.mdc"), policy),
         ],
         AgentClient::Vscode => vec![
             (
@@ -15708,10 +15707,7 @@ fn agent_files(client: AgentClient, root: &Path) -> Vec<(PathBuf, String)> {
                 root.join(".continue/mcpServers/callsieve.yaml"),
                 continue_mcp_yaml(&callsieve_command),
             ),
-            (
-                root.join(".continue/rules/callsieve.md"),
-                portable_policy.clone(),
-            ),
+            (root.join(".continue/rules/callsieve.md"), portable_policy),
         ],
         AgentClient::Zed => {
             if zed_project_settings_mergeable(root) {
@@ -15731,7 +15727,7 @@ fn agent_files(client: AgentClient, root: &Path) -> Vec<(PathBuf, String)> {
                 root.join(".junie/mcp/mcp.json"),
                 junie_mcp_json(root, &callsieve_command),
             ),
-            (root.join(".junie/guidelines.md"), portable_policy.clone()),
+            (root.join(".junie/guidelines.md"), portable_policy),
         ],
         AgentClient::JetBrains => vec![(
             root.join(".callsieve/integrations/jetbrains-mcp.json"),
@@ -15786,7 +15782,7 @@ fn agent_files(client: AgentClient, root: &Path) -> Vec<(PathBuf, String)> {
                 .unwrap_or_else(|_| "{}".to_string()),
             ),
             (root.join(".cline/rules/callsieve.md"), policy.clone()),
-            (root.join(".clinerules/callsieve.md"), policy.clone()),
+            (root.join(".clinerules/callsieve.md"), policy),
         ],
         AgentClient::Zoo | AgentClient::Roo => vec![
             (
@@ -15804,7 +15800,7 @@ fn agent_files(client: AgentClient, root: &Path) -> Vec<(PathBuf, String)> {
                 .unwrap_or_else(|_| "{}".to_string()),
             ),
             (root.join(".roo/rules/callsieve.md"), policy.clone()),
-            (root.join(".roo/rules-code/callsieve.md"), policy.clone()),
+            (root.join(".roo/rules-code/callsieve.md"), policy),
         ],
         AgentClient::Generic => vec![
             (

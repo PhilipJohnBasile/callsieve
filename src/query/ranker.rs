@@ -84,19 +84,51 @@ impl TokenWeights {
                 .push(symbol);
         }
 
+        // Membership-only check: avoid materialising every file's full term set
+        // (cloning all content terms and tokenizing every symbol) per query.
         for file in &index.files {
-            let mut terms: BTreeSet<String> = path_tokens(&file.path).into_iter().collect();
-            terms.extend(file.content_terms.iter().cloned());
-            if let Some(symbols) = symbols_by_file.get(file.id.as_str()) {
-                for symbol in symbols {
-                    terms.extend(formatter::tokenize(&symbol.name));
-                    terms.extend(formatter::tokenize(&symbol.signature));
+            let mut matched: BTreeSet<&str> = BTreeSet::new();
+            for term in path_tokens(&file.path) {
+                if let Some(token) = query_set.get(term.as_str()) {
+                    matched.insert(token);
                 }
             }
             for token in &query_set {
-                if terms.contains(*token)
-                    && let Some(count) = document_frequency.get_mut(token)
+                if !matched.contains(*token) && file.content_terms.iter().any(|term| term == token)
                 {
+                    matched.insert(token);
+                }
+            }
+            if matched.len() < query_set.len()
+                && let Some(symbols) = symbols_by_file.get(file.id.as_str())
+            {
+                for symbol in symbols {
+                    // Every token tokenize() produces is a contiguous substring of the
+                    // lowercased input, so a substring miss proves a token miss and the
+                    // allocation-heavy tokenize can be skipped.
+                    let worth_tokenizing = query_set.iter().any(|token| {
+                        !matched.contains(*token)
+                            && (contains_ascii_case_insensitive(&symbol.name, token)
+                                || contains_ascii_case_insensitive(&symbol.signature, token))
+                    });
+                    if !worth_tokenizing {
+                        continue;
+                    }
+                    for term in formatter::tokenize(&symbol.name)
+                        .into_iter()
+                        .chain(formatter::tokenize(&symbol.signature))
+                    {
+                        if let Some(token) = query_set.get(term.as_str()) {
+                            matched.insert(token);
+                        }
+                    }
+                    if matched.len() == query_set.len() {
+                        break;
+                    }
+                }
+            }
+            for token in matched {
+                if let Some(count) = document_frequency.get_mut(token) {
                     *count += 1;
                 }
             }
@@ -128,6 +160,18 @@ impl TokenWeights {
         let weighted: f32 = tokens.iter().map(|token| self.weight(token)).sum();
         ((base as f32 * weighted).round() as i32).max(1)
     }
+}
+
+/// Allocation-free `haystack.to_lowercase().contains(needle)` for an
+/// already-lowercase ASCII needle.
+fn contains_ascii_case_insensitive(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return false;
+    }
+    haystack
+        .as_bytes()
+        .windows(needle.len())
+        .any(|window| window.eq_ignore_ascii_case(needle.as_bytes()))
 }
 
 /// Maps document frequency to a [0.2, 1.0] multiplier. A token in zero or few

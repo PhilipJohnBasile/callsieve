@@ -2279,7 +2279,7 @@ pub fn build_context_with(
                 file,
                 score,
                 &why,
-                top_score_components.clone(),
+                top_score_components,
             );
             let debug = if options.why_debug {
                 candidate.why_debug.into_iter().take(16).collect()
@@ -2405,7 +2405,7 @@ fn push_context_selection_summary(
     if summary.top_file.is_none() {
         summary.top_file = Some(file_summary.file.clone());
         summary.top_score = Some(file_summary.score);
-        summary.top_reason = file_summary.reason.clone();
+        summary.top_reason = file_summary.reason;
         summary.top_signals = top_score_components;
     } else if summary.next_files.len() < MAX_SELECTION_SUMMARY_NEXT_FILES {
         summary.next_files.push(file_summary);
@@ -4786,7 +4786,7 @@ pub fn codex_session_trace(
     Ok(TraceReplayOutput {
         metadata: Some(TraceReplayMetadata {
             client: "codex-chatgpt".to_string(),
-            model: model.to_string(),
+            model,
             collection: "controlled_replay".to_string(),
         }),
         tasks: vec![task],
