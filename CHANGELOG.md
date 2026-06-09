@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added `callsieve index-export <repo> --out <file>` and `callsieve index-import <repo> --from <file> [--allow-partial]` for team warm starts without any cloud: one machine exports its index, another verifies every file by content hash (not mtime, which never matches across machines), rewrites local file stats so freshness checks pass, and skips the full re-index. Verified on a 3.3k-file Django checkout: import matches all files and `status` reports fresh.
 - Added `callsieve setup-auto <repo> [--force] [--dry-run]`: detects installed agents on this machine (binary on PATH, config directory — including Linux `~/.config` locations — macOS app bundle, or VS Code extension) and runs the existing per-client setup for each, with no per-client decisions. Hook-capable clients (Codex, Claude Code, Copilot, OpenCode, Antigravity, Cline) also get non-strict lifecycle hooks installed, since hooks are the strongest context-first integration.
 - Claude Code and generic client Stop hooks now report a factual session summary when CallSieve served context: packets, packet tokens, read-first files, and the zero-model-token retrieval cost. Estimated savings claims stay gated behind audited observed-session reports.
 

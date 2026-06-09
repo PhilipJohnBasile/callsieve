@@ -146,6 +146,8 @@ callsieve watch <path> [--debounce-ms <n>] [--foreground] [--lsp]
 callsieve agent-setup <path> --client <codex|claude|copilot|opencode|antigravity|cursor|vscode|windsurf|continue|zed|junie|jetbrains|amp|goose|warp|cline|zoo|roo|generic> [--force]
 callsieve setup-agent <codex|claude|copilot|opencode|antigravity|cursor|vscode|windsurf|continue|zed|junie|jetbrains|amp|goose|warp|cline|zoo|roo|generic> <path> [--force]
 callsieve setup-auto <path> [--force] [--dry-run]
+callsieve index-export <path> --out <file>
+callsieve index-import <path> --from <file> [--allow-partial]
 callsieve bootstrap <path> --client <codex|claude|copilot|opencode|antigravity|cursor|vscode|windsurf|continue|zed|junie|jetbrains|amp|goose|warp|cline|zoo|roo|generic> [--strict] [--force] [--lsp]
 callsieve doctor <path> --client <codex|claude|copilot|opencode|antigravity|cursor|vscode|windsurf|continue|zed|junie|jetbrains|amp|goose|warp|cline|zoo|roo|generic> [--fix] [--strict]
 callsieve codex-bootstrap <path> --model <name> [--force]

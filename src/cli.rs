@@ -960,6 +960,31 @@ pub enum Command {
         dry_run: bool,
     },
 
+    /// Write the local index to a portable file so teammates can start warm
+    /// without re-indexing.
+    #[command(name = "index-export")]
+    IndexExport {
+        path: PathBuf,
+
+        #[arg(long)]
+        out: PathBuf,
+    },
+
+    /// Install an exported index after verifying it matches this checkout by
+    /// content hash. Matched files get local mtimes so freshness checks pass.
+    #[command(name = "index-import")]
+    IndexImport {
+        path: PathBuf,
+
+        #[arg(long)]
+        from: PathBuf,
+
+        /// Accept imports where up to 10% of files differ from this checkout;
+        /// differing files stay stale and refresh on the next rebuild.
+        #[arg(long)]
+        allow_partial: bool,
+    },
+
     /// Generate Codex-first local bootstrap files without global PATH/profile mutation.
     CodexBootstrap {
         path: PathBuf,
@@ -3954,6 +3979,18 @@ pub fn run() -> Result<()> {
             dry_run,
         } => {
             let output = setup_auto(&path, force, dry_run)?;
+            output::json::print(&output)?;
+        }
+        Command::IndexExport { path, out } => {
+            let output = index_export(&path, &out)?;
+            output::json::print(&output)?;
+        }
+        Command::IndexImport {
+            path,
+            from,
+            allow_partial,
+        } => {
+            let output = index_import(&path, &from, allow_partial)?;
             output::json::print(&output)?;
         }
         Command::Bootstrap {
@@ -11779,6 +11816,148 @@ fn detect_agent_clients(
     detected
 }
 
+#[derive(Debug, Serialize)]
+struct IndexExportOutput {
+    command: &'static str,
+    root: String,
+    out: String,
+    files: usize,
+    symbols: usize,
+    references: usize,
+    schema_version: u32,
+    fingerprint: String,
+    bytes: u64,
+}
+
+fn index_export(root: &Path, out: &Path) -> Result<IndexExportOutput> {
+    let index = store::json_store::load_index(root)?;
+    if index.schema_version != indexer::SCHEMA_VERSION {
+        anyhow::bail!(
+            "index schema {} does not match current schema {}; run `callsieve index {}` before exporting",
+            index.schema_version,
+            indexer::SCHEMA_VERSION,
+            root.display()
+        );
+    }
+    let data = serde_json::to_vec(&index)?;
+    if let Some(parent) = out.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    fs::write(out, &data).with_context(|| format!("failed to write {}", out.display()))?;
+    Ok(IndexExportOutput {
+        command: "index-export",
+        root: root_label(root),
+        out: out.display().to_string(),
+        files: index.files.len(),
+        symbols: index.symbols.len(),
+        references: index.references.len(),
+        schema_version: index.schema_version,
+        fingerprint: indexer::index_fingerprint(&index),
+        bytes: data.len() as u64,
+    })
+}
+
+#[derive(Debug, Serialize)]
+struct IndexImportOutput {
+    command: &'static str,
+    root: String,
+    from: String,
+    files_total: usize,
+    files_matched: usize,
+    files_mismatched: usize,
+    files_missing: usize,
+    fingerprint: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    warnings: Vec<String>,
+}
+
+/// Verification is by content hash, not mtime: an exported index carries the
+/// builder's mtimes, which never match another machine's checkout. Matched
+/// files get their mtime/size rewritten from local disk so the freshness
+/// check passes; mismatched files keep the stale stats on purpose so the
+/// next rebuild picks them up.
+fn index_import(root: &Path, from: &Path, allow_partial: bool) -> Result<IndexImportOutput> {
+    let data = fs::read(from).with_context(|| format!("failed to read {}", from.display()))?;
+    let mut index: store::CodeIndex = serde_json::from_slice(&data)
+        .with_context(|| format!("failed to parse {}", from.display()))?;
+    store::normalize_after_load(&mut index);
+    if index.schema_version != indexer::SCHEMA_VERSION {
+        anyhow::bail!(
+            "exported index schema {} does not match this binary's schema {}; re-export with a matching callsieve version",
+            index.schema_version,
+            indexer::SCHEMA_VERSION
+        );
+    }
+
+    let root_canonical = root
+        .canonicalize()
+        .with_context(|| format!("failed to resolve repo root {}", root.display()))?;
+    let mut matched = 0usize;
+    let mut mismatched = 0usize;
+    let mut missing = 0usize;
+    for file in &mut index.files {
+        let local = root_canonical.join(&file.path);
+        match fs::read(&local) {
+            Ok(bytes) => {
+                if indexer::stable_content_hash(&bytes) == file.content_hash {
+                    if let Ok(metadata) = fs::metadata(&local) {
+                        file.mtime = indexer::metadata_mtime(&metadata);
+                        file.size_bytes = metadata.len();
+                    }
+                    matched += 1;
+                } else {
+                    mismatched += 1;
+                }
+            }
+            Err(_) => missing += 1,
+        }
+    }
+
+    let total = index.files.len();
+    let drift = mismatched + missing;
+    if drift > 0 && !allow_partial {
+        anyhow::bail!(
+            "{drift} of {total} indexed files differ from this checkout ({mismatched} changed, {missing} missing); pass --allow-partial to import anyway or run `callsieve index {}`",
+            root.display()
+        );
+    }
+    if allow_partial && drift * 10 > total {
+        anyhow::bail!(
+            "{drift} of {total} indexed files differ from this checkout, which exceeds the 10% --allow-partial budget; run `callsieve index {}` instead",
+            root.display()
+        );
+    }
+
+    let mut warnings = Vec::new();
+    if drift > 0 {
+        warnings.push(format!(
+            "{drift} file(s) differ from the export and stay stale until the next rebuild"
+        ));
+    }
+    warnings
+        .push("files added after the export are not indexed until the next rebuild".to_string());
+
+    index.metadata.indexed_at = now_unix_seconds();
+    index.metadata.index_generation = 0;
+    index.metadata.watch_status = "unwatched".to_string();
+    index.metadata.watcher_mode = "none".to_string();
+    index.metadata.last_error = None;
+    store::json_store::save_index(root, &index)?;
+
+    Ok(IndexImportOutput {
+        command: "index-import",
+        root: root_label(root),
+        from: from.display().to_string(),
+        files_total: total,
+        files_matched: matched,
+        files_mismatched: mismatched,
+        files_missing: missing,
+        fingerprint: indexer::index_fingerprint(&index),
+        warnings,
+    })
+}
+
 fn setup_auto(root: &Path, force: bool, dry_run: bool) -> Result<SetupAutoOutput> {
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
@@ -18503,6 +18682,60 @@ mod setup_auto_tests {
         assert!(output.configured.is_empty());
         assert_eq!(output.detected.len(), 1);
         assert!(fs::read_dir(temp.path()).unwrap().next().is_none());
+    }
+}
+
+#[cfg(test)]
+mod index_transfer_tests {
+    use super::*;
+
+    fn build_and_save(root: &Path) {
+        let index = indexer::build_index(root).unwrap();
+        store::json_store::save_index(root, &index).unwrap();
+    }
+
+    #[test]
+    fn export_import_round_trip_is_fresh_on_a_second_checkout() {
+        let source = tempfile::tempdir().unwrap();
+        fs::write(source.path().join("a.rs"), "pub fn alpha() {}\n").unwrap();
+        fs::write(source.path().join("b.rs"), "pub fn beta() { alpha(); }\n").unwrap();
+        build_and_save(source.path());
+
+        let export = source.path().join("team-index.json");
+        let exported = index_export(source.path(), &export).unwrap();
+        assert!(exported.files >= 2);
+
+        // Second checkout: same contents, different mtimes.
+        let clone = tempfile::tempdir().unwrap();
+        fs::write(clone.path().join("a.rs"), "pub fn alpha() {}\n").unwrap();
+        fs::write(clone.path().join("b.rs"), "pub fn beta() { alpha(); }\n").unwrap();
+
+        let imported = index_import(clone.path(), &export, false).unwrap();
+        assert_eq!(imported.files_mismatched, 0);
+        assert_eq!(imported.files_missing, 0);
+        assert_eq!(imported.fingerprint, exported.fingerprint);
+
+        let index = store::json_store::load_index(clone.path()).unwrap();
+        let status = query::index_status(clone.path(), Some(&index));
+        assert!(
+            status.is_fresh(),
+            "imported index must pass the freshness check"
+        );
+    }
+
+    #[test]
+    fn import_rejects_a_drifted_checkout_without_allow_partial() {
+        let source = tempfile::tempdir().unwrap();
+        fs::write(source.path().join("a.rs"), "pub fn alpha() {}\n").unwrap();
+        build_and_save(source.path());
+        let export = source.path().join("team-index.json");
+        index_export(source.path(), &export).unwrap();
+
+        let clone = tempfile::tempdir().unwrap();
+        fs::write(clone.path().join("a.rs"), "pub fn alpha() { changed(); }\n").unwrap();
+
+        let error = index_import(clone.path(), &export, false).unwrap_err();
+        assert!(error.to_string().contains("differ"), "{error}");
     }
 }
 

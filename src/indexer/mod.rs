@@ -216,7 +216,7 @@ fn symbol_id(path: &str, line: usize, name: &str) -> String {
     format!("symbol:{path}:{line}:{name}")
 }
 
-fn metadata_mtime(metadata: &fs::Metadata) -> u64 {
+pub(crate) fn metadata_mtime(metadata: &fs::Metadata) -> u64 {
     metadata
         .modified()
         .ok()
@@ -230,6 +230,19 @@ fn now_unix_seconds() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs())
         .unwrap_or_default()
+}
+
+/// Fingerprint of the indexed file set and contents: stable across machines
+/// and build times because it hashes only file ids and content hashes.
+pub fn index_fingerprint(index: &crate::store::CodeIndex) -> String {
+    let mut bytes = Vec::new();
+    for file in &index.files {
+        bytes.extend_from_slice(file.id.as_bytes());
+        bytes.push(0);
+        bytes.extend_from_slice(file.content_hash.as_bytes());
+        bytes.push(b'\n');
+    }
+    stable_content_hash(&bytes)
 }
 
 pub(crate) fn stable_content_hash(bytes: &[u8]) -> String {

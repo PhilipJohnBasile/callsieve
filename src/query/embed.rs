@@ -59,7 +59,7 @@ use std::{
 
 use anyhow::{Context, Result, anyhow, bail};
 
-use crate::{indexer::stable_content_hash, store::CodeIndex};
+use crate::store::CodeIndex;
 
 /// Identifies a specific embedding model + checkpoint. Used both at
 /// runtime and as a cache key on disk.
@@ -193,14 +193,7 @@ pub struct ExpectedCache<'a> {
 /// own `chunk_owners`, but those owners are only meaningful against this file
 /// fingerprint.
 pub fn index_fingerprint(index: &CodeIndex) -> String {
-    let mut bytes = Vec::new();
-    for file in &index.files {
-        bytes.extend_from_slice(file.id.as_bytes());
-        bytes.push(0);
-        bytes.extend_from_slice(file.content_hash.as_bytes());
-        bytes.push(b'\n');
-    }
-    stable_content_hash(&bytes)
+    crate::indexer::index_fingerprint(index)
 }
 
 /// Path helper, mirrors `store::json_store::index_path`.
