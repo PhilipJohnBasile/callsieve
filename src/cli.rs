@@ -4608,6 +4608,7 @@ fn demo(path: &Path, task: &str, lsp: bool) -> Result<DemoOutput> {
         context_payload_reduction,
         next_commands: vec![
             format!("callsieve agent-context {} {:?}", path.display(), task),
+            format!("callsieve setup-auto {} --dry-run", path.display()),
             format!("callsieve mcp-config {} --format json", path.display()),
             "callsieve proof-rehearsal --preflight".to_string(),
         ],
