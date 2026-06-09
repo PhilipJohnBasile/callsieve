@@ -2,7 +2,14 @@
 
 ## Unreleased
 
+### Added
+
+- Added `callsieve setup-auto <repo> [--force] [--dry-run]`: detects installed agents on this machine (binary on PATH, config directory, macOS app bundle, or VS Code extension) and runs the existing per-client setup for each, with no per-client decisions.
+- Claude Code and generic client Stop hooks now report a factual session summary when CallSieve served context: packets, packet tokens, read-first files, and the zero-model-token retrieval cost. Estimated savings claims stay gated behind audited observed-session reports.
+
 ### Changed
+
+- Index schema 9: `index.json` is now compact (not pretty-printed) and `ReferenceRecord` serialization drops derivable fields (`file_id`, `confidence`, redundant `source_range`, null targets, default `kind`/`edge_source`). On a 2.7k-file Django checkout the index shrinks from 247 MB to 111 MB (−55%) with identical query output; older indexes remain readable and rebuild automatically.
 
 - Query-time ranking is faster: `TokenWeights` no longer materialises a full term set per indexed file (cloning content terms and tokenizing every symbol) on each query; a substring prefilter skips symbols that cannot match. Roughly 6-10% faster `agent-context` on a 2.7k-file repo with byte-identical output.
 

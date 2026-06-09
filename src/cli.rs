@@ -946,6 +946,20 @@ pub enum Command {
         force: bool,
     },
 
+    /// Detect installed agents on this machine and run setup for each, with no
+    /// per-client decisions.
+    #[command(name = "setup-auto")]
+    SetupAuto {
+        path: PathBuf,
+
+        #[arg(long)]
+        force: bool,
+
+        /// Only report which agents would be configured, without writing files.
+        #[arg(long)]
+        dry_run: bool,
+    },
+
     /// Generate Codex-first local bootstrap files without global PATH/profile mutation.
     CodexBootstrap {
         path: PathBuf,
@@ -2930,6 +2944,12 @@ struct CodexHookState {
     last_prompt: String,
     selected_files: Vec<String>,
     updated_at: u64,
+    #[serde(default)]
+    context_packets: usize,
+    #[serde(default)]
+    context_tokens: usize,
+    #[serde(default)]
+    context_files: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -3926,6 +3946,14 @@ pub fn run() -> Result<()> {
             force,
         } => {
             let output = setup_agent(client, &path, force)?;
+            output::json::print(&output)?;
+        }
+        Command::SetupAuto {
+            path,
+            force,
+            dry_run,
+        } => {
+            let output = setup_auto(&path, force, dry_run)?;
             output::json::print(&output)?;
         }
         Command::Bootstrap {
@@ -11548,6 +11576,253 @@ fn setup_agent(client: AgentClient, root: &Path, force: bool) -> Result<SetupAge
     })
 }
 
+#[derive(Debug, Serialize)]
+struct SetupAutoDetection {
+    client: String,
+    evidence: String,
+}
+
+#[derive(Debug, Serialize)]
+struct SetupAutoOutput {
+    command: &'static str,
+    root: String,
+    detected: Vec<SetupAutoDetection>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    configured: Vec<SetupAgentOutput>,
+    dry_run: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    warnings: Vec<String>,
+}
+
+/// Local-only signals that an agent is installed: a binary on PATH, a config
+/// directory under the home directory, a macOS app bundle, or a VS Code
+/// extension prefix. No network calls.
+struct AgentDetectionSignals {
+    client: AgentClient,
+    binaries: &'static [&'static str],
+    home_dirs: &'static [&'static str],
+    app_bundles: &'static [&'static str],
+    extension_prefixes: &'static [&'static str],
+}
+
+fn agent_detection_table() -> Vec<AgentDetectionSignals> {
+    // (client, binaries, home-relative dirs, app bundles, vscode extension prefixes)
+    let table = vec![
+        (
+            AgentClient::Claude,
+            &["claude"][..],
+            &[".claude"][..],
+            &[][..],
+            &[][..],
+        ),
+        (AgentClient::Codex, &["codex"], &[".codex"], &[], &[]),
+        (
+            AgentClient::Copilot,
+            &["copilot", "github-copilot-cli"],
+            &[".config/github-copilot"],
+            &[],
+            &["github.copilot"],
+        ),
+        (
+            AgentClient::OpenCode,
+            &["opencode"],
+            &[".opencode", ".config/opencode"],
+            &[],
+            &[],
+        ),
+        (
+            AgentClient::Antigravity,
+            &["antigravity"],
+            &[],
+            &["Antigravity.app"],
+            &[],
+        ),
+        (
+            AgentClient::Cursor,
+            &["cursor"],
+            &[".cursor"],
+            &["Cursor.app"],
+            &[],
+        ),
+        (
+            AgentClient::Vscode,
+            &["code"],
+            &[".vscode"],
+            &["Visual Studio Code.app"],
+            &[],
+        ),
+        (
+            AgentClient::Windsurf,
+            &["windsurf"],
+            &[".windsurf", ".codeium/windsurf"],
+            &["Windsurf.app"],
+            &[],
+        ),
+        (
+            AgentClient::Continue,
+            &[],
+            &[".continue"],
+            &[],
+            &["continue.continue"],
+        ),
+        (
+            AgentClient::Zed,
+            &["zed"],
+            &[".config/zed"],
+            &["Zed.app"],
+            &[],
+        ),
+        (
+            AgentClient::JetBrains,
+            &[],
+            &[".config/JetBrains", "Library/Application Support/JetBrains"],
+            &[],
+            &[],
+        ),
+        (
+            AgentClient::Amp,
+            &["amp"],
+            &[".config/amp"],
+            &[],
+            &["sourcegraph.amp"],
+        ),
+        (AgentClient::Goose, &["goose"], &[".config/goose"], &[], &[]),
+        (AgentClient::Warp, &[], &[".warp"], &["Warp.app"], &[]),
+        (
+            AgentClient::Cline,
+            &[],
+            &[],
+            &[],
+            &["saoudrizwan.claude-dev"],
+        ),
+        (AgentClient::Roo, &[], &[], &[], &["rooveterinaryinc"]),
+    ];
+    table
+        .into_iter()
+        .map(
+            |(client, binaries, home_dirs, app_bundles, extension_prefixes)| {
+                AgentDetectionSignals {
+                    client,
+                    binaries,
+                    home_dirs,
+                    app_bundles,
+                    extension_prefixes,
+                }
+            },
+        )
+        .collect()
+}
+
+fn detect_agent_clients(
+    home: &Path,
+    path_dirs: &[PathBuf],
+    applications: &Path,
+) -> Vec<(AgentClient, String)> {
+    let vscode_extensions: Vec<String> = fs::read_dir(home.join(".vscode/extensions"))
+        .map(|entries| {
+            entries
+                .filter_map(|entry| entry.ok())
+                .filter_map(|entry| entry.file_name().to_str().map(str::to_ascii_lowercase))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let mut detected = Vec::new();
+    for AgentDetectionSignals {
+        client,
+        binaries,
+        home_dirs,
+        app_bundles,
+        extension_prefixes,
+    } in agent_detection_table()
+    {
+        let binary_hit = binaries.iter().find_map(|binary| {
+            path_dirs
+                .iter()
+                .map(|dir| dir.join(binary))
+                .find(|candidate| candidate.is_file())
+                .map(|candidate| format!("binary: {}", candidate.display()))
+        });
+        let dir_hit = || {
+            home_dirs
+                .iter()
+                .map(|dir| home.join(dir))
+                .find(|candidate| candidate.is_dir())
+                .map(|candidate| format!("directory: {}", candidate.display()))
+        };
+        let app_hit = || {
+            app_bundles
+                .iter()
+                .map(|bundle| applications.join(bundle))
+                .find(|candidate| candidate.exists())
+                .map(|candidate| format!("application: {}", candidate.display()))
+        };
+        let extension_hit = || {
+            extension_prefixes
+                .iter()
+                .find(|prefix| {
+                    vscode_extensions
+                        .iter()
+                        .any(|extension| extension.starts_with(*prefix))
+                })
+                .map(|prefix| format!("vscode extension: {prefix}"))
+        };
+        if let Some(evidence) = binary_hit
+            .or_else(dir_hit)
+            .or_else(app_hit)
+            .or_else(extension_hit)
+        {
+            detected.push((client, evidence));
+        }
+    }
+    detected
+}
+
+fn setup_auto(root: &Path, force: bool, dry_run: bool) -> Result<SetupAutoOutput> {
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_default();
+    let path_dirs: Vec<PathBuf> = std::env::var_os("PATH")
+        .map(|path| std::env::split_paths(&path).collect())
+        .unwrap_or_default();
+    let detected = detect_agent_clients(&home, &path_dirs, Path::new("/Applications"));
+
+    let mut warnings = Vec::new();
+    if detected.is_empty() {
+        warnings.push(
+            "no supported agents detected; run `callsieve setup-agent <client> <repo>` explicitly"
+                .to_string(),
+        );
+    }
+    let mut configured = Vec::new();
+    if !dry_run {
+        for (client, _) in &detected {
+            match setup_agent(*client, root, force) {
+                Ok(output) => configured.push(output),
+                Err(error) => warnings.push(format!(
+                    "setup failed for {}: {error}",
+                    agent_client_name(*client)
+                )),
+            }
+        }
+    }
+
+    Ok(SetupAutoOutput {
+        command: "setup-auto",
+        root: root_label(root),
+        detected: detected
+            .into_iter()
+            .map(|(client, evidence)| SetupAutoDetection {
+                client: agent_client_name(client).to_string(),
+                evidence,
+            })
+            .collect(),
+        configured,
+        dry_run,
+        warnings,
+    })
+}
+
 fn codex_bootstrap(root: &Path, model: &str, force: bool) -> Result<CodexBootstrapOutput> {
     let setup = setup_agent(AgentClient::Codex, root, force)?;
     let shim = install_shim(root, force, false)?;
@@ -13064,6 +13339,9 @@ fn codex_hook_user_prompt_submit(
                 .unwrap_or_default();
             state.context_seen = true;
             state.selected_files = files.clone();
+            state.context_packets += 1;
+            state.context_tokens += tokens;
+            state.context_files += files.len();
             let local_first_expansion =
                 local_first_expansion_for_context_value(root, &context_value);
             append_codex_hook_trace_event(
@@ -13224,6 +13502,9 @@ fn claude_hook_user_prompt_submit(
                 .unwrap_or_default();
             state.context_seen = true;
             state.selected_files = files.clone();
+            state.context_packets += 1;
+            state.context_tokens += tokens;
+            state.context_files += files.len();
             let local_first_expansion =
                 local_first_expansion_for_context_value(root, &context_value);
             append_claude_hook_trace_event(
@@ -13364,15 +13645,40 @@ fn claude_hook_permission_request(root: &Path, strict: bool) -> Result<serde_jso
     }))
 }
 
-fn claude_hook_stop(_root: &Path, _strict: bool) -> Result<serde_json::Value> {
+fn claude_hook_stop(root: &Path, _strict: bool) -> Result<serde_json::Value> {
     let mut input = String::new();
     let _ = std::io::stdin().read_to_string(&mut input);
-    Ok(serde_json::json!({
+    let parsed: serde_json::Value = serde_json::from_str(&input).unwrap_or_default();
+    let session_id = hook_session_id(&parsed);
+    let state = load_claude_hook_state(root, &session_id);
+    let mut response = serde_json::json!({
         "suppressOutput": true,
         "hookSpecificOutput": {
             "hookEventName": "Stop"
         }
-    }))
+    });
+    if let Some(message) = hook_session_summary_message(&state) {
+        response["systemMessage"] = serde_json::Value::String(message);
+        response["suppressOutput"] = serde_json::Value::Bool(false);
+    }
+    Ok(response)
+}
+
+/// Factual session summary for Stop hooks. Reports only locally observed
+/// counts; estimated or comparative savings claims stay gated behind audited
+/// observed-session reports.
+fn hook_session_summary_message(state: &CodexHookState) -> Option<String> {
+    if state.context_packets == 0 {
+        return None;
+    }
+    Some(format!(
+        "CallSieve: {} context packet{} (~{} tokens, {} read-first file{}) served this session; local retrieval spent 0 AI model tokens.",
+        state.context_packets,
+        if state.context_packets == 1 { "" } else { "s" },
+        state.context_tokens,
+        state.context_files,
+        if state.context_files == 1 { "" } else { "s" },
+    ))
 }
 
 fn claude_hook_permission_request_response(decision: &str, reason: &str) -> serde_json::Value {
@@ -13440,6 +13746,9 @@ fn client_hook_user_prompt_submit(
                 .unwrap_or_default();
             state.context_seen = true;
             state.selected_files = files.clone();
+            state.context_packets += 1;
+            state.context_tokens += tokens;
+            state.context_files += files.len();
             let local_first_expansion =
                 local_first_expansion_for_context_value(root, &context_value);
             append_client_hook_trace_event(
@@ -13607,15 +13916,23 @@ fn client_hook_permission_request(
     }))
 }
 
-fn client_hook_stop(_root: &Path, _client: HookClient, _strict: bool) -> Result<serde_json::Value> {
+fn client_hook_stop(root: &Path, client: HookClient, _strict: bool) -> Result<serde_json::Value> {
     let mut input = String::new();
     let _ = std::io::stdin().read_to_string(&mut input);
-    Ok(serde_json::json!({
+    let parsed: serde_json::Value = serde_json::from_str(&input).unwrap_or_default();
+    let session_id = hook_session_id(&parsed);
+    let state = load_client_hook_state(root, client, &session_id);
+    let mut response = serde_json::json!({
         "suppressOutput": true,
         "hookSpecificOutput": {
             "hookEventName": "Stop"
         }
-    }))
+    });
+    if let Some(message) = hook_session_summary_message(&state) {
+        response["systemMessage"] = serde_json::Value::String(message);
+        response["suppressOutput"] = serde_json::Value::Bool(false);
+    }
+    Ok(response)
 }
 
 fn install_hook(
@@ -18061,5 +18378,48 @@ eval duration:        235ms\n";
         let (status, body) = parse_http_response(response).unwrap();
         assert_eq!(status, 200);
         assert_eq!(body, "{\"ok\":true}");
+    }
+}
+
+#[cfg(test)]
+mod setup_auto_tests {
+    use super::*;
+
+    #[test]
+    fn detects_agents_from_home_dirs_binaries_and_extensions() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        let bin = temp.path().join("bin");
+        let apps = temp.path().join("Applications");
+        fs::create_dir_all(home.join(".claude")).unwrap();
+        fs::create_dir_all(home.join(".vscode/extensions/saoudrizwan.claude-dev-3.0.0")).unwrap();
+        fs::create_dir_all(&bin).unwrap();
+        fs::write(bin.join("codex"), "#!/bin/sh\n").unwrap();
+        fs::create_dir_all(apps.join("Zed.app")).unwrap();
+
+        let detected = detect_agent_clients(&home, &[bin], &apps);
+        let names: Vec<&str> = detected
+            .iter()
+            .map(|(client, _)| agent_client_name(*client))
+            .collect();
+
+        assert!(names.contains(&"claude"), "{names:?}");
+        assert!(names.contains(&"codex"), "{names:?}");
+        assert!(names.contains(&"zed"), "{names:?}");
+        assert!(names.contains(&"cline"), "{names:?}");
+        assert!(!names.contains(&"cursor"), "{names:?}");
+        assert!(!names.contains(&"goose"), "{names:?}");
+    }
+
+    #[test]
+    fn detection_reports_evidence_kind() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        fs::create_dir_all(home.join(".claude")).unwrap();
+
+        let detected = detect_agent_clients(&home, &[], Path::new("/nonexistent"));
+
+        assert_eq!(detected.len(), 1);
+        assert!(detected[0].1.starts_with("directory:"), "{}", detected[0].1);
     }
 }
