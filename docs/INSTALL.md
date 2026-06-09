@@ -144,6 +144,16 @@ This writes `.callsieve/agent-launch.ps1`, `.callsieve/agent-launch.sh`, local s
 
 ## Add To AI Tools
 
+The fastest path is automatic detection:
+
+```bash
+callsieve setup-auto /path/to/repo
+```
+
+`setup-auto` looks for installed agents on this machine — a binary on PATH, a config directory in your home directory, a macOS app bundle, or a VS Code extension — and runs the per-client setup for every agent it finds. Add `--dry-run` to see which agents would be configured (with the detection evidence) without writing any files, and `--force` to overwrite existing generated files. Detection is local-only; nothing is sent anywhere.
+
+For a single client, or one `setup-auto` cannot detect, use the per-client sections below.
+
 CallSieve supports four integration styles:
 
 - Lifecycle hooks and plugins: Codex, Claude Code, GitHub Copilot, OpenCode, Antigravity CLI, and Cline can inject CallSieve context and block pre-context broad search.

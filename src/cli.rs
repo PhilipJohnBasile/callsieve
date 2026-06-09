@@ -18423,3 +18423,42 @@ mod setup_auto_tests {
         assert!(detected[0].1.starts_with("directory:"), "{}", detected[0].1);
     }
 }
+
+#[cfg(test)]
+mod hook_summary_tests {
+    use super::*;
+
+    fn state_with(packets: usize, tokens: usize, files: usize) -> CodexHookState {
+        CodexHookState {
+            context_packets: packets,
+            context_tokens: tokens,
+            context_files: files,
+            ..CodexHookState::default()
+        }
+    }
+
+    #[test]
+    fn no_summary_when_no_context_served() {
+        assert_eq!(hook_session_summary_message(&state_with(0, 0, 0)), None);
+    }
+
+    #[test]
+    fn summary_reports_observed_counts_only() {
+        let message = hook_session_summary_message(&state_with(3, 540, 14)).unwrap();
+        assert_eq!(
+            message,
+            "CallSieve: 3 context packets (~540 tokens, 14 read-first files) served this session; local retrieval spent 0 AI model tokens."
+        );
+        assert!(
+            !message.contains("saved"),
+            "summary must not make savings claims: {message}"
+        );
+    }
+
+    #[test]
+    fn summary_uses_singular_forms() {
+        let message = hook_session_summary_message(&state_with(1, 194, 1)).unwrap();
+        assert!(message.contains("1 context packet ("), "{message}");
+        assert!(message.contains("1 read-first file)"), "{message}");
+    }
+}
