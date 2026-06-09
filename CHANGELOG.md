@@ -10,7 +10,7 @@
 ### Changed
 
 - Filename-stem ranking matches now scale with corpus rarity: a query token naming a unique file (e.g. `sqlmigrate`) gets a decisive boost, while a stem that is also an everyday corpus word (e.g. `schema`, which several files are named after) keeps roughly its old weight. Public 50-issue SWE-bench Lite first-correct-file@5: lexical `56.0%` → `60.0%` (+4.0 pp, 2 fixes, 0 regressions), hybrid `56.0%` → `58.0%`; the 30-issue natural-language slice is unchanged. Known hybrid edge recorded by the run: semantic reranking can demote a rank-5 lexical hit (astropy-14182).
-- Index schema 9: `index.json` is now compact (not pretty-printed) and `ReferenceRecord` serialization drops derivable fields (`file_id`, `confidence`, redundant `source_range`, null targets, default `kind`/`edge_source`). On a 2.7k-file Django checkout the index shrinks from 247 MB to 111 MB (−55%) with identical query output; older indexes remain readable and rebuild automatically.
+- Index schema 9: `index.json` is now compact (not pretty-printed) and `ReferenceRecord` serialization drops derivable fields (`file_id`, `confidence`, redundant `source_range`, null targets, default `kind`/`edge_source`). On a 2.7k-file Django checkout the index shrinks from 247 MB to 111 MB (−55%) with identical query output, `status` drops from 0.44s to 0.30s, and `agent-context` from 0.77s to 0.61s; older indexes remain readable and rebuild automatically.
 
 - Query-time ranking is faster: `TokenWeights` no longer materialises a full term set per indexed file (cloning content terms and tokenizing every symbol) on each query; a substring prefilter skips symbols that cannot match. Roughly 6-10% faster `agent-context` on a 2.7k-file repo with byte-identical output.
 
