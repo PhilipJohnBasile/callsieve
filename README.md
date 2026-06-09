@@ -50,7 +50,7 @@ CallSieve is now an open-source local Rust CLI with a JSON index, deterministic 
 
 Public hybrid A/B result: after the chunk-level `embeds.bin` v4 refresh, lexical and opt-in hybrid retrieval both scored `56.0%` first-correct-file@5 (`+0.0 pp`, 0 wins, 0 losses, 50 ties) on the 50-issue SWE-bench Lite subset in `benchmarks/public/manifest-50.json`. The 30-issue natural-language slice in `benchmarks/public/manifest-nl.json` also stayed flat at `20.0%` lexical and `20.0%` hybrid (`+0.0 pp`, 1 win, 1 loss, 28 ties). Hybrid is proven wired and non-regressing here, not quality-lifting. The reports also show hybrid above naive grep on both slices: `+50.0 pp` on the 50-issue set and `+6.7 pp` on the natural-language slice.
 
-For human installation and client setup, see [docs/INSTALL.md](docs/INSTALL.md). For AI CLI and wrapper behavior, see [docs/AGENT_CLI.md](docs/AGENT_CLI.md). For observed whole-session proof collection, see [docs/OBSERVED_SESSIONS.md](docs/OBSERVED_SESSIONS.md). For dogfooding and less-grep measurement, see [docs/DOGFOOD.md](docs/DOGFOOD.md). For paid pilot packaging, see [docs/PILOTS.md](docs/PILOTS.md).
+For human installation and client setup, see [docs/INSTALL.md](docs/INSTALL.md). For AI CLI and wrapper behavior, see [docs/AGENT_CLI.md](docs/AGENT_CLI.md). For observed whole-session proof collection, see [docs/OBSERVED_SESSIONS.md](docs/OBSERVED_SESSIONS.md). For dogfooding and less-grep measurement, see [docs/DOGFOOD.md](docs/DOGFOOD.md). For paid pilot packaging, see [docs/PILOTS.md](docs/PILOTS.md). For competitive positioning and product gaps, see [docs/COMPETITIVE.md](docs/COMPETITIVE.md).
 
 The core workflow is:
 
@@ -71,7 +71,9 @@ callsieve claude-hooks install /path/to/repo --strict --force
 
 `demo` proves the retrieval loop without configuring an agent. `hook install` creates repo-local launchers and search shims under `.callsieve/` so testers can start an agent with CallSieve-first guardrails without changing global PATH or shell profiles. Hook-capable clients also get local project hooks or plugins that inject CallSieve context and block pre-context broad search after they are trusted.
 
-`agent-context` defaults to a budgeted `skim` packet: compact file, symbol, reason, related-test, and risk hints with no snippets. Output includes `retrieval_cost.retrieval_model_tokens = 0` so agents can distinguish zero-token local retrieval from the context tokens spent reading the returned packet. Use `--profile normal`, `--profile full`, `--snippets-per-file`, or the focused `focus`, `related`, and `tests` commands to reveal more detail only after the first packet is insufficient.
+`agent-context` defaults to a budgeted `skim` packet: up to five compact file, symbol, reason, related-test, risk, and one upstream/downstream non-test code-file `g` preview for the top read-first file with no snippets or call-path edges. It rebuilds a missing or stale local index before ranking, so direct CLI agents do local refresh work before spending model tokens on context. The token budget is enforced on the full agent-facing response, compacting local task-memory hints, trimming optional local-expansion commands, graph hints, and call paths, shrinking envelope metadata, then dropping selected files only if needed. Default skim uses array order instead of per-file `rank` or score fields, `f` for file, caps `sy` symbols at one per file, uses symbol arrays such as `["createSession",12]` with a trailing compact kind code such as `s` for `struct` only when it is not the implicit `function`, uses `w` only for top-file reasons not already repeated by `context.sel.top`, uses positional `i` arrays for impact as `[risk, tests, upstream, downstream]` with risk coded as `l`, `m`, or `h` and read-first indexes in the `tests` slot when possible, uses compact `instruction.x` target keys without a non-action `instruction.a`, keeps default task-memory matching local without serializing a hit-only `memory` envelope, exposes `memory.f` and `memory.sy` only in richer profiles, omits default JSON `context.root` because the command or integration already supplies the repo, uses compact `context.sel` arrays for ranking explainability with short signal codes and read-first indexes for selected files, uses compact `g.u` and `g.d` graph preview keys only on the top file, omits related tests from `g` when `i` already carries them, omits default `cp` call paths until `focus` or a richer profile is requested, omits default git hints unless `--git-boost` is requested, omits the ordinary task echo, relies on path extensions instead of per-file `language`, uses short reason codes such as `sym:`, `sy:`, `kw:`, `ct:`, `pt:`, and `test:`, drops duplicate generic `kw:` when a matching `sy:` reason is present, and omits empty symbol/test/count fields. Output includes `retrieval_cost.retrieval_model_tokens = 0`, compact packet stats with `b` for budget and `t` for returned context tokens, and compact `stats.local` counts using `f`, `sy`, and `r` so agents can distinguish zero-token local retrieval from the context tokens spent reading the returned packet, while still seeing how many files, symbols, and references CallSieve searched on-machine. It also returns `context.sel.top` as `[index, why]`, capped `context.sel.sig` code strings, and one capped `context.sel.next` entry as `[index, why]` without repeating scores; literal path fallback keeps `[path, score, why]` only when a read-first index cannot be used. The packet also includes zero-based `instruction.x.o` and scalar `instruction.x.n` read-first indexes; legacy or wider packets may use `instruction.x.top` or `instruction.x.next`. Compact `instruction.x.r = 1` and `instruction.x.t = 1` mean run local `related` and `tests` follow-ups for the top file. Markdown and editor views expand these compact targets into copyable commands. Use `focus`, `related`, `--limit`, `--profile normal`, `--profile full`, or `--snippets-per-file` to reveal more graph detail only after the first packet is insufficient.
+
+`callsieve focus <repo> --file <file> --symbol <symbol> --line <line>` is the preferred second step before any full-file read. Generated expansion commands include `--line` when CallSieve selected a symbol line, so same-name symbols stay disambiguated. Symbol focus returns the selected code unit as a bounded snippet up to 120 lines by default, with `truncated` and `omitted_lines` only when the local snippet cap is hit. It also includes compact `calls`, `called_by`, and `related_tests` hints for the selected symbol so agents can see local blast radius before running `related`, `tests`, or grep. Non-call `references` are opt-in with `--references` because they can be noisy. File-level focus without `--symbol` stays compact.
 
 Optional retrieval signals stay opt-in:
 
@@ -82,7 +84,7 @@ target/debug/callsieve agent-context <repo> "<task>" --embeddings --git-boost
 target/debug/callsieve agent-context <repo> "<task>" --error <stacktrace.log>
 ```
 
-`--embeddings` requires a binary built with `--features embed`; the default build stays deterministic and dependency-light. `--git-boost` nudges recently changed or high-churn files only when requested. `--error` parses stack traces and error logs, then promotes indexed files named in the frames. The integer displayed score remains lexical and explainable; hybrid retrieval only changes ordering when explicitly enabled.
+`--embeddings` requires a binary built with `--features embed`; the default build stays deterministic and dependency-light. `--git-boost` nudges recently changed or high-churn files only when requested and keeps compact `git` hints in skim output. `--error` parses stack traces and error logs, then promotes indexed files named in the frames. The integer displayed score remains lexical and explainable; hybrid retrieval only changes ordering when explicitly enabled.
 
 JSON output is compact by default for agent token savings. Add global `--pretty` for human-readable formatting.
 
@@ -95,7 +97,7 @@ callsieve symbol <path> <symbol_name>
 callsieve query <path> "<question>" [--why-debug]
 callsieve context <path> "<task>" [--limit <n>] [--snippets-per-file <n>] [--no-snippets] [--profile skim|normal|full] [--token-budget <n>] [--why-debug] [--format json|markdown]
 callsieve agent-context <path> "<task>" [--limit <n>] [--snippets-per-file <n>] [--profile skim|normal|full] [--token-budget <n>] [--why-debug] [--embeddings] [--error <file>] [--git-boost] [--format json|markdown]
-callsieve focus <path> --file <file> [--symbol <symbol>]
+callsieve focus <path> --file <file> [--symbol <symbol>] [--line <line>] [--references]
 callsieve related <path> --file <file>
 callsieve tests <path> --file <file>
 callsieve demo <path> [--task "<task>"] [--lsp]
@@ -358,66 +360,33 @@ The Rust rehearsal command is self-healing for local-safe issues. `--preflight` 
 
 ```json
 {
-  "task": "change login token expiry behavior",
   "root": ".",
+  "retrieval_cost": {
+    "retrieval_model_tokens": 0
+  },
+  "sel": {
+    "top": [0, "sym:createSession"],
+    "sig": ["sym"],
+    "next": [[1, "test:related"]]
+  },
   "read_first": [
     {
-      "rank": 1,
-      "score": 140,
-      "file": "src/auth/session.ts",
-      "language": "typescript",
-      "symbols": [
-        {
-          "name": "createSession",
-          "kind": "function",
-          "lines": [12, 48],
-          "visibility": "exported",
-          "signature": "export function createSession(...)"
-        }
-      ],
-      "snippets": [
-        {
-          "lines": [12, 30],
-          "text": "export function createSession(...) { ... }"
-        }
-      ],
-      "imports": ["src/auth/token.ts"],
-      "referenced_by": ["src/auth/session.test.ts"],
-      "blast_radius": {
-        "imports": ["src/auth/token.ts"],
-        "referenced_by": ["src/auth/session.test.ts"],
-        "tests": ["src/auth/session.test.ts"],
-        "calls": ["src/auth/token.ts"],
-        "risk": "medium"
-      },
-      "calls": [
-        {
-          "file": "src/auth/session.ts",
-          "symbol": "createSession",
-          "target": "tokenFor",
-          "target_file": "src/auth/token.ts",
-          "kind": "call",
-          "line": 13
-        }
-      ],
-      "related_tests": [
-        {
-          "file": "src/auth/session.test.ts",
-          "symbols": ["createSession returns token-backed session"]
-        }
-      ],
-      "why": [
-        "exact symbol match: createSession",
-        "keyword overlap: auth, session",
-        "references matched file: src/auth/token.ts"
-      ]
+      "f": "src/auth/session.ts",
+      "sy": [["createSession", 12]],
+      "i": ["m", "src/auth/session.test.ts", 1, 1],
+      "g": {
+        "u": ["src/auth/token.ts"]
+      }
     }
   ],
   "stats": {
-    "candidate_matches": 30,
-    "selected_files": 5,
-    "selected_symbols": 8,
-    "related_tests": 2
+    "b": 1200,
+    "t": 900,
+    "local": {
+      "f": 182,
+      "sy": 1200,
+      "r": 5000
+    }
   }
 }
 ```
@@ -467,9 +436,9 @@ The Rust rehearsal command is self-healing for local-safe issues. `--preflight` 
 }
 ```
 
-`benchmark-suite` reports expected-file recall, aggregate `context_payload_reduction`, legacy estimated token-savings fields, and optional observed session savings when real agent trace numbers are supplied. `context_payload_reduction` is the platform-neutral proxy for Codex, Claude Code, GitHub Copilot, OpenCode, Antigravity CLI, Cursor, VS Code, Windsurf, Continue, Zed, Junie, JetBrains AI Assistant, Amp, Goose, Warp, Cline, Zoo Code, the deprecated Roo alias, generic stdio MCP tools, and local agents. It estimates only the prompt context payload CallSieve controls, not whole-session transcript tokens.
+`benchmark-suite` reports expected-file recall, first-correct-file@k, aggregate `context_payload_reduction`, legacy estimated token-savings fields, and optional observed session savings when real agent trace numbers are supplied. `context_payload_reduction` is the platform-neutral proxy for Codex, Claude Code, GitHub Copilot, OpenCode, Antigravity CLI, Cursor, VS Code, Windsurf, Continue, Zed, Junie, JetBrains AI Assistant, Amp, Goose, Warp, Cline, Zoo Code, the deprecated Roo alias, generic stdio MCP tools, and local agents. It estimates only the prompt context payload CallSieve controls, not whole-session transcript tokens.
 
-`eval-retrieval` runs the same task fixture shape against the actual `agent-context` selection path and reports recall@k, critical recall, selected tokens, and failure reasons. It exits nonzero when a critical file is missed. `perf-report` runs fixed local tasks and reports p50/p95 latency for index load plus context generation.
+`eval-retrieval` runs the same task fixture shape against the actual `agent-context` selection path and reports recall@k, first-correct-file@k, critical recall, selected tokens, and failure reasons. It exits nonzero when a critical file is missed. `perf-report` runs fixed local tasks and reports p50/p95 latency for index load plus context generation.
 
 `trace-replay` generates deterministic baseline versus CallSieve trace JSON from a suite. It is tagged with `metadata.collection = "controlled_replay"` and is useful before real observed session evidence exists.
 
@@ -605,7 +574,7 @@ Use `agent-setup` when you only need local MCP config plus a short CallSieve-fir
 cargo run -- agent-setup . --client codex --force
 ```
 
-For coding tasks, the policy is: call `callsieve_context` before broad grep, `rg`, repository-wide search, or repeated file reads. Read `read_first` files first; grep only if the context packet is insufficient.
+For coding tasks, the policy is: call `callsieve_context` before broad grep, `rg`, repository-wide search, or repeated file reads. Read `read_first` files, review the capped `context.sel.next` target, use `instruction.x.o/n/next` plus local `focus`, `related`, and `tests` expansion commands for targeted detail, then grep only if the context packet and local expansion are insufficient.
 
 Use `hook install` when you want the easiest repo-local agent entrypoint. It builds the index, writes client setup, installs strict shims, and creates `.callsieve/agent-launch.ps1` plus `.callsieve/agent-launch.sh`. For hook-capable clients, it also writes local project hooks or plugins. Cursor, VS Code, Windsurf, Continue, Zed, Junie, JetBrains AI Assistant, Amp, Goose, Warp, and Zoo use MCP/rules/templates plus shims only.
 
@@ -628,7 +597,7 @@ cargo run -- codex-hooks doctor . --strict --smoke
 cargo run -- codex-hooks trust-ack .
 ```
 
-Codex hooks use the `slim` profile. The generated `.codex/hooks.json` runs local `callsieve codex-hook ...` handlers. `UserPromptSubmit` injects compact CallSieve context, `PreToolUse` blocks broad search before context, and `PermissionRequest` denies escalated pre-context search. Codex `PostToolUse` and `Stop` are intentionally not installed because pre-tool hooks enforce the policy and post-tool or stop-time prompts are optional. Run `codex-hooks doctor --strict --smoke` for local handler smoke tests, and add `--fix` to archive stale hook state or trace files under `.callsieve/codex-hooks/archive/`. Review and trust project hooks in Codex with `/hooks`, then run `codex-hooks trust-ack .` to record a local marker tied to the current hook file hash.
+Codex hooks use the `slim` profile. The generated `.codex/hooks.json` runs local `callsieve codex-hook ...` handlers. `UserPromptSubmit` rebuilds a missing or stale local index, then injects compact `skim` CallSieve context plus local `focus`, `related`, and `tests` expansion commands. `PreToolUse` blocks broad search before context, and `PermissionRequest` denies escalated pre-context search. Codex `PostToolUse` and `Stop` are intentionally not installed because pre-tool hooks enforce the policy and post-tool or stop-time prompts are optional. Run `codex-hooks doctor --strict --smoke` for local handler smoke tests, and add `--fix` to archive stale hook state or trace files under `.callsieve/codex-hooks/archive/`. Review and trust project hooks in Codex with `/hooks`, then run `codex-hooks trust-ack .` to record a local marker tied to the current hook file hash.
 
 For Claude Code, `hook install --client claude` gives all three local layers: hooks, shims, and MCP:
 
@@ -638,7 +607,7 @@ cargo run -- claude-hooks doctor . --strict
 cargo run -- enforce . --client claude --strict
 ```
 
-This writes `.mcp.json`, `CLAUDE.md`, `.claude/settings.local.json`, `.callsieve/agent-launch.ps1`, `.callsieve/agent-launch.sh`, and `.callsieve/bin/*`. The Claude Code hooks run local `callsieve claude-hook ...` handlers, inject context at `UserPromptSubmit`, block `Bash`, `Read`, `Grep`, and `Glob` before context in strict mode, and record `.callsieve/claude-hooks/*.trace.json`. Review and trust project hooks in Claude Code with `/hooks`.
+This writes `.mcp.json`, `CLAUDE.md`, `.claude/settings.local.json`, `.callsieve/agent-launch.ps1`, `.callsieve/agent-launch.sh`, and `.callsieve/bin/*`. The Claude Code hooks run local `callsieve claude-hook ...` handlers, inject compact `skim` context plus local expansion commands at `UserPromptSubmit`, block `Bash`, `Read`, `Grep`, and `Glob` before context in strict mode, and record `.callsieve/claude-hooks/*.trace.json`. Review and trust project hooks in Claude Code with `/hooks`.
 
 For GitHub Copilot, OpenCode, Antigravity CLI, and Cline, use the same lifecycle pattern:
 
@@ -700,7 +669,7 @@ cargo run -- shim install . --force --strict
 cargo run -- shim doctor .
 ```
 
-The install writes a project-local `callsieve` launcher plus wrappers that call the hidden `callsieve shim-run` helper before passing through to the real `rg` or `grep` command captured at install time. `shim-run` parses common search arguments, returns CallSieve context first, then replays the original command arguments against the real search binary. With `--strict`, shim-mediated grep writes `.callsieve/shim-trace.json` events that strict trace checks can flag when grep happens before CallSieve context. The wrappers are inert until `.callsieve/bin` is prepended to the agent shell PATH for that process.
+The install writes a project-local `callsieve` launcher plus wrappers that call the hidden `callsieve shim-run` helper before passing through to the real `rg` or `grep` command captured at install time. `shim-run` parses common search arguments, rebuilds a missing or stale local index if needed, returns a compact `skim` CallSieve context packet first, then replays the original command arguments against the real search binary. With `--strict`, shim-mediated grep writes `.callsieve/shim-trace.json` events that strict trace checks can flag when grep happens before CallSieve context. The wrappers are inert until `.callsieve/bin` is prepended to the agent shell PATH for that process.
 
 ## Fresh Indexes
 
@@ -768,7 +737,7 @@ If a server is missing or fails, CallSieve keeps the tree-sitter and heuristic g
 - `callsieve_trace_check`: audit whether a session grepped before CallSieve
 - `callsieve_benchmark`: estimate platform-neutral context payload reduction against a grep/read loop
 
-`callsieve_context` self-heals a missing or stale `.callsieve/index.json` by rebuilding the local index before returning context. MCP responses include freshness and timing metadata. The MCP server does not install shims, mutate client config, start the daemon, or send code to a remote service.
+`callsieve_context` self-heals a missing or stale `.callsieve/index.json` by rebuilding the local index before returning context. The direct CLI context-first commands do the same for `agent-context`, `context`, `begin`, `guard`, `codex-session`, and `grep`. MCP responses include freshness and timing metadata. The MCP server does not install shims, mutate client config, start the daemon, or send code to a remote service.
 
 Use `callsieve mcp-config <repo> --format json` or `--format toml` for any AI CLI that supports stdio MCP but does not have a dedicated CallSieve setup command. Use `callsieve mcp-registry-manifest --out server.json` to generate a local-first MCP Registry descriptor for `callsieve mcp`; it never contacts the network or publishes automatically.
 
