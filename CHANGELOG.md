@@ -2,15 +2,34 @@
 
 ## Unreleased
 
+## v0.3.0 - 2026-06-08
+
 ### Added
 
-- Added a 30-issue natural-language benchmark slice (`benchmarks/public/manifest-nl.json`) with prompts stripped of file paths, symbol names, and code snippets, plus a checked-in `compare-nl.json` result that isolates semantic retrieval quality.
-- Added the Claude Code `proof-sprint` command group for buyer-facing observed proof workflows with init, status, collect, run/resume, and finalize steps.
+- Added `callsieve focus --line <n>` for same-name symbol disambiguation; generated expansion commands include `--line` so agents always land on the right symbol.
+- Added `callsieve focus --references` to opt in to non-call reference listing (off by default to keep focus output compact).
+- Added competitive-positioning ranking boost: docs files matching competitor or positioning intent tokens (aider, cursor, copilot, cody, devin, greptile, windsurf, etc.) rank above generic setup docs on product-strategy tasks.
+- Added `docs/COMPETITIVE.md` with a competitor table, product priorities, and do-not-chase constraints.
+- Added query-kind-aware cosine floor to the semantic union pass: `NaturalLanguage` queries use floor 0.15 and `Identifier` queries use floor 0.25, replacing the single hard-coded 0.30. The architecture is ready to benefit from a stronger embedding model.
+- Added `FocusTarget` struct and `context_read_first_targets()` to the public query API for typed expansion targets.
+- Added `test/` and `src/test/` as recognised test directory patterns alongside `tests/` and `src/tests/`.
 
 ### Changed
 
-- Changed optional local embedding caches to `embeds.bin` format v4 with capped body-bearing symbol chunks and matched-symbol surfacing for semantic recall candidates.
-- Re-ran the public hybrid A/B reports after the chunk-level refresh; hybrid remains non-regressing but still flat versus lexical on both the 50-issue and natural-language benchmark slices.
+- `agent-context` skim packet is now fully compact: indexed `instruction.x.o/n` targets (read-first array offsets instead of duplicated file paths), short signal codes (`sym`, `sy`, `kw`, `ct`, `pt`, `test`), positional `i` impact arrays, `g.u`/`g.d` graph previews on the top file only, and dropped duplicate `kw` reasons when `sy` already covers them.
+- Token budget enforcement now applies to the full agent-facing response envelope: compacts task-memory hints, trims expansion/graph/call-path fields, shrinks metadata, and drops files only as a last resort.
+- MCP `callsieve_context` now emits structured tool-call instruction blocks for `o`/`r`/`t` expansion targets, mirroring the CLI skim budget.
+- VS Code extension now renders graph hints (`g.u`/`g.d` upstream/downstream previews), compact impact arrays, selection summary, and structured MCP instruction blocks; indexed `instruction.x` targets replace legacy path-based targets.
+- VS Code extension default limit changed from 8 to 5 to match `DEFAULT_AGENT_CONTEXT_LIMIT`.
+- `embeds.bin` format v4 with capped body-bearing symbol chunks and matched-symbol surfacing for semantic recall candidates.
+
+### Fixed
+
+- Fixed the non-embed stub of `add_semantic_candidates` to accept the `query_tokens` parameter added for per-kind cosine floors.
+
+### Benchmarks
+
+- Public hybrid A/B re-run (June 2026, lowfloor): `56.0%` lexical = `56.0%` hybrid (`+0.0 pp`, 50 ties) on the 50-issue SWE-bench Lite set; `20.0%` lexical = `20.0%` hybrid (`+0.0 pp`, 1 win, 1 loss, 28 ties) on the 30-issue natural-language slice. Union-pass injection confirmed zero even at the new lower floors — BGE-small cosine scores for vocabulary-gap misses stay below threshold. Both slices remain `+50.0 pp` and `+6.7 pp` above naive grep respectively.
 
 ## v0.2.2 - 2026-06-06
 
