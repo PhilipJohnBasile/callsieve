@@ -11640,21 +11640,21 @@ fn agent_detection_table() -> Vec<AgentDetectionSignals> {
         (
             AgentClient::Cursor,
             &["cursor"],
-            &[".cursor"],
+            &[".cursor", ".config/Cursor"],
             &["Cursor.app"],
             &[],
         ),
         (
             AgentClient::Vscode,
             &["code"],
-            &[".vscode"],
+            &[".vscode", ".config/Code"],
             &["Visual Studio Code.app"],
             &[],
         ),
         (
             AgentClient::Windsurf,
             &["windsurf"],
-            &[".windsurf", ".codeium/windsurf"],
+            &[".windsurf", ".codeium/windsurf", ".config/Windsurf"],
             &["Windsurf.app"],
             &[],
         ),
@@ -11786,7 +11786,35 @@ fn setup_auto(root: &Path, force: bool, dry_run: bool) -> Result<SetupAutoOutput
         .map(|path| std::env::split_paths(&path).collect())
         .unwrap_or_default();
     let detected = detect_agent_clients(&home, &path_dirs, Path::new("/Applications"));
+    setup_auto_with_detected(root, force, dry_run, detected)
+}
 
+/// Lifecycle hook files for clients that support them, in addition to the
+/// rules/config files from `setup_agent`. Hooks are the strongest
+/// context-first integration, so the zero-decision path installs them
+/// (non-strict) wherever the client allows.
+fn setup_auto_hook_files(root: &Path, client: AgentClient, force: bool) -> Result<Vec<String>> {
+    match client {
+        AgentClient::Codex => {
+            write_codex_hooks_files(root, false, force, 6, 1).map(|(_, _, files)| files)
+        }
+        AgentClient::Claude => {
+            write_claude_hooks_files(root, false, force, 6, 1).map(|(_, _, files)| files)
+        }
+        _ => match hook_client_for_agent(client) {
+            Some(hook_client) => write_client_hooks_files(root, hook_client, false, force, 6, 1)
+                .map(|(_, _, files)| files),
+            None => Ok(Vec::new()),
+        },
+    }
+}
+
+fn setup_auto_with_detected(
+    root: &Path,
+    force: bool,
+    dry_run: bool,
+    detected: Vec<(AgentClient, String)>,
+) -> Result<SetupAutoOutput> {
     let mut warnings = Vec::new();
     if detected.is_empty() {
         warnings.push(
@@ -11798,7 +11826,20 @@ fn setup_auto(root: &Path, force: bool, dry_run: bool) -> Result<SetupAutoOutput
     if !dry_run {
         for (client, _) in &detected {
             match setup_agent(*client, root, force) {
-                Ok(output) => configured.push(output),
+                Ok(mut output) => {
+                    match setup_auto_hook_files(root, *client, force) {
+                        Ok(hook_files) => {
+                            output.files.extend(hook_files);
+                            output.files.sort();
+                            output.files.dedup();
+                        }
+                        Err(error) => warnings.push(format!(
+                            "hook setup failed for {}: {error}",
+                            agent_client_name(*client)
+                        )),
+                    }
+                    configured.push(output);
+                }
                 Err(error) => warnings.push(format!(
                     "setup failed for {}: {error}",
                     agent_client_name(*client)
@@ -18421,6 +18462,46 @@ mod setup_auto_tests {
 
         assert_eq!(detected.len(), 1);
         assert!(detected[0].1.starts_with("directory:"), "{}", detected[0].1);
+    }
+
+    #[test]
+    fn setup_auto_installs_hooks_for_hook_capable_clients() {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = temp.path();
+        fs::write(repo.join("main.rs"), "fn main() {}\n").unwrap();
+
+        let output = setup_auto_with_detected(
+            repo,
+            true,
+            false,
+            vec![(AgentClient::Claude, "test".to_string())],
+        )
+        .unwrap();
+
+        assert_eq!(output.configured.len(), 1, "{:?}", output.warnings);
+        let files = &output.configured[0].files;
+        assert!(
+            files.iter().any(|file| file.contains("hook")
+                || file.contains("settings")
+                || file.contains(".claude/")),
+            "expected hook files alongside setup files: {files:?}"
+        );
+    }
+
+    #[test]
+    fn setup_auto_dry_run_configures_nothing() {
+        let temp = tempfile::tempdir().unwrap();
+        let output = setup_auto_with_detected(
+            temp.path(),
+            false,
+            true,
+            vec![(AgentClient::Claude, "test".to_string())],
+        )
+        .unwrap();
+
+        assert!(output.configured.is_empty());
+        assert_eq!(output.detected.len(), 1);
+        assert!(fs::read_dir(temp.path()).unwrap().next().is_none());
     }
 }
 

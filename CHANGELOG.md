@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added `callsieve setup-auto <repo> [--force] [--dry-run]`: detects installed agents on this machine (binary on PATH, config directory, macOS app bundle, or VS Code extension) and runs the existing per-client setup for each, with no per-client decisions.
+- Added `callsieve setup-auto <repo> [--force] [--dry-run]`: detects installed agents on this machine (binary on PATH, config directory — including Linux `~/.config` locations — macOS app bundle, or VS Code extension) and runs the existing per-client setup for each, with no per-client decisions. Hook-capable clients (Codex, Claude Code, Copilot, OpenCode, Antigravity, Cline) also get non-strict lifecycle hooks installed, since hooks are the strongest context-first integration.
 - Claude Code and generic client Stop hooks now report a factual session summary when CallSieve served context: packets, packet tokens, read-first files, and the zero-model-token retrieval cost. Estimated savings claims stay gated behind audited observed-session reports.
 
 ### Changed
