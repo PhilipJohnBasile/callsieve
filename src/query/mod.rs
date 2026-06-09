@@ -6627,7 +6627,10 @@ fn reference_edge(lookup: &IndexLookup<'_>, reference: &ReferenceRecord) -> Refe
         edge_source: reference.edge_source.clone(),
         confidence: reference.confidence,
         lsp_method: reference.lsp_method.clone(),
-        source_range: reference.source_range,
+        // the index omits source_range when it equals the reference line
+        source_range: reference
+            .source_range
+            .or(Some([reference.line, reference.line])),
         target_range: reference.target_range,
     }
 }

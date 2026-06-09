@@ -114,19 +114,35 @@ pub struct ImportAliasRecord {
     pub imported: String,
 }
 
+/// References dominate index size (hundreds of thousands of records on large
+/// repos), so serialization drops everything derivable: `file_id` is always
+/// `file:<source_path>`, `confidence` is a pure function of `edge_source`, and
+/// the most common `kind`/`edge_source` values are omitted as defaults.
+/// `normalize_after_load` restores the derived fields.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReferenceRecord {
+    #[serde(skip)]
     pub file_id: String,
     pub source_path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_symbol_id: Option<String>,
     pub target_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_symbol_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_path: Option<String>,
+    #[serde(
+        default = "default_reference_kind",
+        skip_serializing_if = "is_default_reference_kind"
+    )]
     pub kind: String,
     pub line: usize,
-    #[serde(default = "default_edge_source")]
+    #[serde(
+        default = "default_edge_source",
+        skip_serializing_if = "is_default_edge_source"
+    )]
     pub edge_source: String,
-    #[serde(default)]
+    #[serde(skip)]
     pub confidence: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lsp_method: Option<String>,
@@ -136,6 +152,38 @@ pub struct ReferenceRecord {
     pub target_range: Option<[usize; 2]>,
 }
 
+fn default_reference_kind() -> String {
+    "reference".to_string()
+}
+
+fn is_default_reference_kind(kind: &str) -> bool {
+    kind == "reference"
+}
+
 fn default_edge_source() -> String {
-    "heuristic".to_string()
+    "tree_sitter".to_string()
+}
+
+fn is_default_edge_source(edge_source: &str) -> bool {
+    edge_source == "tree_sitter"
+}
+
+pub fn reference_confidence(edge_source: &str) -> f64 {
+    match edge_source {
+        "heuristic" => 0.45,
+        "tree_sitter" => 0.8,
+        _ => 1.0,
+    }
+}
+
+/// Restore fields stripped from the serialized form of `ReferenceRecord`.
+pub fn normalize_after_load(index: &mut CodeIndex) {
+    for reference in &mut index.references {
+        if reference.file_id.is_empty() {
+            reference.file_id = format!("file:{}", reference.source_path);
+        }
+        if reference.confidence == 0.0 {
+            reference.confidence = reference_confidence(&reference.edge_source);
+        }
+    }
 }

@@ -663,7 +663,8 @@ fn reference_from_lsp_location(
         edge_source: edge_source.to_string(),
         confidence: 1.0,
         lsp_method: Some(lsp_method_name(edge_source).to_string()),
-        source_range: Some([line, line]),
+        // a range equal to `line` is implied; omitted to keep the index small
+        source_range: None,
         target_range: Some([target.start_line, target.start_line]),
     })
 }
@@ -720,7 +721,8 @@ fn reference_to_lsp_target_location(
         edge_source: edge_source.to_string(),
         confidence: 1.0,
         lsp_method: Some(lsp_method_name(edge_source).to_string()),
-        source_range: Some([query.target.start_line, query.target.start_line]),
+        // a range equal to `line` is implied; omitted to keep the index small
+        source_range: None,
         target_range: Some([line, line]),
     })
 }

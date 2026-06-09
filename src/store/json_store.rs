@@ -20,7 +20,9 @@ pub fn save_index(root: &Path, index: &CodeIndex) -> Result<std::path::PathBuf> 
         .with_context(|| format!("failed to create index directory {}", dir.display()))?;
 
     let path = dir.join(INDEX_FILE);
-    let data = serde_json::to_vec_pretty(index)?;
+    // Compact JSON: the index is machine-read and references dominate its
+    // size, so pretty-printing only costs disk and parse time.
+    let data = serde_json::to_vec(index)?;
     fs::write(&path, data).with_context(|| format!("failed to write index {}", path.display()))?;
     Ok(path)
 }
@@ -34,5 +36,8 @@ pub fn load_index(root: &Path) -> Result<CodeIndex> {
             root.display()
         )
     })?;
-    serde_json::from_slice(&data).with_context(|| format!("failed to parse {}", path.display()))
+    let mut index: CodeIndex = serde_json::from_slice(&data)
+        .with_context(|| format!("failed to parse {}", path.display()))?;
+    crate::store::normalize_after_load(&mut index);
+    Ok(index)
 }

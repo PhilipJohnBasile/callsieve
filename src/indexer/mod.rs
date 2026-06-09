@@ -24,7 +24,7 @@ use crate::store::{
 
 use self::language::Language;
 
-pub const SCHEMA_VERSION: u32 = 8;
+pub const SCHEMA_VERSION: u32 = 9;
 
 #[derive(Debug, Clone)]
 pub struct IndexOptions {
@@ -583,7 +583,8 @@ fn build_references(
                 edge_source: raw.edge_source,
                 confidence: raw.confidence,
                 lsp_method: None,
-                source_range: Some([raw.line, raw.line]),
+                // a range equal to `line` is implied; omitted to keep the index small
+                source_range: None,
                 target_range: target.map(|symbol| [symbol.start_line, symbol.end_line]),
             });
         }
