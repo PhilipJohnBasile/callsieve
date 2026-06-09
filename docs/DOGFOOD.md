@@ -46,16 +46,16 @@ This dogfoods hybrid retrieval, git activity signals, and stack-trace routing wh
 
 ## Repeated Task Families
 
-`agent-context` writes `.callsieve/task-memory.json`, an ignored local hint cache. The cache stores prior task terms, read-first files, selected symbols, and related tests.
+`agent-context` writes `.callsieve/task-memory.json`, an ignored local hint cache. The cache stores prior task terms, read-first files, selected symbols, and related tests. Default skim output caps memory hints at two files and three symbols.
 
 Use the memory object as hints:
 
 ```json
 {
   "memory": {
-    "cache_hit": true,
-    "recommended_files": ["src/cli.rs"],
-    "recommended_symbols": ["Command"]
+    "hit": true,
+    "f": ["src/cli.rs"],
+    "sy": ["Command"]
   }
 }
 ```
@@ -63,7 +63,7 @@ Use the memory object as hints:
 Rules:
 
 - Treat `context.read_first` as the primary source.
-- Treat `memory.recommended_files` as a shortcut for repeated task families.
+- Treat `memory.f` as a shortcut for repeated task families.
 - Do not count task memory as proof evidence.
 - Clear memory before cold-run comparisons:
 
@@ -119,7 +119,7 @@ Use this as the compact AI policy:
 ```text
 For codebase discovery, call CallSieve before broad search.
 Use MCP `callsieve_context` when available. Otherwise run `callsieve agent-context <repo> "<task>"`.
-Read `context.read_first` first. Use `memory.recommended_files` only as local hints.
+Read `context.read_first` first. Use `memory.f` only as local hints.
 Remember `retrieval_cost.retrieval_model_tokens = 0` applies to retrieval only; returned context still counts when read.
 Use broad grep only if the packet is insufficient, then keep it focused and explain why.
 Report `context_payload_reduction` only as estimated context payload reduction.

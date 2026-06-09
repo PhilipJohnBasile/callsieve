@@ -191,7 +191,7 @@ The project `.codex/config.toml` points Codex at:
 callsieve mcp
 ```
 
-The Codex policy tells the agent to use `callsieve_context` before broad grep or repeated file reads. Codex hooks use the `slim` profile. The project `.codex/hooks.json` runs local `callsieve codex-hook ...` handlers. `UserPromptSubmit` injects compact CallSieve context, `PreToolUse` blocks broad search before context, and `PermissionRequest` denies escalated pre-context search. Codex `PostToolUse` and `Stop` are intentionally not installed because pre-tool hooks enforce the policy and post-tool or stop-time prompts are optional. Run `codex-hooks doctor --strict --smoke` to validate the local handler contract. Add `--fix` to archive stale hook state or trace files under `.callsieve/codex-hooks/archive/`. Review and trust project hooks in Codex with `/hooks`, then run `codex-hooks trust-ack /path/to/repo` to record a local marker tied to the current hook file hash.
+The Codex policy tells the agent to use `callsieve_context` before broad grep or repeated file reads, read `read_first`, review `context.sel.next`, then use `instruction.x.o/n/next` plus local `focus`, `related`, and `tests` expansion before grep. Codex hooks use the `slim` profile. The project `.codex/hooks.json` runs local `callsieve codex-hook ...` handlers. `UserPromptSubmit` injects compact CallSieve context plus local expansion commands, `PreToolUse` blocks broad search before context, and `PermissionRequest` denies escalated pre-context search. Codex `PostToolUse` and `Stop` are intentionally not installed because pre-tool hooks enforce the policy and post-tool or stop-time prompts are optional. Run `codex-hooks doctor --strict --smoke` to validate the local handler contract. Add `--fix` to archive stale hook state or trace files under `.callsieve/codex-hooks/archive/`. Review and trust project hooks in Codex with `/hooks`, then run `codex-hooks trust-ack /path/to/repo` to record a local marker tied to the current hook file hash.
 
 ## Claude Code
 
@@ -225,7 +225,7 @@ Manual MCP equivalent:
 claude mcp add --transport stdio callsieve -- callsieve mcp
 ```
 
-Claude should call `callsieve_context` first for codebase discovery tasks. The generated `.claude/settings.local.json` preserves unrelated local settings and adds `callsieve claude-hook ...` handlers. `UserPromptSubmit` injects compact CallSieve context, `PreToolUse` blocks `Bash`, `Read`, `Grep`, and `Glob` before context in strict mode, `PostToolUse` records guardrail trace events, `PermissionRequest` denies escalated pre-context search, and `Stop` stays quiet with a suppressed acknowledgement. Review and trust project hooks in Claude Code with `/hooks` before relying on enforcement.
+Claude should call `callsieve_context` first for codebase discovery tasks, read `read_first`, review `context.sel.next`, then use `instruction.x.o/n/next` plus local `focus`, `related`, and `tests` expansion before grep. The generated `.claude/settings.local.json` preserves unrelated local settings and adds `callsieve claude-hook ...` handlers. `UserPromptSubmit` injects compact `skim` CallSieve context plus local expansion commands, `PreToolUse` blocks `Bash`, `Read`, `Grep`, and `Glob` before context in strict mode, `PostToolUse` records guardrail trace events, `PermissionRequest` denies escalated pre-context search, and `Stop` stays quiet with a suppressed acknowledgement. Review and trust project hooks in Claude Code with `/hooks` before relying on enforcement.
 
 ## Claude Desktop
 
@@ -418,8 +418,9 @@ If the tool does not support MCP, add this policy to its project instructions:
 Before broad search or repeated file reads, run:
 callsieve agent-context <repo> "<task>"
 
-Read the returned read_first files and snippets first.
-Use grep only when that packet is insufficient.
+Read the returned read_first files, symbols, reasons, tests, risk hints, and context.sel.next first.
+Use instruction.x.o/n/next plus local focus, related, and tests commands for targeted detail.
+Use grep only when that packet and local expansion commands are insufficient.
 Treat retrieval_cost.retrieval_model_tokens = 0 as retrieval-only; returned context still counts when read.
 When reporting savings, call context_payload_reduction an estimated context payload reduction, not observed session token savings.
 ```
@@ -460,7 +461,7 @@ Then prepend this directory to the PATH used by the AI tool process only:
 
 Do not add this globally unless you intentionally want CallSieve shims for every shell. The safer pattern is process-local PATH through a launcher.
 
-The wrappers call the hidden `callsieve shim-run` helper. It extracts the search pattern from common `rg` and `grep` forms, returns CallSieve context first, and then passes the original arguments through to the real search binary captured at install time.
+The wrappers call the hidden `callsieve shim-run` helper. It extracts the search pattern from common `rg` and `grep` forms, rebuilds a missing or stale local index if needed, returns compact `skim` CallSieve context first, and then passes the original arguments through to the real search binary captured at install time.
 
 Remove shims with:
 
@@ -520,7 +521,7 @@ Before handing a task to an AI:
 callsieve agent-context /path/to/repo "<task>"
 ```
 
-`agent-context` keeps a small local `.callsieve/task-memory.json` hint cache so repeated task families can reuse prior read-first files and symbols. Clear it when you want a cold run:
+`agent-context` keeps a small local `.callsieve/task-memory.json` hint cache so repeated task families can reuse prior read-first files and symbols. Default skim output caps those hints at two files and three symbols. Clear it when you want a cold run:
 
 ```bash
 callsieve memory-clear /path/to/repo

@@ -50,6 +50,7 @@ For cross-agent comparison, use `context_payload_reduction`. It is a platform-ne
 Latest local run on this repository:
 
 - expected-file recall: `16/16` (`100%`)
+- first-correct-file@k: reports how often the first useful ground-truth file appears in the selected read-first set
 - total estimated token savings: `541090`
 - average estimated token reduction: `98.6%`
 - avoided grep commands: `34`
@@ -58,6 +59,9 @@ Latest local run on this repository:
 The suite output includes:
 
 - `expected_file_recall`: fraction of expected files selected by `callsieve context`
+- `first_correct_file_rate_at_k`: fraction of tasks where at least one expected file appears in the selected read-first files
+- `first_correct_file_hits`: number of tasks with a first correct file inside the selected read-first files
+- `first_correct_file_tasks`: number of tasks that had expected files and were counted for first-correct-file@k
 - `total_estimated_token_savings`: estimated tokens avoided versus a naive grep/read loop
 - `total_estimated_avoided_grep_commands`: estimated grep commands avoided
 - `total_estimated_avoided_file_reads`: estimated file reads avoided
@@ -249,7 +253,7 @@ cargo run -- benchmark-doctor benchmarks/report-manifest.example.json
 cargo run -- benchmark-report benchmarks/report-manifest.example.json
 ```
 
-`benchmark-doctor` validates local repo paths, indexes, suites, and trace files before collection. The report output includes per-repo expected-file recall, `context_payload_reduction`, estimated token-savings compatibility fields, avoided grep commands, avoided file reads, misses, and aggregate totals across all listed repos.
+`benchmark-doctor` validates local repo paths, indexes, suites, and trace files before collection. The report output includes per-repo expected-file recall, first-correct-file@k, `context_payload_reduction`, estimated token-savings compatibility fields, avoided grep commands, avoided file reads, misses, and aggregate totals across all listed repos.
 
 ## External GitHub Fixture Pilot
 
@@ -512,7 +516,7 @@ Recommended external proof target:
 
 ## Interpreting Misses
 
-`benchmark-suite` reports `misses` when an expected file is not selected. `eval-retrieval` uses the same task fixture shape and exits nonzero when a critical file is missed. Common reasons:
+`benchmark-suite` reports `misses` when an expected file is not selected and also records first-correct-file@k so teams can see whether at least one useful file appears early enough for an agent to start locally. `eval-retrieval` uses the same task fixture shape and exits nonzero when a critical file is missed. Common reasons:
 
 - the expected file is not currently indexed
 - the expected file fell outside `--limit`
