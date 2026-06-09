@@ -162,6 +162,16 @@ impl TokenWeights {
     }
 }
 
+/// Filename-stem matches scale with how rare the stem token is across the
+/// corpus: a query token naming a unique file (e.g. `sqlmigrate`) is decisive
+/// and must not be drowned by cumulative content-keyword points on other
+/// files, while a stem that is also an everyday corpus word (e.g. `schema`,
+/// which several files are named after) keeps roughly its old weight.
+fn stem_match_points(base: i32, stem: &str, weights: &TokenWeights) -> i32 {
+    let rarity = weights.weight(stem);
+    (base as f32 * (0.5 + 1.5 * rarity)).round() as i32
+}
+
 /// Allocation-free `haystack.to_lowercase().contains(needle)` for an
 /// already-lowercase ASCII needle.
 fn contains_ascii_case_insensitive(haystack: &str, needle: &str) -> bool {
@@ -294,7 +304,8 @@ fn score_symbol(
 
     let file_stem = file_stem(&file.path).to_ascii_lowercase();
     if query == path_lower || query_tokens.iter().any(|token| token == &file_stem) {
-        let points = if file.language.is_code() { 80 } else { 230 };
+        let base = if file.language.is_code() { 80 } else { 230 };
+        let points = stem_match_points(base, &file_stem, weights);
         add_score_component(
             &mut score,
             &mut why,
@@ -414,11 +425,12 @@ fn score_file(
     let file_stem = file_stem(&file.path).to_ascii_lowercase();
 
     if query == path_lower || query_tokens.iter().any(|token| token == &file_stem) {
-        let points = if file.language.is_code() {
+        let base = if file.language.is_code() {
             if file.is_test { 140 } else { 300 }
         } else {
             230
         };
+        let points = stem_match_points(base, &file_stem, weights);
         add_score_component(
             &mut score,
             &mut why,
