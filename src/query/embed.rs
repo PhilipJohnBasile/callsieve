@@ -108,6 +108,13 @@ impl FastembedEmbedder {
         Self::id_for_model(fastembed::EmbeddingModel::BGESmallENV15)
     }
 
+    /// Code-tuned opt-in tier: jinaai/jina-embeddings-v2-base-code (768-dim),
+    /// trained on docstring-to-code pairs. Heavier than the BGE-small default,
+    /// so it is never selected implicitly.
+    pub fn new_code() -> Result<Self> {
+        Self::new_with_model(fastembed::EmbeddingModel::JinaEmbeddingsV2BaseCode)
+    }
+
     /// Construct with an explicit `fastembed::EmbeddingModel`. Exposed so
     /// callers can pin a specific checkpoint (e.g. MiniLM) without
     /// re-implementing the trait.

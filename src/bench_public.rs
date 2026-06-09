@@ -40,6 +40,16 @@ pub const DEFAULT_K: usize = 5;
 const CONTEXT_LIMIT: usize = 8;
 const SNIPPETS_PER_FILE: usize = 1;
 
+/// Benchmarks pick the embedding model via CALLSIEVE_BENCH_EMBED_MODEL
+/// (`code` selects the jina code model) so A/B model runs need no CLI churn.
+fn bench_embedder() -> anyhow::Result<crate::query::embed::FastembedEmbedder> {
+    if std::env::var("CALLSIEVE_BENCH_EMBED_MODEL").as_deref() == Ok("code") {
+        crate::query::embed::FastembedEmbedder::new_code()
+    } else {
+        crate::query::embed::FastembedEmbedder::new_default()
+    }
+}
+
 #[derive(Clone, Copy)]
 pub struct RunOptions<'a> {
     pub embeddings: bool,
@@ -363,7 +373,7 @@ pub fn run_compare(
     repos_dir: &Path,
     k_override: Option<usize>,
 ) -> Result<CompareReport> {
-    let embedder = query::embed::FastembedEmbedder::new_default()?;
+    let embedder = bench_embedder()?;
     let embedder = MemoizingEmbedder::new(&embedder);
     run_compare_with_embedder(manifest_path, repos_dir, k_override, &embedder)
 }
@@ -527,7 +537,7 @@ pub fn run_bench_compare(
     k_override: Option<usize>,
     limit: Option<usize>,
 ) -> Result<CompareReport> {
-    let embedder = query::embed::FastembedEmbedder::new_default()?;
+    let embedder = bench_embedder()?;
     let embedder = MemoizingEmbedder::new(&embedder);
     run_bench_compare_with_embedder(manifest_path, workdir, k_override, limit, &embedder)
 }
@@ -540,7 +550,7 @@ pub fn run_bench_compare_resume(
     limit: Option<usize>,
     out_path: &Path,
 ) -> Result<CompareReport> {
-    let embedder = query::embed::FastembedEmbedder::new_default()?;
+    let embedder = bench_embedder()?;
     let embedder = MemoizingEmbedder::new(&embedder);
     run_bench_compare_with_embedder_resume(
         manifest_path,
@@ -1429,7 +1439,7 @@ fn build_embeddings_if_requested(
     let embedder: &dyn query::embed::LocalEmbedder = if let Some(embedder) = options.embedder {
         embedder
     } else {
-        owned_embedder = query::embed::FastembedEmbedder::new_default()?;
+        owned_embedder = bench_embedder()?;
         &owned_embedder
     };
     query::embed_build::build_and_write_embeds(repo_path, index, embedder, true)?;

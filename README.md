@@ -91,7 +91,7 @@ JSON output is compact by default for agent token savings. Add global `--pretty`
 ## Current CLI Surface
 
 ```bash
-callsieve index <path> [--lsp] [--embeddings]
+callsieve index <path> [--lsp] [--embeddings] [--embed-model small|code]
 callsieve symbols <path>
 callsieve symbol <path> <symbol_name>
 callsieve query <path> "<question>" [--why-debug]

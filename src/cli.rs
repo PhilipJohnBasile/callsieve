@@ -100,6 +100,10 @@ pub enum Command {
         /// Build the optional local embeddings cache after indexing.
         #[arg(long)]
         embeddings: bool,
+
+        /// Embedding model for the optional cache (requires --embeddings).
+        #[arg(long, value_enum, default_value_t = EmbedModelArg::Small)]
+        embed_model: EmbedModelArg,
     },
 
     /// List indexed symbols.
@@ -238,6 +242,11 @@ pub enum Command {
         /// Skip the running daemon's in-memory index and load directly.
         #[arg(long)]
         no_daemon: bool,
+
+        /// Embedding model for hybrid retrieval (requires --embeddings and a
+        /// cache built with the same model).
+        #[arg(long, value_enum, default_value_t = EmbedModelArg::Small)]
+        embed_model: EmbedModelArg,
     },
 
     /// Build an index, return a sample context packet, and report context reduction.
@@ -1772,6 +1781,14 @@ pub enum McpConfigFormat {
     Toml,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum EmbedModelArg {
+    /// BGE-small-en-v1.5: the fast default.
+    Small,
+    /// jina-embeddings-v2-base-code: code-tuned, heavier, opt-in quality tier.
+    Code,
+}
+
 #[derive(Debug, Clone, Copy, ValueEnum)]
 pub enum ContextProfileArg {
     Skim,
@@ -3026,6 +3043,7 @@ pub fn run() -> Result<()> {
             path,
             lsp,
             embeddings,
+            embed_model,
             ..
         } => {
             if embeddings {
@@ -3044,7 +3062,7 @@ pub fn run() -> Result<()> {
             };
             let index_path = store::json_store::save_index(&path, &index)?;
             if embeddings {
-                build_embeddings_cache(&path, &index)?;
+                build_embeddings_cache(&path, &index, embed_model)?;
             } else {
                 remove_embeddings_cache_if_present(&path)?;
             }
@@ -3170,6 +3188,7 @@ pub fn run() -> Result<()> {
             error,
             git_boost,
             no_daemon,
+            embed_model,
         } => {
             let embeddings = embeddings || embeddings_env_enabled();
             if embeddings {
@@ -3206,11 +3225,27 @@ pub fn run() -> Result<()> {
                 None => Vec::new(),
             };
             let (index, index_load_ms, refreshed) = load_fresh_index_timed(&path)?;
+            #[cfg(feature = "embed")]
+            let code_embedder = if embeddings && embed_model == EmbedModelArg::Code {
+                Some(query::embed::FastembedEmbedder::new_code()?)
+            } else {
+                None
+            };
+            #[cfg(feature = "embed")]
+            let hybrid = match &code_embedder {
+                Some(embedder) => query::HybridOptions::with_embedder(true, embedder),
+                None => query::HybridOptions::embeddings(embeddings),
+            };
+            #[cfg(not(feature = "embed"))]
+            let hybrid = {
+                let _ = embed_model;
+                query::HybridOptions::embeddings(embeddings)
+            };
             let output = agent_context_output_for_index(
                 &path,
                 &index,
                 &request,
-                embeddings,
+                hybrid,
                 &error_frames,
                 index_load_ms,
                 refreshed,
@@ -4515,13 +4550,24 @@ fn ensure_bench_run_supported() -> Result<()> {
 }
 
 #[cfg(feature = "embed")]
-fn build_embeddings_cache(root: &Path, index: &store::CodeIndex) -> Result<PathBuf> {
-    let embedder = query::embed::FastembedEmbedder::new_default()?;
+fn build_embeddings_cache(
+    root: &Path,
+    index: &store::CodeIndex,
+    embed_model: EmbedModelArg,
+) -> Result<PathBuf> {
+    let embedder = match embed_model {
+        EmbedModelArg::Small => query::embed::FastembedEmbedder::new_default()?,
+        EmbedModelArg::Code => query::embed::FastembedEmbedder::new_code()?,
+    };
     query::embed_build::build_and_write_embeds(root, index, &embedder, true)
 }
 
 #[cfg(not(feature = "embed"))]
-fn build_embeddings_cache(_root: &Path, _index: &store::CodeIndex) -> Result<PathBuf> {
+fn build_embeddings_cache(
+    _root: &Path,
+    _index: &store::CodeIndex,
+    _embed_model: EmbedModelArg,
+) -> Result<PathBuf> {
     bail!("--embeddings requires building with --features embed");
 }
 
@@ -4715,7 +4761,7 @@ fn agent_context_output_for_index(
     root: &Path,
     index: &store::CodeIndex,
     request: &AgentContextRequest,
-    embeddings: bool,
+    hybrid: query::HybridOptions<'_>,
     error_frames: &[query::stacktrace::StackFrame],
     index_load_ms: u64,
     refreshed: bool,
@@ -4730,7 +4776,7 @@ fn agent_context_output_for_index(
             snippets_per_file: request.snippets_per_file,
             include_snippets: true,
             why_debug: request.why_debug,
-            hybrid: query::HybridOptions::embeddings(embeddings),
+            hybrid,
             error_frames,
             git_boost: request.git_boost,
         },
@@ -17145,8 +17191,16 @@ fn daemon_context_response(
             error: "daemon index is stale".to_string(),
         };
     }
-    match agent_context_output_for_index(root, &index, request, false, &[], 0, false)
-        .and_then(|output| render_agent_context_output(&output, request))
+    match agent_context_output_for_index(
+        root,
+        &index,
+        request,
+        query::HybridOptions::embeddings(false),
+        &[],
+        0,
+        false,
+    )
+    .and_then(|output| render_agent_context_output(&output, request))
     {
         Ok(rendered) => DaemonContextResponse {
             ok: true,
@@ -19055,9 +19109,17 @@ mod daemon_socket_tests {
         let via_daemon = try_daemon_agent_context(&root, &request)
             .expect("daemon should serve a fresh in-memory index");
 
-        let direct = agent_context_output_for_index(&root, &index, &request, false, &[], 0, false)
-            .and_then(|output| render_agent_context_output(&output, &request))
-            .unwrap();
+        let direct = agent_context_output_for_index(
+            &root,
+            &index,
+            &request,
+            query::HybridOptions::embeddings(false),
+            &[],
+            0,
+            false,
+        )
+        .and_then(|output| render_agent_context_output(&output, &request))
+        .unwrap();
 
         assert_eq!(via_daemon, direct, "daemon and direct output must match");
         let _ = fs::remove_file(socket);
