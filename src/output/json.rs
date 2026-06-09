@@ -16,16 +16,27 @@ struct ErrorBody {
 }
 
 pub fn print<T: Serialize>(value: &T) -> Result<()> {
-    if PRETTY_OUTPUT.load(Ordering::Relaxed) {
-        println!("{}", serde_json::to_string_pretty(value)?);
-    } else {
-        println!("{}", serde_json::to_string(value)?);
-    }
+    println!("{}", render(value, is_pretty())?);
     Ok(())
+}
+
+/// Serialize without printing, honoring an explicit pretty flag so a remote
+/// process (e.g. the daemon) can render for a client whose `--pretty` setting
+/// it cannot see through the process-global state.
+pub fn render<T: Serialize>(value: &T, pretty: bool) -> Result<String> {
+    Ok(if pretty {
+        serde_json::to_string_pretty(value)?
+    } else {
+        serde_json::to_string(value)?
+    })
 }
 
 pub fn set_pretty(pretty: bool) {
     PRETTY_OUTPUT.store(pretty, Ordering::Relaxed);
+}
+
+pub fn is_pretty() -> bool {
+    PRETTY_OUTPUT.load(Ordering::Relaxed)
 }
 
 pub fn print_error(error: &Error) {

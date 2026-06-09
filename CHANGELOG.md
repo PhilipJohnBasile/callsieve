@@ -4,12 +4,15 @@
 
 ### Added
 
+- The daemon now holds the parsed index in memory and serves `agent-context` over a local Unix socket (`.callsieve/daemon.sock`); the CLI tries the daemon first and silently falls back to direct loading (`--no-daemon` forces direct). Output is byte-identical, and a per-request stat-level freshness check refuses stale serves. On a 2.7k-file Django checkout `agent-context` drops from 0.61s to 0.31s. Non-unix targets keep the direct path.
 - Added `callsieve index-export <repo> --out <file>` and `callsieve index-import <repo> --from <file> [--allow-partial]` for team warm starts without any cloud: one machine exports its index, another verifies every file by content hash (not mtime, which never matches across machines), rewrites local file stats so freshness checks pass, and skips the full re-index. Verified on a 3.3k-file Django checkout: import matches all files and `status` reports fresh.
 - Added `callsieve setup-auto <repo> [--force] [--dry-run]`: detects installed agents on this machine (binary on PATH, config directory — including Linux `~/.config` locations — macOS app bundle, or VS Code extension) and runs the existing per-client setup for each, with no per-client decisions. Hook-capable clients (Codex, Claude Code, Copilot, OpenCode, Antigravity, Cline) also get non-strict lifecycle hooks installed, since hooks are the strongest context-first integration.
 - Claude Code and generic client Stop hooks now report a factual session summary when CallSieve served context: packets, packet tokens, read-first files, and the zero-model-token retrieval cost. Estimated savings claims stay gated behind audited observed-session reports.
 
 ### Changed
 
+- The daemon no longer rebuilds the index on every poll tick: with the in-memory copy it stat-checks freshness (~ms) and rebuilds only when files actually changed. On the Django checkout this takes the idle daemon from ~100% CPU (continuous re-index) to ~0.4%.
+- The MCP server caches the parsed index in-process and revalidates freshness per call, so repeat tool calls skip the index parse entirely.
 - Filename-stem ranking matches now scale with corpus rarity: a query token naming a unique file (e.g. `sqlmigrate`) gets a decisive boost, while a stem that is also an everyday corpus word (e.g. `schema`, which several files are named after) keeps roughly its old weight. Public 50-issue SWE-bench Lite first-correct-file@5: lexical `56.0%` → `60.0%` (+4.0 pp, 2 fixes, 0 regressions), hybrid `56.0%` → `58.0%`; the 30-issue natural-language slice is unchanged. Known hybrid edge recorded by the run: semantic reranking can demote a rank-5 lexical hit (astropy-14182).
 - Index schema 9: `index.json` is now compact (not pretty-printed) and `ReferenceRecord` serialization drops derivable fields (`file_id`, `confidence`, redundant `source_range`, null targets, default `kind`/`edge_source`). On a 2.7k-file Django checkout the index shrinks from 247 MB to 111 MB (−55%) with identical query output, `status` drops from 0.44s to 0.30s, and `agent-context` from 0.77s to 0.61s; older indexes remain readable and rebuild automatically.
 

@@ -234,6 +234,10 @@ pub enum Command {
         /// Nudge recently-changed / hot files up the ranking using git history.
         #[arg(long)]
         git_boost: bool,
+
+        /// Skip the running daemon's in-memory index and load directly.
+        #[arg(long)]
+        no_daemon: bool,
     },
 
     /// Build an index, return a sample context packet, and report context reduction.
@@ -3165,10 +3169,32 @@ pub fn run() -> Result<()> {
             embeddings,
             error,
             git_boost,
+            no_daemon,
         } => {
             let embeddings = embeddings || embeddings_env_enabled();
             if embeddings {
                 ensure_embeddings_supported()?;
+            }
+            let request = AgentContextRequest {
+                task: task.clone(),
+                limit,
+                snippets_per_file,
+                why_debug,
+                profile: profile_arg_name(profile).to_string(),
+                token_budget,
+                format: agent_output_format_name(format).to_string(),
+                git_boost,
+                pretty: output::json::is_pretty(),
+            };
+            // Daemon fast path: a running daemon answers from its in-memory
+            // index. Embeddings and error-frame requests always load directly.
+            if !no_daemon
+                && !embeddings
+                && error.is_none()
+                && let Some(rendered) = try_daemon_agent_context(&path, &request)
+            {
+                println!("{rendered}");
+                return Ok(());
             }
             let error_frames = match error {
                 Some(error_path) => {
@@ -3179,44 +3205,17 @@ pub fn run() -> Result<()> {
                 }
                 None => Vec::new(),
             };
-            let retrieval_task = effective_task_for_retrieval(&path, &task);
             let (index, index_load_ms, refreshed) = load_fresh_index_timed(&path)?;
-            let mut context = query::build_context_with(
+            let output = agent_context_output_for_index(
                 &path,
                 &index,
-                &retrieval_task,
-                query::ContextOptions {
-                    limit,
-                    snippets_per_file,
-                    include_snippets: true,
-                    why_debug,
-                    hybrid: query::HybridOptions::embeddings(embeddings),
-                    error_frames: &error_frames,
-                    git_boost,
-                },
+                &request,
+                embeddings,
+                &error_frames,
+                index_load_ms,
+                refreshed,
             )?;
-            context.add_index_load_time(index_load_ms);
-            if refreshed {
-                context.add_warning("rebuilt missing or stale CallSieve index before context");
-            }
-            let memory = query::task_memory_for_context(&path, &context, now_unix_seconds())?;
-            let output = AgentContextOutput {
-                instruction: AgentContextInstruction {
-                    local_first_expansion: agent_indexed_local_first_expansion(&context),
-                },
-                memory,
-                context,
-            };
-            print_agent_context_output(
-                &output,
-                format,
-                query::ContextViewOptions {
-                    profile: profile.into(),
-                    token_budget: Some(token_budget),
-                    include_git: git_boost,
-                    include_call_paths: false,
-                },
-            )?;
+            println!("{}", render_agent_context_output(&output, &request)?);
         }
         Command::Demo { path, task, lsp } => {
             let output = demo(&path, &task, lsp)?;
@@ -4671,20 +4670,104 @@ fn print_context_output(
     }
 }
 
-fn print_agent_context_output(
+/// The full agent-context parameter set, serializable so a running daemon
+/// can execute the identical request against its in-memory index.
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
+struct AgentContextRequest {
+    task: String,
+    limit: usize,
+    snippets_per_file: usize,
+    why_debug: bool,
+    profile: String,
+    token_budget: usize,
+    format: String,
+    git_boost: bool,
+    pretty: bool,
+}
+
+fn profile_arg_name(profile: ContextProfileArg) -> &'static str {
+    match profile {
+        ContextProfileArg::Skim => "skim",
+        ContextProfileArg::Normal => "normal",
+        ContextProfileArg::Full => "full",
+    }
+}
+
+fn parse_profile_name(name: &str) -> query::ContextProfile {
+    match name {
+        "normal" => query::ContextProfile::Normal,
+        "full" => query::ContextProfile::Full,
+        _ => query::ContextProfile::Skim,
+    }
+}
+
+fn agent_output_format_name(format: AgentOutputFormat) -> &'static str {
+    match format {
+        AgentOutputFormat::Json => "json",
+        AgentOutputFormat::Markdown => "markdown",
+    }
+}
+
+/// Everything agent-context does after the index is available; shared by the
+/// direct CLI path and the daemon's socket serving path so both produce
+/// identical packets.
+fn agent_context_output_for_index(
+    root: &Path,
+    index: &store::CodeIndex,
+    request: &AgentContextRequest,
+    embeddings: bool,
+    error_frames: &[query::stacktrace::StackFrame],
+    index_load_ms: u64,
+    refreshed: bool,
+) -> Result<AgentContextOutput> {
+    let retrieval_task = effective_task_for_retrieval(root, &request.task);
+    let mut context = query::build_context_with(
+        root,
+        index,
+        &retrieval_task,
+        query::ContextOptions {
+            limit: request.limit,
+            snippets_per_file: request.snippets_per_file,
+            include_snippets: true,
+            why_debug: request.why_debug,
+            hybrid: query::HybridOptions::embeddings(embeddings),
+            error_frames,
+            git_boost: request.git_boost,
+        },
+    )?;
+    context.add_index_load_time(index_load_ms);
+    if refreshed {
+        context.add_warning("rebuilt missing or stale CallSieve index before context");
+    }
+    let memory = query::task_memory_for_context(root, &context, now_unix_seconds())?;
+    Ok(AgentContextOutput {
+        instruction: AgentContextInstruction {
+            local_first_expansion: agent_indexed_local_first_expansion(&context),
+        },
+        memory,
+        context,
+    })
+}
+
+fn render_agent_context_output(
     output: &AgentContextOutput,
-    format: AgentOutputFormat,
-    view_options: query::ContextViewOptions,
-) -> Result<()> {
+    request: &AgentContextRequest,
+) -> Result<String> {
+    let profile = parse_profile_name(&request.profile);
+    let view_options = query::ContextViewOptions {
+        profile,
+        token_budget: Some(request.token_budget),
+        include_git: request.git_boost,
+        include_call_paths: false,
+    };
     let context = query::context_value(&output.context, view_options)?;
     let mut value = serde_json::json!({
         "instruction": &output.instruction,
         "memory": &output.memory,
         "context": context
     });
-    if matches!(format, AgentOutputFormat::Json)
-        && view_options.profile == query::ContextProfile::Skim
-    {
+    let json_format = request.format != "markdown";
+    if json_format && view_options.profile == query::ContextProfile::Skim {
         trim_agent_context_root(&mut value)?;
     }
     compact_agent_memory_envelope(
@@ -4692,22 +4775,21 @@ fn print_agent_context_output(
         view_options.profile == query::ContextProfile::Skim,
     );
     apply_agent_context_envelope_budget(&mut value, view_options.token_budget)?;
-    match format {
-        AgentOutputFormat::Json => output::json::print(&value),
-        AgentOutputFormat::Markdown => {
-            let context = value.get("context").unwrap_or(&value);
-            let grep_policy = value
-                .get("instruction")
-                .and_then(|instruction| instruction.get("grep_policy"))
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("grep_only_if_context_is_insufficient");
-            let local_first_expansion = value.get("instruction").and_then(instruction_expansion);
-            println!(
-                "{}",
-                context_markdown(context, grep_policy, local_first_expansion)
-            );
-            Ok(())
-        }
+    if json_format {
+        output::json::render(&value, request.pretty)
+    } else {
+        let context = value.get("context").unwrap_or(&value);
+        let grep_policy = value
+            .get("instruction")
+            .and_then(|instruction| instruction.get("grep_policy"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("grep_only_if_context_is_insufficient");
+        let local_first_expansion = value.get("instruction").and_then(instruction_expansion);
+        Ok(context_markdown(
+            context,
+            grep_policy,
+            local_first_expansion,
+        ))
     }
 }
 
@@ -16894,7 +16976,45 @@ fn run_daemon(
     };
     save_daemon_state(root, &state)?;
 
+    // Foreground daemons hold the parsed index in memory and answer
+    // agent-context requests over a local socket; once-mode skips serving.
+    #[cfg(unix)]
+    let shared_index: std::sync::Arc<
+        std::sync::RwLock<Option<std::sync::Arc<store::CodeIndex>>>,
+    > = std::sync::Arc::new(std::sync::RwLock::new(None));
+    #[cfg(unix)]
+    let socket = if once {
+        None
+    } else {
+        spawn_daemon_socket_listener(root.to_path_buf(), std::sync::Arc::clone(&shared_index))
+    };
     loop {
+        // With an in-memory index a stat-level freshness check (cheap) can
+        // skip the full rebuild that refresh_watch_index performs; without
+        // one (non-unix or first tick) the rebuild also primes the cache.
+        #[cfg(unix)]
+        let already_fresh = shared_index
+            .read()
+            .ok()
+            .and_then(|guard| guard.as_ref().cloned())
+            .is_some_and(|index| query::index_status(root, Some(&index)).is_fresh());
+        #[cfg(not(unix))]
+        let already_fresh = false;
+
+        if already_fresh {
+            state.status = if once { "indexed_once" } else { "running" }.to_string();
+            state.last_error = None;
+            state.stale_files = 0;
+            save_daemon_state(root, &state)?;
+            if once || daemon_stop_path(root).is_file() {
+                state.status = if once { "indexed_once" } else { "stopped" }.to_string();
+                save_daemon_state(root, &state)?;
+                break;
+            }
+            thread::sleep(Duration::from_millis(interval_ms));
+            continue;
+        }
+
         match refresh_watch_index(root, "daemon", &state.mode, lsp) {
             Ok(output) => {
                 let status_value = serde_json::to_value(&output.status)?;
@@ -16919,6 +17039,15 @@ fn run_daemon(
         }
         save_daemon_state(root, &state)?;
 
+        // Prime/refresh the in-memory copy after a successful rebuild.
+        #[cfg(unix)]
+        if socket.is_some()
+            && state.last_error.is_none()
+            && let Ok(index) = store::json_store::load_index(root)
+            && let Ok(mut guard) = shared_index.write()
+        {
+            *guard = Some(std::sync::Arc::new(index));
+        }
         if once || daemon_stop_path(root).is_file() {
             state.status = if once { "indexed_once" } else { "stopped" }.to_string();
             save_daemon_state(root, &state)?;
@@ -16926,6 +17055,11 @@ fn run_daemon(
         }
 
         thread::sleep(Duration::from_millis(interval_ms));
+    }
+
+    #[cfg(unix)]
+    if let Some(socket) = socket {
+        let _ = fs::remove_file(socket);
     }
 
     Ok(DaemonOutput {
@@ -16940,6 +17074,145 @@ fn callsieve_dir(root: &Path) -> PathBuf {
 
 fn daemon_state_path(root: &Path) -> PathBuf {
     callsieve_dir(root).join("daemon.json")
+}
+
+#[derive(Debug, Serialize, serde::Deserialize)]
+struct DaemonContextResponse {
+    ok: bool,
+    #[serde(default)]
+    rendered: String,
+    #[serde(default)]
+    error: String,
+}
+
+#[cfg(unix)]
+fn daemon_socket_path(root: &Path) -> PathBuf {
+    callsieve_dir(root).join("daemon.sock")
+}
+
+/// Serve one agent-context request from the daemon's in-memory index. The
+/// daemon refreshes on its poll interval, but a stat-level freshness check
+/// still guards each response so a client never gets knowably stale context;
+/// on any "not servable" condition the client falls back to direct load.
+#[cfg(unix)]
+fn serve_daemon_connection(
+    stream: &mut std::os::unix::net::UnixStream,
+    root: &Path,
+    shared_index: &std::sync::RwLock<Option<std::sync::Arc<store::CodeIndex>>>,
+) {
+    use std::io::{Read, Write};
+
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
+    let mut raw = String::new();
+    if stream.read_to_string(&mut raw).is_err() {
+        return;
+    }
+    let response = match serde_json::from_str::<AgentContextRequest>(&raw) {
+        Ok(request) => daemon_context_response(root, shared_index, &request),
+        Err(error) => DaemonContextResponse {
+            ok: false,
+            rendered: String::new(),
+            error: format!("bad request: {error}"),
+        },
+    };
+    if let Ok(encoded) = serde_json::to_string(&response) {
+        let _ = stream.write_all(encoded.as_bytes());
+    }
+}
+
+#[cfg(unix)]
+fn daemon_context_response(
+    root: &Path,
+    shared_index: &std::sync::RwLock<Option<std::sync::Arc<store::CodeIndex>>>,
+    request: &AgentContextRequest,
+) -> DaemonContextResponse {
+    let index = shared_index
+        .read()
+        .ok()
+        .and_then(|guard| guard.as_ref().cloned());
+    let Some(index) = index else {
+        return DaemonContextResponse {
+            ok: false,
+            rendered: String::new(),
+            error: "daemon index not loaded yet".to_string(),
+        };
+    };
+    if !query::index_status(root, Some(&index)).is_fresh() {
+        return DaemonContextResponse {
+            ok: false,
+            rendered: String::new(),
+            error: "daemon index is stale".to_string(),
+        };
+    }
+    match agent_context_output_for_index(root, &index, request, false, &[], 0, false)
+        .and_then(|output| render_agent_context_output(&output, request))
+    {
+        Ok(rendered) => DaemonContextResponse {
+            ok: true,
+            rendered,
+            error: String::new(),
+        },
+        Err(error) => DaemonContextResponse {
+            ok: false,
+            rendered: String::new(),
+            error: error.to_string(),
+        },
+    }
+}
+
+/// Try a running daemon first; any failure (no socket, connect refused,
+/// stale index, protocol error) silently returns None and the caller loads
+/// directly. Non-unix targets always load directly.
+fn try_daemon_agent_context(root: &Path, request: &AgentContextRequest) -> Option<String> {
+    #[cfg(unix)]
+    {
+        use std::io::{Read, Write};
+        use std::net::Shutdown;
+
+        let socket = daemon_socket_path(root);
+        if !socket.exists() {
+            return None;
+        }
+        let mut stream = std::os::unix::net::UnixStream::connect(&socket).ok()?;
+        let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+        let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
+        stream
+            .write_all(serde_json::to_string(request).ok()?.as_bytes())
+            .ok()?;
+        stream.shutdown(Shutdown::Write).ok()?;
+        let mut raw = String::new();
+        stream.read_to_string(&mut raw).ok()?;
+        let response: DaemonContextResponse = serde_json::from_str(&raw).ok()?;
+        response.ok.then_some(response.rendered)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (root, request);
+        None
+    }
+}
+
+#[cfg(unix)]
+fn spawn_daemon_socket_listener(
+    root: PathBuf,
+    shared_index: std::sync::Arc<std::sync::RwLock<Option<std::sync::Arc<store::CodeIndex>>>>,
+) -> Option<PathBuf> {
+    let socket = daemon_socket_path(&root);
+    let _ = fs::remove_file(&socket);
+    let listener = match std::os::unix::net::UnixListener::bind(&socket) {
+        Ok(listener) => listener,
+        Err(_) => return None,
+    };
+    thread::spawn(move || {
+        for stream in listener.incoming() {
+            match stream {
+                Ok(mut stream) => serve_daemon_connection(&mut stream, &root, &shared_index),
+                Err(_) => break,
+            }
+        }
+    });
+    Some(socket)
 }
 
 fn daemon_stop_path(root: &Path) -> PathBuf {
@@ -18736,6 +19009,93 @@ mod index_transfer_tests {
 
         let error = index_import(clone.path(), &export, false).unwrap_err();
         assert!(error.to_string().contains("differ"), "{error}");
+    }
+}
+
+#[cfg(test)]
+#[cfg(unix)]
+mod daemon_socket_tests {
+    use super::*;
+
+    fn request(task: &str) -> AgentContextRequest {
+        AgentContextRequest {
+            task: task.to_string(),
+            limit: 3,
+            snippets_per_file: 0,
+            why_debug: false,
+            profile: "skim".to_string(),
+            token_budget: query::DEFAULT_AGENT_CONTEXT_TOKEN_BUDGET,
+            format: "json".to_string(),
+            git_boost: false,
+            pretty: false,
+        }
+    }
+
+    #[test]
+    fn daemon_socket_serves_output_identical_to_direct_path() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        fs::write(
+            root.join("session.ts"),
+            "export function createSession() {}\n",
+        )
+        .unwrap();
+        let index = indexer::build_index(&root).unwrap();
+        store::json_store::save_index(&root, &index).unwrap();
+
+        let shared: std::sync::Arc<std::sync::RwLock<Option<std::sync::Arc<store::CodeIndex>>>> =
+            std::sync::Arc::new(std::sync::RwLock::new(Some(std::sync::Arc::new(
+                index.clone(),
+            ))));
+        let socket =
+            spawn_daemon_socket_listener(root.clone(), std::sync::Arc::clone(&shared)).unwrap();
+        assert!(socket.exists());
+
+        let request = request("where is createSession handled");
+        let via_daemon = try_daemon_agent_context(&root, &request)
+            .expect("daemon should serve a fresh in-memory index");
+
+        let direct = agent_context_output_for_index(&root, &index, &request, false, &[], 0, false)
+            .and_then(|output| render_agent_context_output(&output, &request))
+            .unwrap();
+
+        assert_eq!(via_daemon, direct, "daemon and direct output must match");
+        let _ = fs::remove_file(socket);
+    }
+
+    #[test]
+    fn daemon_socket_refuses_stale_index_so_client_falls_back() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        fs::write(
+            root.join("session.ts"),
+            "export function createSession() {}\n",
+        )
+        .unwrap();
+        let index = indexer::build_index(&root).unwrap();
+        store::json_store::save_index(&root, &index).unwrap();
+
+        let shared: std::sync::Arc<std::sync::RwLock<Option<std::sync::Arc<store::CodeIndex>>>> =
+            std::sync::Arc::new(std::sync::RwLock::new(Some(std::sync::Arc::new(index))));
+        let socket =
+            spawn_daemon_socket_listener(root.clone(), std::sync::Arc::clone(&shared)).unwrap();
+
+        // Mutate a source file: the served index is now stale and the daemon
+        // must refuse so the client falls back to a direct load.
+        fs::write(
+            root.join("session.ts"),
+            "export function createSession() { return 1; }\n",
+        )
+        .unwrap();
+
+        assert!(try_daemon_agent_context(&root, &request("anything")).is_none());
+        let _ = fs::remove_file(socket);
+    }
+
+    #[test]
+    fn try_daemon_returns_none_without_a_socket() {
+        let temp = tempfile::tempdir().unwrap();
+        assert!(try_daemon_agent_context(temp.path(), &request("anything")).is_none());
     }
 }
 
