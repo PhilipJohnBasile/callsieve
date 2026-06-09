@@ -1,6 +1,7 @@
 use std::{
     io::{self, BufRead, Write},
     path::{Path, PathBuf},
+    sync::{Arc, Mutex},
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -9,6 +10,40 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::{indexer, query, store};
+
+/// The MCP server is a long-running process, but parsing a large index.json
+/// dominates per-call latency. Cache the parsed index for the last-used root
+/// and revalidate freshness (stat-level checks only) before each reuse.
+static INDEX_CACHE: Mutex<Option<(PathBuf, Arc<store::CodeIndex>)>> = Mutex::new(None);
+
+fn cached_index(path: &Path) -> Option<Arc<store::CodeIndex>> {
+    INDEX_CACHE
+        .lock()
+        .ok()?
+        .as_ref()
+        .filter(|(root, _)| root == path)
+        .map(|(_, index)| Arc::clone(index))
+}
+
+fn remember_index(path: &Path, index: &Arc<store::CodeIndex>) {
+    if let Ok(mut guard) = INDEX_CACHE.lock() {
+        *guard = Some((path.to_path_buf(), Arc::clone(index)));
+    }
+}
+
+/// Reuse the in-process index when it is still fresh; otherwise fall back to
+/// a disk load (another process may have refreshed index.json) and cache the
+/// result. Errors mirror `store::json_store::load_index`.
+fn load_index_cached(path: &Path) -> Result<Arc<store::CodeIndex>> {
+    if let Some(index) = cached_index(path)
+        && query::index_status(path, Some(&index)).is_fresh()
+    {
+        return Ok(index);
+    }
+    let index = Arc::new(store::json_store::load_index(path)?);
+    remember_index(path, &index);
+    Ok(index)
+}
 
 #[derive(Debug, Deserialize)]
 struct JsonRpcRequest {
@@ -357,8 +392,12 @@ fn execute_context(arguments: &Value) -> Result<Value> {
         query::DEFAULT_AGENT_CONTEXT_TOKEN_BUDGET,
     )?;
     let freshness_start = Instant::now();
-    let initial_index = store::json_store::load_index(&path).ok();
-    let initial_status = query::index_status(&path, initial_index.as_ref());
+    // Prefer the in-process cache when fresh; a stale cache falls back to a
+    // disk load because another process may have refreshed index.json.
+    let initial_index = cached_index(&path)
+        .filter(|index| query::index_status(&path, Some(index)).is_fresh())
+        .or_else(|| store::json_store::load_index(&path).ok().map(Arc::new));
+    let initial_status = query::index_status(&path, initial_index.as_deref());
     let initial_status_value = serde_json::to_value(&initial_status)?;
     let initial_fresh = status_is_fresh(&initial_status_value);
     let freshness_check_ms = elapsed_ms(freshness_start.elapsed());
@@ -384,8 +423,9 @@ fn execute_context(arguments: &Value) -> Result<Value> {
         })?;
         refreshed = true;
         rebuild_ms = elapsed_ms(rebuild_start.elapsed());
-        index
+        Arc::new(index)
     };
+    remember_index(&path, &index);
     let final_status = query::index_status(&path, Some(&index));
     let final_status_value = serde_json::to_value(&final_status)?;
     let final_fresh = status_is_fresh(&final_status_value);
@@ -702,7 +742,7 @@ fn execute_symbol(arguments: &Value) -> Result<Value> {
     let path = repo_path(arguments)?;
     let symbol_name = required_str(arguments, "symbol_name")?;
     let limit = optional_usize(arguments, "limit", 20)?;
-    let index = store::json_store::load_index(&path)?;
+    let index = load_index_cached(&path)?;
     let output = query::find_symbol(&path, &index, symbol_name, limit)?;
 
     Ok(serde_json::to_value(output)?)
@@ -715,7 +755,7 @@ fn execute_focus(arguments: &Value) -> Result<Value> {
     let line = optional_usize_opt(arguments, "line")?;
     let include_references = optional_bool(arguments, "references", false)?;
     let snippets_per_symbol = optional_usize(arguments, "snippets_per_symbol", 1)?;
-    let index = store::json_store::load_index(&path)?;
+    let index = load_index_cached(&path)?;
     let output = query::focus_file(
         &path,
         &index,
@@ -732,7 +772,7 @@ fn execute_focus(arguments: &Value) -> Result<Value> {
 fn execute_related(arguments: &Value) -> Result<Value> {
     let path = repo_path(arguments)?;
     let file = required_str(arguments, "file")?;
-    let index = store::json_store::load_index(&path)?;
+    let index = load_index_cached(&path)?;
     let output = query::related_file(&path, &index, file)?;
 
     Ok(serde_json::to_value(output)?)
@@ -741,7 +781,7 @@ fn execute_related(arguments: &Value) -> Result<Value> {
 fn execute_tests(arguments: &Value) -> Result<Value> {
     let path = repo_path(arguments)?;
     let file = required_str(arguments, "file")?;
-    let index = store::json_store::load_index(&path)?;
+    let index = load_index_cached(&path)?;
     let output = query::tests_for_file(&path, &index, file)?;
 
     Ok(serde_json::to_value(output)?)
@@ -749,7 +789,7 @@ fn execute_tests(arguments: &Value) -> Result<Value> {
 
 fn execute_stats(arguments: &Value) -> Result<Value> {
     let path = repo_path(arguments)?;
-    let index = store::json_store::load_index(&path)?;
+    let index = load_index_cached(&path)?;
     let output = query::stats(&path, &index)?;
 
     Ok(serde_json::to_value(output)?)
@@ -783,7 +823,7 @@ fn execute_benchmark(arguments: &Value) -> Result<Value> {
     let include_snippets = !optional_bool(arguments, "no_snippets", false)?;
     let profile = optional_context_profile(arguments, "profile", query::ContextProfile::Normal)?;
     let token_budget = optional_usize_opt(arguments, "token_budget")?;
-    let index = store::json_store::load_index(&path)?;
+    let index = load_index_cached(&path)?;
     let output = query::benchmark_context_with_options(
         &path,
         &index,
@@ -1260,5 +1300,37 @@ mod tests {
         assert!(expansion.get("top").is_none());
         assert!(expansion.get("rel").is_none());
         assert!(expansion.get("tests").is_none());
+    }
+
+    #[test]
+    fn index_cache_serves_repeat_calls_without_reparsing() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        write(
+            root.join("src/session.ts"),
+            "export function createSession() {}\n",
+        );
+        let index = indexer::build_index(&root).unwrap();
+        store::json_store::save_index(&root, &index).unwrap();
+
+        let first = load_index_cached(&root).unwrap();
+        assert_eq!(first.files.len(), 1);
+
+        // Freshness checks stat the source files, not index.json, so a fresh
+        // cache must keep answering even when the on-disk index is corrupted.
+        fs::write(store::json_store::index_path(&root), "not json").unwrap();
+        let second = load_index_cached(&root).unwrap();
+        assert!(
+            Arc::ptr_eq(&first, &second),
+            "expected the cached index to be reused"
+        );
+
+        // Touching a source file invalidates the cache; the corrupted disk
+        // index now surfaces as a load error instead of silently stale data.
+        write(
+            root.join("src/session.ts"),
+            "export function createSession() { return 1; }\n",
+        );
+        assert!(load_index_cached(&root).is_err());
     }
 }
