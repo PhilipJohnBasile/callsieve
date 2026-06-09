@@ -2,7 +2,7 @@
   "name": "callsieve-vscode",
   "displayName": "CallSieve",
   "description": "Live read-first context packets for your AI coding agent.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "callsieve",
   "license": "MIT",
   "engines": {

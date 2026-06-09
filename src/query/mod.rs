@@ -2717,6 +2717,7 @@ fn add_semantic_candidates(
     _task: &str,
     _candidates: &mut Vec<ContextCandidate>,
     _limit: usize,
+    _query_tokens: &[String],
     _hybrid: HybridOptions<'_>,
 ) -> Result<Option<()>> {
     Ok(None)
