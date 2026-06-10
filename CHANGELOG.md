@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Benchmarks
+
+- Formal public A/B validation of the v0.3.3 graph-consensus mechanism (both manifests, full runs): the 50-issue SWE-bench Lite set holds `60.0%` lexical = `60.0%` hybrid (50 ties, zero losses — identifier queries untouched by construction, and the endorsement ceiling keeps a top-ranked truth from being displaced by its own neighborhood). The 30-issue natural-language slice rises from `20.0%` to `33.3%` lexical and from `23.3%` to `36.7%` hybrid (+13.3 pp on both arms; 1 win, 0 losses within-run). Naive grep baselines: `6.0%` and `13.3%` — the default deterministic path is now 10× grep on identifier tasks and 2.5× grep on natural-language tasks, with no embeddings involved.
+
 ## v0.3.3 - 2026-06-10
 
 ### Added
