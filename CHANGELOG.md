@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.3.4 - 2026-06-10
+
 ### Changed
 
 - Edit-impact packets now reach all hook-capable clients: the generic PostToolUse handler (Copilot, OpenCode, Antigravity, Cline) returns the same callers/tests/risk additional context on Edit/Write events that Claude Code gets, with the same `edit_impact` trace classification.
