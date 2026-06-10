@@ -1166,6 +1166,17 @@ mod tests {
     use crate::indexer;
     use std::fs;
 
+    /// INDEX_CACHE is process-global with a single slot; tests that exercise
+    /// index-bearing handlers must not interleave or they evict each other's
+    /// entries mid-assertion (a CI-only flake at 2-core parallelism).
+    static CACHE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn cache_lock() -> std::sync::MutexGuard<'static, ()> {
+        CACHE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     fn write(path: impl AsRef<std::path::Path>, content: &str) {
         let path = path.as_ref();
         if let Some(parent) = path.parent() {
@@ -1214,6 +1225,7 @@ mod tests {
 
     #[test]
     fn context_tool_returns_structured_content() {
+        let _guard = cache_lock();
         let temp = tempfile::tempdir().unwrap();
         write(
             temp.path().join("src/auth/session.ts"),
@@ -1262,6 +1274,7 @@ mod tests {
 
     #[test]
     fn context_tool_omits_code_followups_for_docs_top_file() {
+        let _guard = cache_lock();
         let temp = tempfile::tempdir().unwrap();
         write(
             temp.path().join("docs/COMPETITIVE.md"),
@@ -1304,6 +1317,7 @@ mod tests {
 
     #[test]
     fn index_cache_serves_repeat_calls_without_reparsing() {
+        let _guard = cache_lock();
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().canonicalize().unwrap();
         write(
