@@ -409,6 +409,10 @@ struct LocalWorkStats {
     indexed_files: usize,
     indexed_symbols: usize,
     indexed_references: usize,
+    /// Files the semantic union pass added that lexical ranking missed.
+    /// Limit-capped selection counts cannot reveal this, so benches and
+    /// agents need it surfaced explicitly.
+    semantic_injected: usize,
 }
 
 impl QueryOutput {
@@ -2158,6 +2162,7 @@ pub fn build_context_with(
     // runs before the test-offtopic marking below so injected test files get the
     // same down-scaling, and before the hybrid blend so they can be ranked into
     // the read-first set. It is a no-op when embeddings are off (determinism).
+    let candidates_before_injection = candidates.len();
     let semantic_scores = add_semantic_candidates(
         root,
         index,
@@ -2167,6 +2172,7 @@ pub fn build_context_with(
         &query_tokens,
         options.hybrid,
     )?;
+    let semantic_injected = candidates.len() - candidates_before_injection;
 
     // A test file that merely references the relevant source files gets a large
     // graph boost; on a non-test query, scale the whole candidate down so it
@@ -2325,6 +2331,7 @@ pub fn build_context_with(
                 indexed_files: index.files.len(),
                 indexed_symbols: index.symbols.len(),
                 indexed_references: index.references.len(),
+                semantic_injected,
             },
         },
         timing: TimingStats {
@@ -2839,6 +2846,22 @@ fn apply_hybrid_ranking(
         order_keys.insert(candidate.file_id.clone(), order_key);
     }
 
+    // Identifier queries carry explicit lexical anchors, and across every
+    // public bench semantic reordering of them produced zero wins and one
+    // persistent loss (a weakly-embedded correct file diluted out of the
+    // top-k). Keep their lexical order; the semantic debug annotations above
+    // remain for explainability. Natural-language queries keep the full
+    // blend — reranking is where all their wins come from.
+    if query_kind == classify::QueryKind::Identifier {
+        return Ok(());
+    }
+
+    let lexical_rank: BTreeMap<String, usize> = candidates
+        .iter()
+        .enumerate()
+        .map(|(rank, candidate)| (candidate.file_id.clone(), rank))
+        .collect();
+
     candidates.sort_by(|left, right| {
         order_keys
             .get(&right.file_id)
@@ -2856,6 +2879,34 @@ fn apply_hybrid_ranking(
             .then(left.first_rank.cmp(&right.first_rank))
             .then(left.file_id.cmp(&right.file_id))
     });
+
+    // Semantic similarity must not lift a test file above source files it
+    // trailed lexically (test bodies repeat task vocabulary and embed close
+    // to it), unless the query is actually about tests. Bubble such test
+    // files back below the source files they displaced; relative order among
+    // unconstrained pairs keeps the blended ranking.
+    if !ranker::has_test_intent(query_tokens) {
+        let is_test = |candidate: &ContextCandidate| {
+            lookup
+                .file_by_id(&candidate.file_id)
+                .is_some_and(|file| file.is_test)
+        };
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for position in 0..candidates.len().saturating_sub(1) {
+                let upper = &candidates[position];
+                let lower = &candidates[position + 1];
+                let promoted_test_over_source = is_test(upper)
+                    && !is_test(lower)
+                    && lexical_rank.get(&upper.file_id) > lexical_rank.get(&lower.file_id);
+                if promoted_test_over_source {
+                    candidates.swap(position, position + 1);
+                    changed = true;
+                }
+            }
+        }
+    }
 
     Ok(())
 }
@@ -3300,11 +3351,17 @@ fn compact_git_for_value(file: &ContextFile) -> Option<Value> {
 }
 
 fn compact_local_work_for_value(local_work: &LocalWorkStats) -> Value {
-    json!({
+    let mut value = json!({
         "f": local_work.indexed_files,
         "sy": local_work.indexed_symbols,
         "r": local_work.indexed_references
-    })
+    });
+    if local_work.semantic_injected > 0
+        && let Some(object) = value.as_object_mut()
+    {
+        object.insert("inj".to_string(), json!(local_work.semantic_injected));
+    }
+    value
 }
 
 fn compact_impact_for_value(file: &ContextFile, path_indexes: &BTreeMap<&str, usize>) -> Value {
@@ -3902,6 +3959,10 @@ fn promote_task_specific_test_companion(
         return;
     };
 
+    // Tie-break on the candidate's original rank, not its current position:
+    // hybrid reranking reshuffles positions, and a position-sensitive victim
+    // choice made the lexical and hybrid arms evict different files on score
+    // ties (astropy-14182 lost its correct rank-5 file only in hybrid).
     let replacement_index = (1..selected_len)
         .min_by_key(|&index| {
             let candidate = &candidates[index];
@@ -3909,7 +3970,11 @@ fn promote_task_specific_test_companion(
                 .file_by_id(&candidate.file_id)
                 .map(|file| selected_non_test_keep_priority(file, candidate, query_tokens))
                 .unwrap_or_default();
-            (keep_priority, candidate.score(), std::cmp::Reverse(index))
+            (
+                keep_priority,
+                candidate.score(),
+                std::cmp::Reverse(candidate.first_rank),
+            )
         })
         .unwrap_or(selected_len - 1);
 
@@ -7953,6 +8018,181 @@ mod tests {
 
     #[cfg(feature = "embed")]
     #[test]
+    fn hybrid_blend_does_not_lift_tests_above_source_without_test_intent() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut test_file = minimal_file("testfile", "tests/table_test.rs");
+        test_file.is_test = true;
+        let index = minimal_index(vec![minimal_file("source", "src/rst.rs"), test_file]);
+        let lookup = IndexLookup::new(&index);
+        let embedder = FakeEmbedder;
+        // source embeds far from the query, the test file embeds on top of it
+        let cache = embed::EmbedCache {
+            embedder: embed::LocalEmbedder::id(&embedder),
+            index_schema_version: SCHEMA_VERSION,
+            fingerprint: embed::index_fingerprint(&index),
+            dim: 2,
+            vectors: vec![vec![0.0, -1.0], vec![0.0, 1.0]],
+            chunk_owners: vec![0, 1],
+            chunk_symbols: vec![None, None],
+        };
+        embed::write_embeds(temp.path(), &cache, false).unwrap();
+
+        let task = "fix relative ordering warnings";
+        let tokens = ranker::query_tokens(task);
+        let mut candidates = vec![
+            ContextCandidate::new("source".to_string(), 100, 0),
+            ContextCandidate::new("testfile".to_string(), 90, 1),
+        ];
+        let scores = add_semantic_candidates(
+            temp.path(),
+            &index,
+            task,
+            &mut candidates,
+            5,
+            &tokens,
+            HybridOptions::with_embedder(true, &embedder),
+        )
+        .unwrap();
+        let mut warnings = Vec::new();
+        apply_hybrid_ranking(
+            temp.path(),
+            &index,
+            task,
+            &tokens,
+            &lookup,
+            &mut candidates,
+            HybridOptions::with_embedder(true, &embedder),
+            scores.as_ref(),
+            &mut warnings,
+        )
+        .unwrap();
+        assert_eq!(
+            candidates[0].file_id, "source",
+            "semantic similarity must not promote a test file above the source it trailed"
+        );
+
+        // With explicit test intent the guard stands down.
+        let task = "fix relative ordering tests";
+        let tokens = ranker::query_tokens(task);
+        let mut candidates = vec![
+            ContextCandidate::new("source".to_string(), 100, 0),
+            ContextCandidate::new("testfile".to_string(), 90, 1),
+        ];
+        let scores = add_semantic_candidates(
+            temp.path(),
+            &index,
+            task,
+            &mut candidates,
+            5,
+            &tokens,
+            HybridOptions::with_embedder(true, &embedder),
+        )
+        .unwrap();
+        apply_hybrid_ranking(
+            temp.path(),
+            &index,
+            task,
+            &tokens,
+            &lookup,
+            &mut candidates,
+            HybridOptions::with_embedder(true, &embedder),
+            scores.as_ref(),
+            &mut warnings,
+        )
+        .unwrap();
+        assert_eq!(
+            candidates[0].file_id, "testfile",
+            "test-intent queries keep the blended order"
+        );
+    }
+
+    #[test]
+    fn compact_local_work_emits_injection_count_only_when_nonzero() {
+        let quiet = LocalWorkStats {
+            indexed_files: 10,
+            indexed_symbols: 5,
+            indexed_references: 2,
+            semantic_injected: 0,
+        };
+        assert!(compact_local_work_for_value(&quiet).get("inj").is_none());
+
+        let injecting = LocalWorkStats {
+            semantic_injected: 3,
+            ..quiet
+        };
+        assert_eq!(
+            compact_local_work_for_value(&injecting)
+                .get("inj")
+                .and_then(Value::as_u64),
+            Some(3)
+        );
+    }
+
+    #[cfg(feature = "embed")]
+    #[test]
+    fn identifier_queries_let_semantic_promote_but_never_demote() {
+        let temp = tempfile::tempdir().unwrap();
+        let index = minimal_index(vec![
+            minimal_file("anchor", "src/rst.rs"),
+            minimal_file("rival", "src/connect.rs"),
+        ]);
+        let lookup = IndexLookup::new(&index);
+        let embedder = FakeEmbedder;
+        // anchor embeds far from the query, rival embeds on top of it
+        let cache = embed::EmbedCache {
+            embedder: embed::LocalEmbedder::id(&embedder),
+            index_schema_version: SCHEMA_VERSION,
+            fingerprint: embed::index_fingerprint(&index),
+            dim: 2,
+            vectors: vec![vec![0.0, -1.0], vec![0.0, 1.0]],
+            chunk_owners: vec![0, 1],
+            chunk_symbols: vec![None, None],
+        };
+        embed::write_embeds(temp.path(), &cache, false).unwrap();
+
+        // Identifier-kind task (camelCase signal) with "relative" so the fake
+        // embedder maps the query next to the rival's vector.
+        let task = "fix RelativeHeader output";
+        let tokens = ranker::query_tokens(task);
+        assert_eq!(
+            classify::query_kind(task, &tokens),
+            classify::QueryKind::Identifier
+        );
+        let mut candidates = vec![
+            ContextCandidate::new("anchor".to_string(), 100, 0),
+            ContextCandidate::new("rival".to_string(), 90, 1),
+        ];
+        let scores = add_semantic_candidates(
+            temp.path(),
+            &index,
+            task,
+            &mut candidates,
+            5,
+            &tokens,
+            HybridOptions::with_embedder(true, &embedder),
+        )
+        .unwrap();
+        let mut warnings = Vec::new();
+        apply_hybrid_ranking(
+            temp.path(),
+            &index,
+            task,
+            &tokens,
+            &lookup,
+            &mut candidates,
+            HybridOptions::with_embedder(true, &embedder),
+            scores.as_ref(),
+            &mut warnings,
+        )
+        .unwrap();
+        assert_eq!(
+            candidates[0].file_id, "anchor",
+            "identifier queries must not let semantic similarity demote the lexical leader"
+        );
+    }
+
+    #[cfg(feature = "embed")]
+    #[test]
     fn hybrid_blend_is_deterministic() {
         let temp = tempfile::tempdir().unwrap();
         let index = minimal_index(vec![
@@ -8804,6 +9044,7 @@ mod tests {
                     indexed_files: 1,
                     indexed_symbols: 0,
                     indexed_references: 0,
+                    semantic_injected: 0,
                 },
             },
             timing: TimingStats::default(),
