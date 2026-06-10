@@ -9,6 +9,9 @@ repository = "https://github.com/PhilipJohnBasile/callsieve"
 readme = "README.md"
 keywords = ["token-savings", "coding-agents", "retrieval", "mcp", "local-first"]
 categories = ["command-line-utilities", "development-tools"]
+# Published crate carries only the binary's sources; benchmarks, editor
+# extension, and commercial docs stay repo-only.
+include = ["/src/**", "/Cargo.toml", "/README.md", "/CHANGELOG.md", "/LICENSE"]
 
 # cargo-binstall resolves release assets uploaded by .github/workflows/release.yml
 [package.metadata.binstall]

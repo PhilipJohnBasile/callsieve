@@ -1,0 +1,28 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "_meta": {
+    "io.modelcontextprotocol.registry/publisher-provided": {
+      "generated_by": "callsieve mcp-registry-manifest",
+      "local_first": true,
+      "publishing": "descriptor only; this command does not contact the network or publish",
+      "server_command": "callsieve mcp"
+    }
+  },
+  "description": "Local-first codebase retrieval for AI coding agents. Runs `callsieve mcp` over stdio and indexes repositories locally without cloud services or API keys.",
+  "name": "io.github.philipjohnbasile/callsieve",
+  "packages": [
+    {
+      "identifier": "ghcr.io/philipjohnbasile/callsieve:0.3.2",
+      "registryType": "oci",
+      "transport": {
+        "args": [
+          "mcp"
+        ],
+        "type": "stdio"
+      },
+      "version": "0.3.2"
+    }
+  ],
+  "title": "CallSieve",
+  "version": "0.3.2"
+}
