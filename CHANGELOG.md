@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.3.3 - 2026-06-10
+
 ### Added
 
 - Graph-consensus recall for natural-language queries: candidates supported by at least two independent top-3 anchors (via import/reference edges; same-directory counts only alongside an edge) are boosted, with two structural guards — a recommender always outranks its recommendations (boosts cap just below the strongest endorsing anchor's score, so a top-ranked truth can never be displaced by its own neighborhood), and identifier-kind queries keep their proven lexical order untouched. Motivated by the checked-in adjacency study (82% of NL misses are one hop from the lexical pool). Local harness over all 30 public NL issues: first-correct-file@5 rises from `20.0%` to `33.3%` on the default lexical path with no embeddings; the targeted regression case (django-11179, whose truth was itself the top anchor) is restored to rank 1. Formal public A/B re-run pending (resumable: `bench-run … --compare --resume` on both manifests); README keeps only formally validated numbers until it lands.
