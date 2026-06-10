@@ -1,0 +1,553 @@
+[
+ {
+  "id": "astropy__astropy-12907-nl",
+  "truth": "astropy/modeling/separable.py",
+  "reachable": true,
+  "pool_imports_truth": [],
+  "truth_imports_pool": [],
+  "pool_refs_truth": [],
+  "truth_refs_pool": [],
+  "same_dir": [
+   "astropy/modeling/models.py",
+   "astropy/modeling/functional_models.py",
+   "astropy/modeling/physical_models.py",
+   "astropy/modeling/bounding_box.py"
+  ],
+  "pool": [
+   "astropy/modeling/models.py",
+   "cextern/cfitsio/zlib/zlib.h",
+   "astropy/modeling/functional_models.py",
+   "astropy/modeling/physical_models.py",
+   "astropy/__init__.py",
+   "astropy/modeling/tests/test_models_quantities.py",
+   "astropy/extern/jquery/data/js/jquery.dataTables.js",
+   "astropy/modeling/bounding_box.py"
+  ]
+ },
+ {
+  "id": "astropy__astropy-14182-nl",
+  "truth": "astropy/io/ascii/rst.py",
+  "reachable": false,
+  "pool_imports_truth": [],
+  "truth_imports_pool": [],
+  "pool_refs_truth": [],
+  "truth_refs_pool": [],
+  "same_dir": [],
+  "pool": [
+   "astropy/extern/jquery/data/js/jquery.dataTables.js",
+   "astropy/io/ascii/tests/test_c_reader.py",
+   "astropy/io/fits/header.py",
+   "astropy/io/fits/hdu/table.py",
+   "astropy/table/table.py",
+   "cextern/cfitsio/lib/fitsio.h",
+   "cextern/cfitsio/lib/group.c",
+   "astropy/io/votable/converters.py"
+  ]
+ },
+ {
+  "id": "astropy__astropy-14365-nl",
+  "truth": "astropy/io/ascii/qdp.py",
+  "reachable": true,
+  "pool_imports_truth": [],
+  "truth_imports_pool": [],
+  "pool_refs_truth": [],
+  "truth_refs_pool": [
+   "astropy/extern/jquery/data/js/jquery.dataTables.js"
+  ],
+  "same_dir": [],
+  "pool": [
+   "astropy/extern/jquery/data/js/jquery.dataTables.js",
+   "astropy/extern/jquery/data/js/jquery-3.6.0.js",
+   "astropy/utils/data.py",
+   "cextern/cfitsio/lib/fits_hdecompress.c",
+   "astropy/extern/jquery/data/js/jquery.dataTables.min.js",
+   "astropy/io/votable/tree.py",
+   "cextern/wcslib/C/wcs.c",
+   "astropy/utils/tests/test_data.py"
+  ]
+ },
+ {
+  "id": "astropy__astropy-6938-nl",
+  "truth": "astropy/io/fits/fitsrec.py",
+  "reachable": true,
+  "pool_imports_truth": [],
+  "truth_imports_pool": [],
+  "pool_refs_truth": [
+   "astropy/io/fits/hdu/table.py"
+  ],
+  "truth_refs_pool": [
+   "astropy/table/table.py"
+  ],
+  "same_dir": [
+   "astropy/io/fits/connect.py"
+  ],
+  "pool": [
+   "astropy/io/votable/converters.py",
+   "astropy/io/ascii/tests/test_read.py",
+   "astropy/io/fits/connect.py",
+   "astropy/io/misc/hdf5.py",
+   "astropy/io/fits/hdu/nonstandard.py",
+   "astropy/table/pprint.py",
+   "astropy/table/table.py",
+   "astropy/io/fits/hdu/table.py"
+  ]
+ },
+ {
+  "id": "astropy__astropy-7746-nl",
+  "truth": "astropy/wcs/wcs.py",
+  "reachable": true,
+  "pool_imports_truth": [],
+  "truth_imports_pool": [],
+  "pool_refs_truth": [],
+  "truth_refs_pool": [
+   "cextern/cfitsio/lib/putkey.c"
+  ],
+  "same_dir": [],
+  "pool": [
+   "cextern/cfitsio/lib/putkey.c",
+   "astropy/_erfa/erfa_generator.py",
+   "cextern/erfa/erfa.h",
+   "cextern/cfitsio/zlib/inflate.c",
+   "cextern/erfa/eect00.c",
+   "astropy/utils/timer.py",
+   "cextern/erfa/gst06.c",
+   "astropy/modeling/tests/test_parameters.py"
+  ]
+ },
+ {
+  "id": "django__django-10914-nl",
+  "truth": "django/conf/global_settings.py",
+  "reachable": false,
+  "pool_imports_truth": [],
+  "truth_imports_pool": [],
+  "pool_refs_truth": [],
+  "truth_refs_pool": [],
+  "same_dir": [],
+  "pool": [
+   "django/core/files/uploadedfile.py",
+   "tests/file_storage/tests.py",
+   "django/db/models/fields/files.py",
+   "docs/ref/files/file.txt",
+   "django/core/files/__init__.py",
+   "django/contrib/sessions/backends/file.py",
+   "django/core/files/base.py",
+   "django/core/handlers/wsgi.py"
+  ]
+ },
+ {
+  "id": "django__django-11001-nl",
+  "truth": "django/db/models/sql/compiler.py",
+  "reachable": true,
+  "pool_imports_truth": [],
+  "truth_imports_pool": [
+   "django/db/models/expressions.py"
+  ],
+  "pool_refs_truth": [
+   "django/db/models/expressions.py",
+   "django/db/models/query.py"
+  ],
+  "truth_refs_pool": [
+   "django/db/backends/base/base.py",
+   "django/db/models/expressions.py",
+   "django/db/models/query.py"
+  ],
+  "same_dir": [],
+  "pool": [
+   "django/db/backends/base/base.py",
+   "django/db/models/query.py",
+   "django/db/models/expressions.py",
+   "docs/topics/db/queries.txt",
+   "django/core/checks/database.py",
+   "tests/select_for_update/tests.py",
+   "django/contrib/auth/models.py",
+   "django/contrib/contenttypes/models.py"
+  ]
+ },
+ {
+  "id": "django__django-11039-nl",
+  "truth": "django/core/management/commands/sqlmigrate.py",
+  "reachable": true,
+  "pool_imports_truth": [],
+  "truth_imports_pool": [
+   "django/db/__init__.py"
+  ],
+  "pool_refs_truth": [],
+  "truth_refs_pool": [
+   "django/db/transaction.py"
+  ],
+  "same_dir": [],
+  "pool": [
+   "django/db/transaction.py",
+   "tests/user_commands/management/commands/transaction.py",
+   "django/db/migrations/migration.py",
+   "django/core/checks/database.py",
+   "django/contrib/auth/migrations/0011_update_proxy_permissions.py",
+   "django/db/__init__.py",
+   "django/contrib/contenttypes/migrations/0002_remove_content_type_name.py",
+   "django/contrib/admin/migrations/0001_initial.py"
+  ]
+ },
+ {
+  "id": "django__django-11049-nl",
+  "truth": "django/db/models/fields/__init__.py",
+  "reachable": true,
+  "pool_imports_truth": [
+   "django/db/models/functions/mixins.py"
+  ],
+  "truth_imports_pool": [
+   "django/db/models/expressions.py",
+   "django/utils/duration.py"
+  ],
+  "pool_refs_truth": [
+   "django/contrib/auth/forms.py",
+   "django/db/models/functions/mixins.py",
+   "django/forms/widgets.py"
+  ],
+  "truth_refs_pool": [
+   "django/db/models/expressions.py",
+   "django/forms/widgets.py",
+   "django/utils/duration.py",
+   "js_tests/qunit/qunit.js"
+  ],
+  "same_dir": [],
+  "pool": [
+   "django/utils/duration.py",
+   "django/contrib/admin/static/admin/js/inlines.js",
+   "django/db/models/expressions.py",
+   "django/forms/widgets.py",
+   "js_tests/qunit/qunit.js",
+   "django/db/models/functions/mixins.py",
+   "tests/model_fields/test_durationfield.py",
+   "django/contrib/auth/forms.py"
+  ]
+ },
+ {
+  "id": "django__django-11099-nl",
+  "truth": "django/contrib/auth/validators.py",
+  "reachable": true,
+  "pool_imports_truth": [
+   "django/contrib/auth/models.py"
+  ],
+  "truth_imports_pool": [],
+  "pool_refs_truth": [
+   "django/contrib/auth/models.py"
+  ],
+  "truth_refs_pool": [],
+  "same_dir": [
+   "django/contrib/auth/models.py"
+  ],
+  "pool": [
+   "django/urls/resolvers.py",
+   "django/contrib/admin/static/admin/js/urlify.js",
+   "django/contrib/auth/models.py",
+   "django/core/exceptions.py",
+   "django/db/models/expressions.py",
+   "django/db/models/query.py",
+   "js_tests/qunit/qunit.js",
+   "tests/auth_tests/test_management.py"
+  ]
+ },
+ {
+  "id": "django__django-11133-nl",
+  "truth": "django/http/response.py",
+  "reachable": true,
+  "pool_imports_truth": [],
+  "truth_imports_pool": [],
+  "pool_refs_truth": [
+   "django/contrib/admindocs/views.py",
+   "django/contrib/auth/views.py",
+   "django/contrib/flatpages/views.py",
+   "django/contrib/syndication/views.py"
+  ],
+  "truth_refs_pool": [],
+  "same_dir": [],
+  "pool": [
+   "django/contrib/admindocs/views.py",
+   "django/contrib/auth/views.py",
+   "django/views/__init__.py",
+   "django/contrib/admin/views/__init__.py",
+   "django/contrib/syndication/views.py",
+   "django/contrib/messages/views.py",
+   "django/contrib/flatpages/views.py",
+   "tests/generic_views/views.py"
+  ]
+ },
+ {
+  "id": "django__django-11179-nl",
+  "truth": "django/db/models/deletion.py",
+  "reachable": true,
+  "pool_imports_truth": [
+   "django/db/models/base.py"
+  ],
+  "truth_imports_pool": [],
+  "pool_refs_truth": [
+   "django/contrib/contenttypes/fields.py",
+   "django/db/models/base.py",
+   "tests/auth_tests/models/with_foreign_key.py"
+  ],
+  "truth_refs_pool": [
+   "django/contrib/contenttypes/fields.py",
+   "django/db/models/base.py"
+  ],
+  "same_dir": [
+   "django/db/models/base.py"
+  ],
+  "pool": [
+   "django/contrib/admin/static/admin/js/admin/RelatedObjectLookups.js",
+   "django/db/backends/base/schema.py",
+   "django/db/models/fields/related_descriptors.py",
+   "tests/auth_tests/models/with_foreign_key.py",
+   "django/contrib/contenttypes/fields.py",
+   "django/db/migrations/autodetector.py",
+   "django/db/models/base.py",
+   "django/db/models/fields/__init__.py"
+  ]
+ },
+ {
+  "id": "django__django-11283-nl",
+  "truth": "django/contrib/auth/migrations/0011_update_proxy_permissions.py",
+  "reachable": true,
+  "pool_imports_truth": [],
+  "truth_imports_pool": [
+   "django/db/__init__.py",
+   "django/db/models/__init__.py"
+  ],
+  "pool_refs_truth": [],
+  "truth_refs_pool": [],
+  "same_dir": [],
+  "pool": [
+   "django/db/models/fields/proxy.py",
+   "django/contrib/gis/db/models/proxy.py",
+   "django/db/models/__init__.py",
+   "django/contrib/gis/db/models/__init__.py",
+   "django/db/migrations/migration.py",
+   "tests/proxy_models/models.py",
+   "tests/auth_tests/models/proxy.py",
+   "django/db/__init__.py"
+  ]
+ },
+ {
+  "id": "django__django-11422-nl",
+  "truth": "django/utils/autoreload.py",
+  "reachable": true,
+  "pool_imports_truth": [],
+  "truth_imports_pool": [],
+  "pool_refs_truth": [
+   "django/core/management/__init__.py"
+  ],
+  "truth_refs_pool": [],
+  "same_dir": [],
+  "pool": [
+   "django/contrib/admin/views/main.py",
+   "django/core/management/__init__.py",
+   "django/contrib/auth/management/__init__.py",
+   "django/contrib/contenttypes/management/__init__.py",
+   "django/db/migrations/autodetector.py",
+   "django/contrib/sites/management.py",
+   "tests/admin_scripts/tests.py",
+   "django/contrib/admin/widgets.py"
+  ]
+ },
+ {
+  "id": "django__django-11564-nl",
+  "truth": "django/conf/__init__.py",
+  "reachable": true,
+  "pool_imports_truth": [
+   "django/conf/urls/static.py",
+   "django/contrib/admin/helpers.py",
+   "django/contrib/admin/widgets.py",
+   "django/templatetags/static.py",
+   "django/urls/__init__.py"
+  ],
+  "truth_imports_pool": [],
+  "pool_refs_truth": [],
+  "truth_refs_pool": [],
+  "same_dir": [],
+  "pool": [
+   "django/conf/urls/static.py",
+   "django/urls/__init__.py",
+   "django/templatetags/static.py",
+   "tests/view_tests/tests/test_static.py",
+   "django/contrib/admin/widgets.py",
+   "django/views/static.py",
+   "django/contrib/admin/helpers.py",
+   "django/urls/base.py"
+  ]
+ },
+ {
+  "id": "django__django-11583-nl",
+  "truth": "django/utils/autoreload.py",
+  "reachable": false,
+  "pool_imports_truth": [],
+  "truth_imports_pool": [],
+  "pool_refs_truth": [],
+  "truth_refs_pool": [],
+  "same_dir": [],
+  "pool": [
+   "django/contrib/gis/db/models/functions.py",
+   "django/core/exceptions.py",
+   "django/db/__init__.py",
+   "django/db/models/fields/__init__.py",
+   "django/template/defaultfilters.py",
+   "django/db/models/query.py",
+   "tests/model_forms/models.py",
+   "django/core/paginator.py"
+  ]
+ },
+ {
+  "id": "django__django-11630-nl",
+  "truth": "django/core/checks/model_checks.py",
+  "reachable": true,
+  "pool_imports_truth": [],
+  "truth_imports_pool": [
+   "django/db/models/__init__.py"
+  ],
+  "pool_refs_truth": [],
+  "truth_refs_pool": [],
+  "same_dir": [
+   "django/core/checks/database.py"
+  ],
+  "pool": [
+   "django/db/models/sql/query.py",
+   "django/db/backends/base/introspection.py",
+   "django/db/models/__init__.py",
+   "django/contrib/gis/db/models/__init__.py",
+   "django/core/checks/database.py",
+   "django/contrib/contenttypes/fields.py",
+   "django/db/__init__.py",
+   "tests/multiple_database/models.py"
+  ]
+ },
+ {
+  "id": "django__django-11797-nl",
+  "truth": "django/db/models/lookups.py",
+  "reachable": true,
+  "pool_imports_truth": [
+   "django/db/models/sql/query.py"
+  ],
+  "truth_imports_pool": [
+   "django/db/models/expressions.py",
+   "django/db/models/sql/query.py"
+  ],
+  "pool_refs_truth": [
+   "django/db/models/expressions.py",
+   "django/db/models/sql/query.py"
+  ],
+  "truth_refs_pool": [
+   "django/db/models/expressions.py",
+   "django/db/models/sql/query.py"
+  ],
+  "same_dir": [
+   "django/db/models/query.py",
+   "django/db/models/expressions.py"
+  ],
+  "pool": [
+   "django/db/models/query.py",
+   "django/db/models/sql/query.py",
+   "js_tests/qunit/qunit.js",
+   "django/db/models/expressions.py",
+   "django/contrib/admin/static/admin/js/core.js",
+   "tests/raw_query/tests.py",
+   "django/db/models/fields/related_descriptors.py",
+   "django/db/models/sql/compiler.py"
+  ]
+ },
+ {
+  "id": "django__django-11848-nl",
+  "truth": "django/utils/http.py",
+  "reachable": true,
+  "pool_imports_truth": [],
+  "truth_imports_pool": [
+   "django/core/exceptions.py"
+  ],
+  "pool_refs_truth": [],
+  "truth_refs_pool": [
+   "django/core/exceptions.py"
+  ],
+  "same_dir": [
+   "django/utils/dates.py"
+  ],
+  "pool": [
+   "django/views/generic/dates.py",
+   "django/db/models/query.py",
+   "django/utils/dates.py",
+   "django/db/models/functions/text.py",
+   "django/core/exceptions.py",
+   "js_tests/admin/core.test.js",
+   "django/db/models/fields/__init__.py",
+   "django/db/models/sql/query.py"
+  ]
+ },
+ {
+  "id": "django__django-11905-nl",
+  "truth": "django/db/models/lookups.py",
+  "reachable": true,
+  "pool_imports_truth": [],
+  "truth_imports_pool": [
+   "django/utils/datastructures.py"
+  ],
+  "pool_refs_truth": [],
+  "truth_refs_pool": [
+   "django/utils/datastructures.py",
+   "django/utils/log.py"
+  ],
+  "same_dir": [
+   "django/db/models/query.py"
+  ],
+  "pool": [
+   "django/contrib/admin/filters.py",
+   "js_tests/qunit/qunit.js",
+   "django/db/models/query.py",
+   "django/contrib/sessions/backends/base.py",
+   "django/utils/datastructures.py",
+   "django/utils/log.py",
+   "django/template/library.py",
+   "tests/admin_filters/tests.py"
+  ]
+ },
+ {
+  "id": "django__django-11964-nl",
+  "truth": "django/db/models/enums.py",
+  "reachable": true,
+  "pool_imports_truth": [],
+  "truth_imports_pool": [],
+  "pool_refs_truth": [
+   "django/db/models/sql/query.py",
+   "django/forms/models.py"
+  ],
+  "truth_refs_pool": [
+   "js_tests/qunit/qunit.js"
+  ],
+  "same_dir": [],
+  "pool": [
+   "django/forms/fields.py",
+   "js_tests/qunit/qunit.js",
+   "django/forms/models.py",
+   "django/contrib/contenttypes/fields.py",
+   "django/contrib/admin/options.py",
+   "django/db/models/sql/query.py",
+   "tests/migrations/test_autodetector.py",
+   "django/contrib/contenttypes/models.py"
+  ]
+ },
+ {
+  "id": "django__django-12113-nl",
+  "truth": "django/db/backends/sqlite3/creation.py",
+  "reachable": false,
+  "pool_imports_truth": [],
+  "truth_imports_pool": [],
+  "pool_refs_truth": [],
+  "truth_refs_pool": [],
+  "same_dir": [],
+  "pool": [
+   "tests/test_utils/tests.py",
+   "django/test/__init__.py",
+   "tests/multiple_database/tests.py",
+   "tests/generic_views/test_base.py",
+   "tests/backends/sqlite/tests.py",
+   "tests/migrations/test_base.py",
+   "tests/test_client_regress/tests.py",
+   "django/template/defaultfilters.py"
+  ]
+ }
+]
