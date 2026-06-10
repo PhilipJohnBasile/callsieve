@@ -42,6 +42,7 @@ const SNIPPETS_PER_FILE: usize = 1;
 
 /// Benchmarks pick the embedding model via CALLSIEVE_BENCH_EMBED_MODEL
 /// (`code` selects the jina code model) so A/B model runs need no CLI churn.
+#[cfg(feature = "embed")]
 fn bench_embedder() -> anyhow::Result<crate::query::embed::FastembedEmbedder> {
     if std::env::var("CALLSIEVE_BENCH_EMBED_MODEL").as_deref() == Ok("code") {
         crate::query::embed::FastembedEmbedder::new_code()
