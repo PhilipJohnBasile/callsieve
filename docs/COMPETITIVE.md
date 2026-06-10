@@ -1,12 +1,20 @@
 # Competitive Notes
 
-Last checked: 2026-06-08.
+Last checked: 2026-06-10 (v0.3.2).
 
 CallSieve is the codebase filter underneath coding agents. The winning position is not "another agent" and not "bigger context." It is local, deterministic retrieval that makes agents read the smallest useful packet before they spend model tokens on grep, search, and repeated file reads.
 
 ## Current Position
 
-CallSieve already has the right wedge:
+CallSieve already has the right wedge, and as of v0.3.2 several previously aspirational claims are measured:
+
+- Retrieval quality: lexical first-correct-file@5 is `60.0%` on the public 50-issue SWE-bench Lite subset (rarity-scaled filename-stem ranking, +4.0 pp over v0.3.1 with zero regressions). The opt-in code-tuned embedding model (`--embed-model code`) reaches `26.7%` vs `20.0%` lexical on the 30-issue natural-language slice.
+- Speed: the daemon serves `agent-context` from an in-memory index over a local socket — `0.31s` end-to-end on a 2.7k-file Django checkout vs `0.61s` direct, byte-identical output. The index itself is 55% smaller (schema 9).
+- Team onboarding: `index-export`/`index-import` give Cursor-style team warm starts through any channel the team already trusts, verified by content hash, with zero code upload.
+- Zero-decision setup: `callsieve setup-auto` detects installed agents and configures rules, MCP, and lifecycle hooks in one command.
+- Distribution: working release binaries for four targets, `brew install philipjohnbasile/callsieve/callsieve`, and cargo-binstall support.
+
+The original wedge holds:
 
 - Local Rust CLI and MCP server.
 - Local JSON index, no cloud service, no API key, no vector database by default.
@@ -58,14 +66,21 @@ CallSieve should be better in the places competitors are structurally weak:
 1. Make compact `instruction.x` local expansion unavoidable across every context-bearing surface: CLI, MCP, hooks, setup files, editor extension, `begin`, `guard`, and proof workflows. Default agent-context JSON should carry read-first indexes instead of duplicated file paths; Markdown and UI surfaces can expand them into commands.
 2. Improve graph quality for references, callers, callees, imports, related tests, ownership, and blast radius.
 3. Continue extending compact ranking explainability beyond the top file: default skim caps `context.sel.next` to one next-ranked file, skim `g.u` and `g.d` name one upstream/downstream non-test code-file preview for the top file without snippets, default skim defers lower-file graph detail and caller/callee paths to local `focus` or richer profiles, compact skim symbols use arrays such as `[name,line]` with functions as the implicit kind and short trailing codes for non-function kinds, top-file skim reasons and `context.sel.sig` use short codes such as `sym`, `sy`, `kw`, `ct`, and `comp`, `context.sel.top` and `context.sel.next` use read-first indexes when possible, and indexed selection entries omit duplicate scores because read-first array order already carries ranking. `instruction.x.o` and `instruction.x.n` can focus top and next ranked symbols locally before grep by indexing into `context.read_first`; legacy or wider packets may use `instruction.x.top` or `instruction.x.next`. Symbol focus now returns the selected code unit as a bounded local snippet plus compact `calls`, `called_by`, and `related_tests` hints before whole-file reads, with generated `--line` selectors to disambiguate same-name symbols, opt-in non-call `references`, and truncation metadata only when the snippet cap is hit. Competitive-positioning docs now have an explicit local ranking signal so product-strategy tasks do not drift into generic setup docs. Further work should keep the packet small while adding only signals that prevent blind grep.
-4. Keep improving local index freshness that competes with Cursor's low-latency update story, but without uploading code. Direct CLI, grep shim, and MCP context-first paths already rebuild missing or stale indexes before ranking.
-5. Keep optional semantic retrieval behind a local opt-in flag until benchmarks prove it improves first-correct-file recall over lexical ranking.
+4. Keep improving local index freshness that competes with Cursor's low-latency update story, but without uploading code. Direct CLI, grep shim, and MCP context-first paths already rebuild missing or stale indexes before ranking; the daemon now stat-checks freshness per tick instead of rebuilding, and serves queries from memory.
+5. Semantic retrieval status (settled by benchmarks, June 2026): hybrid reranking is proven (+3.3 pp NL with default BGE-small, +6.7 pp with the opt-in code model) and stays opt-in; union-pass injection has never fired with any practical local model and should not receive further tuning effort. General-purpose bigger models (BGE-base) are too slow to ship; the code-tuned model is the quality tier.
 6. Keep expanding competitor-style evals: local suite and report outputs now include first-correct-file@k, expected-file recall, context packet tokens, avoided grep commands, and avoided file reads; use `perf-report` for wall-clock retrieval time.
 7. Make setup harder to ignore: generated rules and hooks should block broad search before context and inject focused expansion commands.
+
+## Distribution Next Steps (need owner credentials)
+
+- crates.io: `cargo publish` (needs a crates.io token) so `cargo install callsieve` works without `--git`.
+- VS Code Marketplace: publish `editors/vscode` (needs an Azure DevOps publisher + PAT for `vsce publish`).
+- MCP registry: publish the descriptor from `callsieve mcp-registry-manifest` (needs registry auth).
 
 ## Do Not Chase
 
 - Do not build a SaaS app first.
+- Do not tune union-pass semantic injection further; five experiments (cosine floors, chunk caps, BGE-base, dir-path boosts, code model) all left injection at zero. Reranking is where embeddings pay.
 - Do not add auth.
 - Do not add a dashboard.
 - Do not make cloud indexing the default.
