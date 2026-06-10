@@ -21,7 +21,9 @@ jobs:
         run: |
           git init --initial-branch=main .
           git remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-          git fetch --depth=1 origin "${GITHUB_REF}"
+          # Fetch the exact commit, not the branch tip: rapid successive
+          # pushes otherwise leave older runs unable to read their own SHA.
+          git fetch --depth=1 origin "${GITHUB_SHA}"
           git checkout --detach "${GITHUB_SHA}"
 
       - name: Install Rust
@@ -54,7 +56,9 @@ jobs:
         run: |
           git init --initial-branch=main .
           git remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-          git fetch --depth=1 origin "${GITHUB_REF}"
+          # Fetch the exact commit, not the branch tip: rapid successive
+          # pushes otherwise leave older runs unable to read their own SHA.
+          git fetch --depth=1 origin "${GITHUB_SHA}"
           git checkout --detach "${GITHUB_SHA}"
 
       - name: Install Rust
