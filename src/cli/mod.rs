@@ -14640,20 +14640,26 @@ fn client_hook_post_tool_use(
         state.context_seen = true;
     }
     record_confirmed_reads(&mut state, root, &command);
-    append_client_hook_trace_event(
-        root,
-        client,
-        &state,
-        &task,
-        codex_hook_trace_event(&input, &command, false),
-    )?;
+    let edited_file = hook_edited_file(&input, root);
+    let edit_impact = edited_file
+        .as_deref()
+        .and_then(|edited| hook_edit_impact_context(root, edited));
+    let mut trace_event = codex_hook_trace_event(&input, &command, false);
+    if edited_file.is_some() {
+        trace_event["classification"] = serde_json::Value::String("edit_impact".to_string());
+    }
+    append_client_hook_trace_event(root, client, &state, &task, trace_event)?;
     save_client_hook_state(root, client, &state)?;
-    Ok(serde_json::json!({
+    let mut response = serde_json::json!({
         "suppressOutput": true,
         "hookSpecificOutput": {
             "hookEventName": "PostToolUse"
         }
-    }))
+    });
+    if let Some(impact) = edit_impact {
+        response["hookSpecificOutput"]["additionalContext"] = serde_json::Value::String(impact);
+    }
+    Ok(response)
 }
 
 fn client_hook_permission_request(

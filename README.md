@@ -1,5 +1,10 @@
 # CallSieve
 
+[![CI](https://github.com/PhilipJohnBasile/callsieve/actions/workflows/ci.yml/badge.svg)](https://github.com/PhilipJohnBasile/callsieve/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/PhilipJohnBasile/callsieve)](https://github.com/PhilipJohnBasile/callsieve/releases/latest)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Homebrew](https://img.shields.io/badge/brew-philipjohnbasile%2Fcallsieve-orange)](https://github.com/PhilipJohnBasile/homebrew-callsieve)
+
 CallSieve is the local codebase filter for AI coding agents.
 
 It indexes a repository and returns compact, structured context so agents can spend fewer tokens on blind grep, file discovery, repeated reads, and rediscovering project structure.

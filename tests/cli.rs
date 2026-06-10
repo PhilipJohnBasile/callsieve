@@ -8383,3 +8383,31 @@ fn claude_post_tool_use_returns_edit_impact_for_indexed_files() {
         "reads must not attach impact context"
     );
 }
+
+#[test]
+fn generic_client_post_tool_use_returns_edit_impact() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    fs::write(root.join("util.ts"), "export function helper() {}\n").unwrap();
+    fs::write(
+        root.join("app.ts"),
+        "import { helper } from \"./util\";\nexport function caller() { helper(); }\n",
+    )
+    .unwrap();
+    let root_str = root.to_str().unwrap();
+    assert!(run(&["index", root_str]).status.success());
+
+    let edit = run_with_stdin(
+        &["opencode-hook", "post-tool-use", root_str],
+        r#"{"session_id":"gimpact-1","tool_name":"Write","tool_input":{"file_path":"util.ts"}}"#,
+    );
+    let response: Value = serde_json::from_slice(&edit.stdout).unwrap();
+    let context = response["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .expect("generic-client edit should attach impact context");
+    assert!(
+        context.contains("CallSieve impact: editing util.ts"),
+        "{context}"
+    );
+    assert!(context.contains("app.ts"), "{context}");
+}
