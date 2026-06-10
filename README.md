@@ -61,7 +61,7 @@ index repo -> ask for agent context -> read returned files first -> grep only if
 ## Try It In 60 Seconds
 
 ```bash
-cargo install --git https://github.com/PhilipJohnBasile/callsieve
+brew install philipjohnbasile/callsieve/callsieve   # or: cargo install --git https://github.com/PhilipJohnBasile/callsieve
 callsieve demo /path/to/repo --task "find where login is handled"
 callsieve hook install /path/to/repo --client generic --strict --force
 callsieve hook doctor /path/to/repo

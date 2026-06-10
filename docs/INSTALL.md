@@ -46,6 +46,14 @@ callsieve demo /path/to/repo --task "find where login sessions are created"
 
 `demo` builds the local index, returns the first files an agent should read, exposes `retrieval_cost.retrieval_model_tokens = 0`, and reports platform-neutral `context_payload_reduction` so you can verify the core loop before configuring an AI tool.
 
+### Install With Homebrew
+
+```bash
+brew install philipjohnbasile/callsieve/callsieve
+```
+
+The tap at [PhilipJohnBasile/homebrew-callsieve](https://github.com/PhilipJohnBasile/homebrew-callsieve) installs the prebuilt release binary for macOS (Apple silicon and Intel) and Linux x86_64.
+
 ### Install With cargo-binstall
 
 If you have [cargo-binstall](https://github.com/cargo-bins/cargo-binstall), it downloads the prebuilt release binary instead of compiling:
