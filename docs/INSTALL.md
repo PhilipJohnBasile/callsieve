@@ -418,6 +418,28 @@ callsieve agent-setup /path/to/repo --client warp --force
 
 Generated files are project-local. VS Code, Junie, and valid Zed JSON settings preserve unrelated fields when regenerated with `--force`. If Zed settings are JSONC or invalid JSON, CallSieve leaves `.zed/settings.json` untouched and writes `.callsieve/integrations/zed-settings.json` as a template with a warning. JetBrains AI Assistant setup is docs/template-only; use `--client junie` for Junie. Warp cloud-agent setup is template-only unless the Warp/Oz runtime can run the local `callsieve` binary.
 
+## JetBrains And PhpStorm In Practice
+
+JetBrains IDEs (PhpStorm, IntelliJ, GoLand, etc.) do not run repo-local lifecycle hooks, so the practical setup is layered:
+
+1. **CLI policy (works everywhere):** generate the project rules so any AI assistant in the IDE is instructed to run CallSieve before broad search:
+
+   ```bash
+   callsieve agent-setup /path/to/repo --client jetbrains --force
+   ```
+
+2. **Repo-local launcher (for terminal-driven agents):** if you start an agent from the IDE terminal, launch it through `/path/to/repo/.callsieve/agent-launch.sh <command>` so the grep/rg shims intercept broad search with a context packet first. Global PATH and shell profiles stay untouched.
+
+3. **MCP (where the AI plugin supports stdio MCP):** point the plugin at `callsieve mcp` using `callsieve mcp-config /path/to/repo --format json`. JetBrains AI Assistant and GitHub Copilot in JetBrains cannot currently launch through a repo-local wrapper or local hooks; for those, the CLI policy file is the integration — their value from CallSieve comes from the agent obeying "run `callsieve agent-context` first."
+
+PhpStorm smoke test (any PHP codebase — verified against `Seldaek/monolog`: 217 `.php` files indexed; classes, interfaces, and functions extracted; "change how handlers buffer and flush records" surfaces `FingersCrossedHandler::flushBuffer` first):
+
+```bash
+callsieve agent-context /path/to/repo "find where auth is handled" --format markdown
+```
+
+CallSieve is not replacing the IDE index. PhpStorm's index drives IDE navigation; CallSieve creates compact, auditable context packets for AI agents before broad search, and the two never interact.
+
 ## Other Stdio MCP AI CLIs
 
 If the tool supports stdio MCP, ask CallSieve for a portable config:
