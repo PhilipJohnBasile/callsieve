@@ -267,6 +267,29 @@ For Codex, `codex-hooks doctor --strict --smoke` validates the `slim` hook profi
 
 Do not mutate global PATH, global shell profiles, editor global settings, or cloud configuration unless the user explicitly asks.
 
+## Session Learning, Receipts, And Team Transfer
+
+Observed sessions teach retrieval and produce auditable evidence:
+
+```bash
+# After hook-served sessions, files the agent actually read become
+# confirmed task-memory associations automatically. Recall them:
+callsieve agent-context <repo> "<task>" --memory-boost
+
+# Tamper-evident summary of the most recent observed session
+# (packets, packet tokens, reads, broad searches, edit impacts):
+callsieve receipt <repo> --latest
+callsieve receipts <repo>          # per-repo rollup across sessions
+
+# Ship a warm index and learned associations to teammates or CI:
+callsieve index-export <repo> --out team-index.json
+callsieve memory-export <repo> --out team-memory.json
+callsieve index-import <repo> --from team-index.json
+callsieve memory-import <repo> --from team-memory.json
+```
+
+Editing an indexed file through a hook-capable client (Claude Code, Copilot, OpenCode, Antigravity, Cline) returns an impact note — callers, related tests, blast-radius risk — as additional context on the edit event; follow it with `callsieve focus` before broad reads.
+
 ## Evidence Commands
 
 For deterministic local shakedown:
