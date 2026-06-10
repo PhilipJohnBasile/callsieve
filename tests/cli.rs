@@ -8342,3 +8342,44 @@ fn daemon_serves_agent_context_identical_to_direct_and_falls_back_after_stop() {
         "after daemon stop the direct path must serve the same packet"
     );
 }
+
+#[test]
+fn claude_post_tool_use_returns_edit_impact_for_indexed_files() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    fs::write(root.join("util.ts"), "export function helper() {}\n").unwrap();
+    fs::write(
+        root.join("app.ts"),
+        "import { helper } from \"./util\";\nexport function caller() { helper(); }\n",
+    )
+    .unwrap();
+    let root_str = root.to_str().unwrap();
+    assert!(run(&["index", root_str]).status.success());
+
+    let edit = run_with_stdin(
+        &["claude-hook", "post-tool-use", root_str],
+        r#"{"session_id":"impact-1","tool_name":"Edit","tool_input":{"file_path":"util.ts"}}"#,
+    );
+    let response: Value = serde_json::from_slice(&edit.stdout).unwrap();
+    let context = response["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .expect("edit on an indexed file should attach impact context");
+    assert!(
+        context.contains("CallSieve impact: editing util.ts"),
+        "{context}"
+    );
+    assert!(context.contains("app.ts"), "{context}");
+    assert!(context.contains("callsieve focus"), "{context}");
+
+    let read = run_with_stdin(
+        &["claude-hook", "post-tool-use", root_str],
+        r#"{"session_id":"impact-1","tool_name":"Read","tool_input":{"file_path":"util.ts"}}"#,
+    );
+    let response: Value = serde_json::from_slice(&read.stdout).unwrap();
+    assert!(
+        response["hookSpecificOutput"]
+            .get("additionalContext")
+            .is_none(),
+        "reads must not attach impact context"
+    );
+}

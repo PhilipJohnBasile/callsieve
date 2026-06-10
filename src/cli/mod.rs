@@ -250,6 +250,11 @@ pub enum Command {
         /// cache built with the same model).
         #[arg(long, value_enum, default_value_t = EmbedModelArg::Small)]
         embed_model: EmbedModelArg,
+
+        /// Boost files that observed agent sessions confirmed reading for
+        /// similar tasks (local task memory).
+        #[arg(long)]
+        memory_boost: bool,
     },
 
     /// Build an index, return a sample context packet, and report context reduction.
@@ -1000,6 +1005,47 @@ pub enum Command {
         #[arg(long)]
         allow_partial: bool,
     },
+
+    /// Write this repo's learned task memory to a portable file so teammates
+    /// (and other agents) inherit confirmed task-to-file associations.
+    #[command(name = "memory-export")]
+    MemoryExport {
+        path: PathBuf,
+
+        #[arg(long)]
+        out: PathBuf,
+    },
+
+    /// Merge an exported task memory into this repo's store (newest entry
+    /// per task wins; confirmed files union; 50-entry cap holds).
+    #[command(name = "memory-import")]
+    MemoryImport {
+        path: PathBuf,
+
+        #[arg(long)]
+        from: PathBuf,
+    },
+
+    /// Emit a tamper-evident receipt for one observed agent session: packets
+    /// served, context tokens, reads/greps, violations, edit impacts.
+    Receipt {
+        path: PathBuf,
+
+        /// Session id; defaults to the most recent session trace.
+        #[arg(long)]
+        session: Option<String>,
+
+        /// Use the most recent session trace (the default; accepted so the
+        /// command the Stop hook prints works verbatim).
+        #[arg(long, conflicts_with = "session")]
+        latest: bool,
+
+        #[arg(long, value_enum, default_value_t = ReceiptFormat::Json)]
+        format: ReceiptFormat,
+    },
+
+    /// Aggregate receipts across every recorded session trace in the repo.
+    Receipts { path: PathBuf },
 
     /// Generate Codex-first local bootstrap files without global PATH/profile mutation.
     CodexBootstrap {
@@ -2968,6 +3014,15 @@ struct CodexHookState {
     context_tokens: usize,
     #[serde(default)]
     context_files: usize,
+    /// Files the agent actually read after receiving context — the local
+    /// training signal for task memory. Capped, deduplicated.
+    #[serde(default)]
+    confirmed_reads: Vec<String>,
+    /// The retrieval task the current packet was built from (anaphoric
+    /// follow-ups are recovered into a full task); confirmed reads are keyed
+    /// to this, never to a raw "fix it"-style prompt.
+    #[serde(default)]
+    last_retrieval_task: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -3161,6 +3216,7 @@ pub fn run() -> Result<()> {
             git_boost,
             no_daemon,
             embed_model,
+            memory_boost,
         } => {
             let embeddings = embeddings || embeddings_env_enabled();
             if embeddings {
@@ -3175,12 +3231,14 @@ pub fn run() -> Result<()> {
                 token_budget,
                 format: agent_output_format_name(format).to_string(),
                 git_boost,
+                memory_boost,
                 pretty: output::json::is_pretty(),
             };
             // Daemon fast path: a running daemon answers from its in-memory
             // index. Embeddings and error-frame requests always load directly.
             if !no_daemon
                 && !embeddings
+                && !memory_boost
                 && error.is_none()
                 && let Some(rendered) = try_daemon_agent_context(&path, &request)
             {
@@ -3999,6 +4057,49 @@ pub fn run() -> Result<()> {
             let output = index_import(&path, &from, allow_partial)?;
             output::json::print(&output)?;
         }
+        Command::MemoryExport { path, out } => {
+            let (serialized, entries) = query::export_task_memory(&path)?;
+            if let Some(parent) = out.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+                fs::create_dir_all(parent)
+                    .with_context(|| format!("failed to create {}", parent.display()))?;
+            }
+            fs::write(&out, serialized)
+                .with_context(|| format!("failed to write {}", out.display()))?;
+            output::json::print(&serde_json::json!({
+                "command": "memory-export",
+                "root": root_label(&path),
+                "out": out.display().to_string(),
+                "entries": entries
+            }))?;
+        }
+        Command::MemoryImport { path, from } => {
+            let raw = fs::read_to_string(&from)
+                .with_context(|| format!("failed to read {}", from.display()))?;
+            let (imported, total) = query::merge_task_memory(&path, &raw)?;
+            output::json::print(&serde_json::json!({
+                "command": "memory-import",
+                "root": root_label(&path),
+                "from": from.display().to_string(),
+                "imported": imported,
+                "entries_total": total
+            }))?;
+        }
+        Command::Receipt {
+            path,
+            session,
+            latest: _,
+            format,
+        } => {
+            let receipt = session_receipt(&path, session.as_deref())?;
+            match format {
+                ReceiptFormat::Json => output::json::print(&receipt)?,
+                ReceiptFormat::Markdown => println!("{}", receipt_markdown(&receipt)),
+            }
+        }
+        Command::Receipts { path } => {
+            let output = session_receipts_rollup(&path)?;
+            output::json::print(&output)?;
+        }
         Command::Bootstrap {
             path,
             client,
@@ -4700,6 +4801,8 @@ struct AgentContextRequest {
     token_budget: usize,
     format: String,
     git_boost: bool,
+    #[serde(default)]
+    memory_boost: bool,
     pretty: bool,
 }
 
@@ -4751,6 +4854,7 @@ fn agent_context_output_for_index(
             hybrid,
             error_frames,
             git_boost: request.git_boost,
+            memory_boost: request.memory_boost,
         },
     )?;
     context.add_index_load_time(index_load_ms);
@@ -11909,6 +12013,257 @@ fn detect_agent_clients(
     detected
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum ReceiptFormat {
+    Json,
+    Markdown,
+}
+
+/// Per-session retrieval receipt: locally observed counts only — no
+/// estimated-savings claims — plus a content hash so tampering with a stored
+/// receipt is evident. The hash is FNV-1a, deliberately labeled
+/// tamper-evident rather than cryptographic.
+#[derive(Debug, Serialize)]
+struct SessionReceipt {
+    command: &'static str,
+    root: String,
+    session_id: String,
+    client: String,
+    callsieve_version: &'static str,
+    index_fingerprint: String,
+    context_packets: usize,
+    context_tokens: usize,
+    file_reads: usize,
+    grep_commands: usize,
+    policy_violations: usize,
+    edit_impacts: usize,
+    first_event_at: u64,
+    last_event_at: u64,
+    trace_path: String,
+    content_hash: String,
+}
+
+fn hook_trace_files(root: &Path) -> Vec<PathBuf> {
+    let mut traces = Vec::new();
+    let base = callsieve_dir(root);
+    let Ok(entries) = fs::read_dir(&base) else {
+        return traces;
+    };
+    for entry in entries.filter_map(|entry| entry.ok()) {
+        let dir = entry.path();
+        if !dir.is_dir()
+            || !dir
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.ends_with("-hooks"))
+        {
+            continue;
+        }
+        if let Ok(files) = fs::read_dir(&dir) {
+            for file in files.filter_map(|file| file.ok()) {
+                let path = file.path();
+                if path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.ends_with(".trace.json"))
+                {
+                    traces.push(path);
+                }
+            }
+        }
+    }
+    traces.sort();
+    traces
+}
+
+fn current_index_fingerprint(root: &Path) -> String {
+    store::json_store::load_index(root)
+        .map(|index| indexer::index_fingerprint(&index))
+        .unwrap_or_default()
+}
+
+fn receipt_from_trace(root: &Path, trace_path: &Path) -> Result<SessionReceipt> {
+    receipt_from_trace_with_fingerprint(root, trace_path, &current_index_fingerprint(root))
+}
+
+fn receipt_from_trace_with_fingerprint(
+    root: &Path,
+    trace_path: &Path,
+    fingerprint: &str,
+) -> Result<SessionReceipt> {
+    let raw = fs::read_to_string(trace_path)
+        .with_context(|| format!("failed to read {}", trace_path.display()))?;
+    let trace: serde_json::Value = serde_json::from_str(&raw)
+        .with_context(|| format!("failed to parse {}", trace_path.display()))?;
+    let metadata = trace.get("metadata").cloned().unwrap_or_default();
+    let session_id = metadata
+        .get("session_id")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let client = metadata
+        .get("client")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+
+    let empty = Vec::new();
+    let events = trace
+        .get("events")
+        .and_then(serde_json::Value::as_array)
+        .unwrap_or(&empty);
+    let classification = |event: &serde_json::Value| -> String {
+        event
+            .get("classification")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string()
+    };
+    let mut receipt = SessionReceipt {
+        command: "receipt",
+        root: root_label(root),
+        session_id,
+        client,
+        callsieve_version: env!("CARGO_PKG_VERSION"),
+        index_fingerprint: fingerprint.to_string(),
+        context_packets: 0,
+        context_tokens: 0,
+        file_reads: 0,
+        grep_commands: 0,
+        policy_violations: 0,
+        edit_impacts: 0,
+        first_event_at: u64::MAX,
+        last_event_at: 0,
+        trace_path: repo_relative_display(root, trace_path),
+        content_hash: String::new(),
+    };
+    for event in events {
+        match classification(event).as_str() {
+            "callsieve_context" => {
+                receipt.context_packets += 1;
+                receipt.context_tokens += event
+                    .get("tokens")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or_default() as usize;
+            }
+            "file_read" => receipt.file_reads += 1,
+            "grep" => receipt.grep_commands += 1,
+            "edit_impact" => receipt.edit_impacts += 1,
+            _ => {}
+        }
+        if event
+            .get("policy_violation")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+        {
+            receipt.policy_violations += 1;
+        }
+        if let Some(timestamp) = event.get("timestamp").and_then(serde_json::Value::as_u64) {
+            receipt.first_event_at = receipt.first_event_at.min(timestamp);
+            receipt.last_event_at = receipt.last_event_at.max(timestamp);
+        }
+    }
+    if receipt.first_event_at == u64::MAX {
+        receipt.first_event_at = 0;
+    }
+    receipt.content_hash =
+        indexer::stable_content_hash(serde_json::to_string(&receipt)?.as_bytes());
+    Ok(receipt)
+}
+
+fn session_receipt(root: &Path, session: Option<&str>) -> Result<SessionReceipt> {
+    let traces = hook_trace_files(root);
+    let trace_path = match session {
+        Some(session) => {
+            let sanitized = format!("{}.trace.json", safe_pilot_label(session));
+            traces
+                .into_iter()
+                .find(|path| {
+                    path.file_name()
+                        .and_then(|name| name.to_str())
+                        .is_some_and(|name| {
+                            name == format!("{session}.trace.json") || name == sanitized
+                        })
+                })
+                .with_context(|| format!("no session trace found for {session}"))?
+        }
+        None => traces
+            .into_iter()
+            .max_by_key(|path| {
+                fs::metadata(path)
+                    .and_then(|metadata| metadata.modified())
+                    .ok()
+            })
+            .context("no session traces recorded under .callsieve/*-hooks/")?,
+    };
+    receipt_from_trace(root, &trace_path)
+}
+
+fn receipt_markdown(receipt: &SessionReceipt) -> String {
+    format!(
+        "# CallSieve retrieval receipt\n\n- Session: `{}` ({})\n- Repo: {} (index `{}`)\n- Context packets: {} (~{} tokens)\n- File reads: {}  |  Broad searches: {}  |  Policy violations: {}\n- Edit-impact notes: {}\n- Window: {} -> {}\n- callsieve v{}  |  content hash (tamper-evident): `{}`\n",
+        receipt.session_id,
+        receipt.client,
+        receipt.root,
+        receipt.index_fingerprint,
+        receipt.context_packets,
+        receipt.context_tokens,
+        receipt.file_reads,
+        receipt.grep_commands,
+        receipt.policy_violations,
+        receipt.edit_impacts,
+        receipt.first_event_at,
+        receipt.last_event_at,
+        receipt.callsieve_version,
+        receipt.content_hash,
+    )
+}
+
+#[derive(Debug, Serialize)]
+struct SessionReceiptsRollup {
+    command: &'static str,
+    root: String,
+    sessions: usize,
+    context_packets: usize,
+    context_tokens: usize,
+    file_reads: usize,
+    grep_commands: usize,
+    policy_violations: usize,
+    edit_impacts: usize,
+    content_hash: String,
+}
+
+fn session_receipts_rollup(root: &Path) -> Result<SessionReceiptsRollup> {
+    let mut rollup = SessionReceiptsRollup {
+        command: "receipts",
+        root: root_label(root),
+        sessions: 0,
+        context_packets: 0,
+        context_tokens: 0,
+        file_reads: 0,
+        grep_commands: 0,
+        policy_violations: 0,
+        edit_impacts: 0,
+        content_hash: String::new(),
+    };
+    let fingerprint = current_index_fingerprint(root);
+    for trace_path in hook_trace_files(root) {
+        let Ok(receipt) = receipt_from_trace_with_fingerprint(root, &trace_path, &fingerprint)
+        else {
+            continue;
+        };
+        rollup.sessions += 1;
+        rollup.context_packets += receipt.context_packets;
+        rollup.context_tokens += receipt.context_tokens;
+        rollup.file_reads += receipt.file_reads;
+        rollup.grep_commands += receipt.grep_commands;
+        rollup.policy_violations += receipt.policy_violations;
+        rollup.edit_impacts += receipt.edit_impacts;
+    }
+    rollup.content_hash = indexer::stable_content_hash(serde_json::to_string(&rollup)?.as_bytes());
+    Ok(rollup)
+}
+
 #[derive(Debug, Serialize)]
 struct IndexExportOutput {
     command: &'static str,
@@ -13651,6 +14006,7 @@ fn codex_hook_user_prompt_submit(
             let tokens = serde_json::to_string(&context_value)
                 .map(|json| json.len().div_ceil(4))
                 .unwrap_or_default();
+            note_packet_served(&mut state, root, &retrieval_prompt, "codex");
             state.context_seen = true;
             state.selected_files = files.clone();
             state.context_packets += 1;
@@ -13726,6 +14082,7 @@ fn codex_hook_pre_tool_use(root: &Path, strict: bool) -> Result<serde_json::Valu
         ));
     }
 
+    record_confirmed_reads(&mut state, root, &command);
     save_codex_hook_state(root, &state)?;
     Ok(codex_hook_noop_response("PreToolUse"))
 }
@@ -13762,9 +14119,15 @@ fn codex_hook_permission_request(root: &Path, strict: bool) -> Result<serde_json
     Ok(codex_hook_noop_response("PermissionRequest"))
 }
 
-fn codex_hook_stop(_root: &Path, _strict: bool) -> Result<()> {
+fn codex_hook_stop(root: &Path, _strict: bool) -> Result<()> {
     let mut input = String::new();
     let _ = std::io::stdin().read_to_string(&mut input);
+    // The Codex Stop protocol requires empty stdout (a smoke check enforces
+    // it), so the session folds into task memory silently.
+    let parsed: serde_json::Value = serde_json::from_str(&input).unwrap_or_default();
+    let session_id = hook_session_id(&parsed);
+    let state = load_codex_hook_state(root, &session_id);
+    let _ = fold_session_into_task_memory(root, &state, "codex");
     Ok(())
 }
 
@@ -13814,6 +14177,7 @@ fn claude_hook_user_prompt_submit(
             let tokens = serde_json::to_string(&context_value)
                 .map(|json| json.len().div_ceil(4))
                 .unwrap_or_default();
+            note_packet_served(&mut state, root, &retrieval_prompt, "claude");
             state.context_seen = true;
             state.selected_files = files.clone();
             state.context_packets += 1;
@@ -13913,19 +14277,29 @@ fn claude_hook_post_tool_use(root: &Path, strict: bool) -> Result<serde_json::Va
     if is_callsieve_context_command_local(&command) {
         state.context_seen = true;
     }
-    append_claude_hook_trace_event(
-        root,
-        &state,
-        &task,
-        codex_hook_trace_event(&input, &command, false),
-    )?;
+    record_confirmed_reads(&mut state, root, &command);
+    let edited_file = hook_edited_file(&input, root);
+    let edit_impact = edited_file
+        .as_deref()
+        .and_then(|edited| hook_edit_impact_context(root, edited));
+    let mut trace_event = codex_hook_trace_event(&input, &command, false);
+    if edited_file.is_some() {
+        // Classify by what the agent did (an edit), not by whether the index
+        // had graph edges for it.
+        trace_event["classification"] = serde_json::Value::String("edit_impact".to_string());
+    }
+    append_claude_hook_trace_event(root, &state, &task, trace_event)?;
     save_claude_hook_state(root, &state)?;
-    Ok(serde_json::json!({
+    let mut response = serde_json::json!({
         "suppressOutput": true,
         "hookSpecificOutput": {
             "hookEventName": "PostToolUse"
         }
-    }))
+    });
+    if let Some(impact) = edit_impact {
+        response["hookSpecificOutput"]["additionalContext"] = serde_json::Value::String(impact);
+    }
+    Ok(response)
 }
 
 fn claude_hook_permission_request(root: &Path, strict: bool) -> Result<serde_json::Value> {
@@ -13965,33 +14339,118 @@ fn claude_hook_stop(root: &Path, _strict: bool) -> Result<serde_json::Value> {
     let parsed: serde_json::Value = serde_json::from_str(&input).unwrap_or_default();
     let session_id = hook_session_id(&parsed);
     let state = load_claude_hook_state(root, &session_id);
+    let learned = fold_session_into_task_memory(root, &state, "claude");
     let mut response = serde_json::json!({
         "suppressOutput": true,
         "hookSpecificOutput": {
             "hookEventName": "Stop"
         }
     });
-    if let Some(message) = hook_session_summary_message(&state) {
+    if let Some(message) = hook_session_summary_message(&state, learned) {
         response["systemMessage"] = serde_json::Value::String(message);
         response["suppressOutput"] = serde_json::Value::Bool(false);
     }
     Ok(response)
 }
 
+/// Learn from the observed session: files the agent actually read after
+/// context become confirmed task-memory associations. Errors are swallowed —
+/// learning must never break a Stop hook.
+/// A new packet starts a new learning window: fold reads confirmed under the
+/// previous retrieval task into memory first, so a session that switches
+/// topics never attributes early reads to the final prompt.
+fn note_packet_served(state: &mut CodexHookState, root: &Path, retrieval_task: &str, client: &str) {
+    if !state.confirmed_reads.is_empty()
+        && !state.last_retrieval_task.is_empty()
+        && state.last_retrieval_task != retrieval_task
+    {
+        let _ = query::confirm_task_memory_reads(
+            root,
+            &state.last_retrieval_task,
+            &state.selected_files,
+            &state.confirmed_reads,
+            client,
+            now_unix_seconds(),
+        );
+        state.confirmed_reads.clear();
+    }
+    state.last_retrieval_task = retrieval_task.to_string();
+}
+
+fn fold_session_into_task_memory(root: &Path, state: &CodexHookState, client: &str) -> usize {
+    if state.context_packets == 0 || state.confirmed_reads.is_empty() {
+        return 0;
+    }
+    let task = if state.last_retrieval_task.is_empty() {
+        &state.last_prompt
+    } else {
+        &state.last_retrieval_task
+    };
+    query::confirm_task_memory_reads(
+        root,
+        task,
+        &state.selected_files,
+        &state.confirmed_reads,
+        client,
+        now_unix_seconds(),
+    )
+    .unwrap_or(0)
+}
+
 /// Factual session summary for Stop hooks. Reports only locally observed
 /// counts; estimated or comparative savings claims stay gated behind audited
 /// observed-session reports.
-fn hook_session_summary_message(state: &CodexHookState) -> Option<String> {
+/// Compact edit-impact note for PostToolUse additionalContext. Only emitted
+/// when the index already knows the file and the impact is non-trivial;
+/// never triggers an index rebuild (the pre-edit graph is the right one).
+fn hook_edit_impact_context(root: &Path, edited: &str) -> Option<String> {
+    let index = store::json_store::load_index(root).ok()?;
+    let impact = query::edit_impact_for_file(&index, edited)?;
+    if impact.callers.is_empty() && impact.tests.is_empty() {
+        return None;
+    }
+    let mut message = format!(
+        "CallSieve impact: editing {} (risk: {}).",
+        impact.file, impact.risk
+    );
+    if !impact.callers.is_empty() {
+        message.push_str(&format!(" Called by: {}.", impact.callers.join(", ")));
+    }
+    if !impact.tests.is_empty() {
+        message.push_str(&format!(" Related tests: {}.", impact.tests.join(", ")));
+    }
+    message.push_str(&format!(
+        " Detail: callsieve focus {} --file {}",
+        root.display(),
+        impact.file
+    ));
+    Some(message)
+}
+
+/// Factual session summary for Stop hooks. Reports only locally observed
+/// counts; estimated or comparative savings claims stay gated behind audited
+/// observed-session reports (a test pins the absence of "saved").
+fn hook_session_summary_message(state: &CodexHookState, learned: usize) -> Option<String> {
     if state.context_packets == 0 {
         return None;
     }
+    let learned_note = if learned > 0 {
+        format!(
+            " Learned {} read association{} for future retrieval.",
+            learned,
+            if learned == 1 { "" } else { "s" }
+        )
+    } else {
+        String::new()
+    };
     Some(format!(
-        "CallSieve: {} context packet{} (~{} tokens, {} read-first file{}) served this session; local retrieval spent 0 AI model tokens.",
+        "CallSieve: {} context packet{} (~{} tokens, {} read-first file{}) served this session; local retrieval spent 0 AI model tokens.{} Receipt: `callsieve receipt <repo> --latest`.",
         state.context_packets,
         if state.context_packets == 1 { "" } else { "s" },
         state.context_tokens,
         state.context_files,
         if state.context_files == 1 { "" } else { "s" },
+        learned_note,
     ))
 }
 
@@ -14058,6 +14517,12 @@ fn client_hook_user_prompt_submit(
             let tokens = serde_json::to_string(&context_value)
                 .map(|json| json.len().div_ceil(4))
                 .unwrap_or_default();
+            note_packet_served(
+                &mut state,
+                root,
+                &retrieval_prompt,
+                hook_client_name(client),
+            );
             state.context_seen = true;
             state.selected_files = files.clone();
             state.context_packets += 1;
@@ -14174,6 +14639,7 @@ fn client_hook_post_tool_use(
     if is_callsieve_context_command_local(&command) {
         state.context_seen = true;
     }
+    record_confirmed_reads(&mut state, root, &command);
     append_client_hook_trace_event(
         root,
         client,
@@ -14236,13 +14702,14 @@ fn client_hook_stop(root: &Path, client: HookClient, _strict: bool) -> Result<se
     let parsed: serde_json::Value = serde_json::from_str(&input).unwrap_or_default();
     let session_id = hook_session_id(&parsed);
     let state = load_client_hook_state(root, client, &session_id);
+    let learned = fold_session_into_task_memory(root, &state, hook_client_name(client));
     let mut response = serde_json::json!({
         "suppressOutput": true,
         "hookSpecificOutput": {
             "hookEventName": "Stop"
         }
     });
-    if let Some(message) = hook_session_summary_message(&state) {
+    if let Some(message) = hook_session_summary_message(&state, learned) {
         response["systemMessage"] = serde_json::Value::String(message);
         response["suppressOutput"] = serde_json::Value::Bool(false);
     }
@@ -14794,15 +15261,25 @@ fn claude_hooks_json(
             Some((limit, snippets_per_file)),
         ),
     )?;
-    for (event, hook_name) in [
-        ("PreToolUse", "pre-tool-use"),
-        ("PostToolUse", "post-tool-use"),
-        ("PermissionRequest", "permission-request"),
+    for (event, hook_name, matcher) in [
+        ("PreToolUse", "pre-tool-use", "Bash|Read|Grep|Glob"),
+        // PostToolUse also watches edit tools: confirmed-read learning and
+        // edit-impact packets depend on seeing Edit/Write events.
+        (
+            "PostToolUse",
+            "post-tool-use",
+            "Bash|Read|Grep|Glob|Edit|Write|MultiEdit|NotebookEdit",
+        ),
+        (
+            "PermissionRequest",
+            "permission-request",
+            "Bash|Read|Grep|Glob",
+        ),
     ] {
         upsert_claude_hook_entry(
             &mut value,
             event,
-            Some("Bash|Read|Grep|Glob"),
+            Some(matcher),
             claude_hook_command_config(root, hook_name, strict, None),
         )?;
     }
@@ -15253,6 +15730,46 @@ fn hook_tool_name(input: &serde_json::Value) -> String {
         .unwrap_or_else(|| "unknown".to_string())
 }
 
+/// Repo-relativize a tool-reported path against a possibly relative or
+/// symlinked hook root: canonicalize both sides before stripping, so
+/// `.`-installed hooks and macOS /tmp symlinks still match index paths.
+fn hook_repo_relative(path: &str, root: &Path) -> String {
+    let candidate = Path::new(path);
+    if candidate.is_relative() {
+        return path.to_string();
+    }
+    let canonical_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let canonical = candidate
+        .canonicalize()
+        .unwrap_or_else(|_| candidate.to_path_buf());
+    canonical
+        .strip_prefix(&canonical_root)
+        .map(|relative| relative.to_string_lossy().to_string())
+        .unwrap_or_else(|_| path.to_string())
+}
+
+/// File path from an edit/write tool event, repo-relative when possible.
+fn hook_edited_file(input: &serde_json::Value, root: &Path) -> Option<String> {
+    let tool_name = hook_tool_name(input).to_ascii_lowercase();
+    let is_edit = matches!(
+        tool_name.as_str(),
+        "edit" | "write" | "multiedit" | "str_replace" | "str_replace_editor" | "notebookedit"
+    ) || tool_name.ends_with("__edit")
+        || tool_name.ends_with("__write");
+    if !is_edit {
+        return None;
+    }
+    let tool_input = input
+        .get("tool_input")
+        .or_else(|| input.get("toolInput"))
+        .or_else(|| input.get("input"))?;
+    let path = hook_json_string_field(
+        tool_input,
+        &["file_path", "filePath", "path", "notebook_path"],
+    )?;
+    Some(hook_repo_relative(&path, root))
+}
+
 fn hook_tool_command(input: &serde_json::Value) -> String {
     let tool_name = hook_tool_name(input);
     let tool_input = input
@@ -15628,6 +16145,30 @@ fn codex_hook_trace_event(
         "tool_name": hook_tool_name(input),
         "policy_violation": policy_violation
     })
+}
+
+const MAX_CONFIRMED_READS: usize = 32;
+
+/// Record agent-observed file reads that happened after context was served;
+/// these confirm which suggestions (or discoveries) the agent actually used.
+fn record_confirmed_reads(state: &mut CodexHookState, root: &Path, command: &str) {
+    if !state.context_seen {
+        return;
+    }
+    for read in codex_hook_files_read(command) {
+        if state.confirmed_reads.len() >= MAX_CONFIRMED_READS {
+            break;
+        }
+        let relative = hook_repo_relative(&read, root);
+        // Bash read commands carry flags, patterns, and pipe segments as
+        // tokens; only paths that actually exist under the repo are evidence.
+        if !root.join(&relative).is_file() {
+            continue;
+        }
+        if !state.confirmed_reads.contains(&relative) {
+            state.confirmed_reads.push(relative);
+        }
+    }
 }
 
 fn codex_hook_files_read(command: &str) -> Vec<String> {
@@ -18658,6 +19199,72 @@ mod index_transfer_tests {
 }
 
 #[cfg(test)]
+mod hook_path_tests {
+    use super::*;
+
+    #[test]
+    fn repo_relative_handles_symlinked_and_relative_roots() {
+        let temp = tempfile::tempdir().unwrap();
+        // On macOS the tempdir itself is behind the /tmp -> /private/tmp
+        // symlink, so the UNcanonicalized handle is exactly the failure case.
+        let root = temp.path().to_path_buf();
+        fs::write(root.join("session.ts"), "x").unwrap();
+        let absolute = root.canonicalize().unwrap().join("session.ts");
+
+        assert_eq!(
+            hook_repo_relative(absolute.to_str().unwrap(), &root),
+            "session.ts"
+        );
+        assert_eq!(hook_repo_relative("session.ts", &root), "session.ts");
+    }
+
+    #[test]
+    fn confirmed_reads_keep_only_real_repo_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().to_path_buf();
+        fs::write(root.join("real.ts"), "x").unwrap();
+        let mut state = CodexHookState {
+            context_seen: true,
+            ..CodexHookState::default()
+        };
+
+        record_confirmed_reads(
+            &mut state,
+            &root,
+            &format!(
+                "cat -n {} nonexistent.ts | grep pattern",
+                root.canonicalize().unwrap().join("real.ts").display()
+            ),
+        );
+
+        assert_eq!(state.confirmed_reads, vec!["real.ts"]);
+    }
+
+    #[test]
+    fn claude_hooks_config_matches_edit_tools_for_post_tool_use() {
+        let temp = tempfile::tempdir().unwrap();
+        let (_, _, _files) = write_claude_hooks_files(temp.path(), false, true, 6, 1).unwrap();
+        let settings = fs::read_to_string(temp.path().join(".claude/settings.local.json"))
+            .or_else(|_| fs::read_to_string(temp.path().join(".claude/settings.json")))
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&settings).unwrap();
+        let post = value["hooks"]["PostToolUse"]
+            .as_array()
+            .expect("PostToolUse hooks registered");
+        let matchers: Vec<&str> = post
+            .iter()
+            .filter_map(|entry| entry["matcher"].as_str())
+            .collect();
+        assert!(
+            matchers
+                .iter()
+                .any(|matcher| matcher.contains("Edit") && matcher.contains("Write")),
+            "PostToolUse matcher must include edit tools, got {matchers:?}"
+        );
+    }
+}
+
+#[cfg(test)]
 mod hook_summary_tests {
     use super::*;
 
@@ -18672,15 +19279,15 @@ mod hook_summary_tests {
 
     #[test]
     fn no_summary_when_no_context_served() {
-        assert_eq!(hook_session_summary_message(&state_with(0, 0, 0)), None);
+        assert_eq!(hook_session_summary_message(&state_with(0, 0, 0), 0), None);
     }
 
     #[test]
     fn summary_reports_observed_counts_only() {
-        let message = hook_session_summary_message(&state_with(3, 540, 14)).unwrap();
+        let message = hook_session_summary_message(&state_with(3, 540, 14), 0).unwrap();
         assert_eq!(
             message,
-            "CallSieve: 3 context packets (~540 tokens, 14 read-first files) served this session; local retrieval spent 0 AI model tokens."
+            "CallSieve: 3 context packets (~540 tokens, 14 read-first files) served this session; local retrieval spent 0 AI model tokens. Receipt: `callsieve receipt <repo> --latest`."
         );
         assert!(
             !message.contains("saved"),
@@ -18689,8 +19296,15 @@ mod hook_summary_tests {
     }
 
     #[test]
+    fn summary_reports_learned_associations() {
+        let message = hook_session_summary_message(&state_with(1, 194, 6), 3).unwrap();
+        assert!(message.contains("Learned 3 read associations"), "{message}");
+        assert!(!message.contains("saved"), "{message}");
+    }
+
+    #[test]
     fn summary_uses_singular_forms() {
-        let message = hook_session_summary_message(&state_with(1, 194, 1)).unwrap();
+        let message = hook_session_summary_message(&state_with(1, 194, 1), 0).unwrap();
         assert!(message.contains("1 context packet ("), "{message}");
         assert!(message.contains("1 read-first file)"), "{message}");
     }

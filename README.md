@@ -148,6 +148,10 @@ callsieve setup-agent <codex|claude|copilot|opencode|antigravity|cursor|vscode|w
 callsieve setup-auto <path> [--force] [--dry-run]
 callsieve index-export <path> --out <file>
 callsieve index-import <path> --from <file> [--allow-partial]
+callsieve memory-export <path> --out <file>
+callsieve memory-import <path> --from <file>
+callsieve receipt <path> [--session <id>] [--format json|markdown]
+callsieve receipts <path>
 callsieve bootstrap <path> --client <codex|claude|copilot|opencode|antigravity|cursor|vscode|windsurf|continue|zed|junie|jetbrains|amp|goose|warp|cline|zoo|roo|generic> [--strict] [--force] [--lsp]
 callsieve doctor <path> --client <codex|claude|copilot|opencode|antigravity|cursor|vscode|windsurf|continue|zed|junie|jetbrains|amp|goose|warp|cline|zoo|roo|generic> [--fix] [--strict]
 callsieve codex-bootstrap <path> --model <name> [--force]

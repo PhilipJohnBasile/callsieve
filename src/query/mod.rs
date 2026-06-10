@@ -1,4 +1,3 @@
-#[cfg(feature = "embed")]
 pub mod classify;
 #[cfg(feature = "embed")]
 pub mod embed;
@@ -100,6 +99,10 @@ pub struct ContextOptions<'a> {
     /// until the boost is validated; default skim output omits git hints unless
     /// this boost is active.
     pub git_boost: bool,
+    /// Opt-in: boost files that observed agent sessions confirmed reading for
+    /// similar tasks (task-memory `confirmed_files`). Off by default until
+    /// dogfood traces validate it; off means byte-identical output.
+    pub memory_boost: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -120,6 +123,7 @@ impl Default for ContextOptions<'_> {
             hybrid: HybridOptions::default(),
             error_frames: &[],
             git_boost: false,
+            memory_boost: false,
         }
     }
 }
@@ -456,6 +460,8 @@ pub struct TaskMemoryOutput {
 struct TaskMemorySimilarTask {
     task: String,
     score: f64,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    client: String,
     shared_terms: Vec<String>,
     read_first_files: Vec<String>,
 }
@@ -483,6 +489,13 @@ struct TaskMemoryEntry {
     read_first_files: Vec<String>,
     symbols: Vec<String>,
     tests: Vec<String>,
+    /// Files the agent actually read after receiving context in an observed
+    /// session — stronger evidence than what the packet suggested.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    confirmed_files: Vec<String>,
+    /// Which agent client taught this entry (claude, codex, cursor, ...).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    client: String,
 }
 
 struct ScoredTaskMemoryEntry<'a> {
@@ -1406,6 +1419,21 @@ impl ContextCandidate {
         }
     }
 
+    /// Consensus support escapes the MAX_CONTEXT_GRAPH_SCORE cap on purpose:
+    /// agreement of multiple top-ranked files is a stronger signal than a
+    /// single graph edge and must be able to rival content-keyword noise.
+    fn add_consensus_boost(&mut self, points: i32, why: String) {
+        if self.seen_why.insert(why.clone()) {
+            self.best_score += points;
+            self.why.push(why.clone());
+            self.push_debug(ranker::ScoreComponent {
+                name: "graph_consensus".to_string(),
+                points,
+                detail: why,
+            });
+        }
+    }
+
     fn add_graph_boost(&mut self, name: &'static str, score: i32, confidence: f64, why: String) {
         self.graph_confidence = self.graph_confidence.max(confidence);
         if self.seen_why.insert(why.clone()) {
@@ -2111,6 +2139,7 @@ pub fn build_context_with_options(
             hybrid: HybridOptions::default(),
             error_frames: &[],
             git_boost: false,
+            memory_boost: false,
         },
     )
 }
@@ -2174,6 +2203,13 @@ pub fn build_context_with(
     )?;
     let semantic_injected = candidates.len() - candidates_before_injection;
 
+    // Memory-confirmed boosts/injections run before the test-offtopic marking
+    // below for the same reason semantic injection does: an injected test
+    // file must receive the same down-scaling as one lexical surfaced.
+    if options.memory_boost {
+        add_memory_confirmed_boost(root, task, &lookup, &mut candidates);
+    }
+
     // A test file that merely references the relevant source files gets a large
     // graph boost; on a non-test query, scale the whole candidate down so it
     // cannot outrank the implementation it tests.
@@ -2195,6 +2231,13 @@ pub fn build_context_with(
     apply_git_boost(index, &mut candidates, options.git_boost);
 
     let mut warnings = stale_warnings(root, index);
+    // Graph consensus exists for vocabulary-gap queries: natural-language
+    // issue text matches the consumer layer around the buggy file and the
+    // graph closes the hop. Identifier queries carry explicit lexical
+    // anchors and keep their proven ordering untouched.
+    if classify::query_kind(task, &query_tokens) == classify::QueryKind::NaturalLanguage {
+        add_graph_consensus_boost(&lookup, &mut candidates);
+    }
     sort_candidates_lexical(&mut candidates, &lookup, &query_tokens);
     apply_hybrid_ranking(
         root,
@@ -4049,6 +4092,189 @@ pub fn benchmark_context_payload_reduction_value(
         .context("failed to serialize context payload reduction")
 }
 
+/// Fold an observed session into task memory: the files the agent actually
+/// read after receiving context become confirmed associations for this task.
+/// Upserts so hook-driven sessions (which bypass `task_memory_for_context`)
+/// still learn. Returns the number of confirmed files stored.
+pub fn confirm_task_memory_reads(
+    root: &Path,
+    task: &str,
+    packet_files: &[String],
+    confirmed_reads: &[String],
+    client: &str,
+    created_at: u64,
+) -> Result<usize> {
+    if task.trim().is_empty() || confirmed_reads.is_empty() {
+        return Ok(0);
+    }
+    let path = task_memory_path(root);
+    let mut memory = load_task_memory(&path);
+    let confirmed: Vec<String> = confirmed_reads
+        .iter()
+        .filter(|read| !read.trim().is_empty())
+        .take(MAX_TASK_MEMORY_RECOMMENDED_FILES)
+        .cloned()
+        .collect();
+    if confirmed.is_empty() {
+        return Ok(0);
+    }
+
+    let stored;
+    if let Some(entry) = memory.entries.iter_mut().find(|entry| entry.task == task) {
+        let mut inserted = 0usize;
+        for file in &confirmed {
+            if !entry.confirmed_files.contains(file) {
+                entry.confirmed_files.push(file.clone());
+                inserted += 1;
+            }
+        }
+        // Newest evidence wins: drop from the FRONT (oldest) on overflow so
+        // fresh observations are never silently discarded.
+        if entry.confirmed_files.len() > MAX_TASK_MEMORY_RECOMMENDED_FILES {
+            let excess = entry.confirmed_files.len() - MAX_TASK_MEMORY_RECOMMENDED_FILES;
+            entry.confirmed_files.drain(0..excess);
+        }
+        stored = inserted;
+        if entry.client.is_empty() {
+            entry.client = client.to_string();
+        }
+    } else {
+        stored = confirmed.len();
+        memory.entries.push(TaskMemoryEntry {
+            task: task.to_string(),
+            task_terms: task_memory_terms(task),
+            created_at,
+            read_first_files: packet_files
+                .iter()
+                .take(MAX_TASK_MEMORY_RECOMMENDED_FILES)
+                .cloned()
+                .collect(),
+            symbols: Vec::new(),
+            tests: Vec::new(),
+            confirmed_files: confirmed,
+            client: client.to_string(),
+        });
+        if memory.entries.len() > MAX_TASK_MEMORY_ENTRIES {
+            let excess = memory.entries.len() - MAX_TASK_MEMORY_ENTRIES;
+            memory.entries.drain(0..excess);
+        }
+    }
+    save_task_memory(&path, &memory)?;
+    Ok(stored)
+}
+
+/// Session-confirmed associations from task memory boost matching candidates.
+/// Only strong matches count (the existing >=2-shared-terms / 0.4-jaccard
+/// threshold), and only files an agent verifiably read in an observed session.
+const MEMORY_CONFIRMED_BOOST: i32 = 80;
+
+fn add_memory_confirmed_boost(
+    root: &Path,
+    task: &str,
+    lookup: &IndexLookup<'_>,
+    candidates: &mut Vec<ContextCandidate>,
+) {
+    let memory = load_task_memory(&task_memory_path(root));
+    let terms = task_memory_terms(task);
+    let similar = similar_task_memory_entries(&memory.entries, &terms);
+    let mut confirmed: BTreeMap<&str, &str> = BTreeMap::new();
+    for scored in &similar {
+        for file in &scored.entry.confirmed_files {
+            confirmed.entry(file.as_str()).or_insert(&scored.entry.task);
+        }
+    }
+    if confirmed.is_empty() {
+        return;
+    }
+    // Boost matching candidates; confirmed files lexical never surfaced are
+    // injected — an observed read for a matched task is direct evidence,
+    // unlike speculative semantic injection.
+    let mut seen: BTreeSet<&str> = BTreeSet::new();
+    for candidate in candidates.iter_mut() {
+        let Some(file) = lookup.file_by_id(&candidate.file_id) else {
+            continue;
+        };
+        seen.insert(file.path.as_str());
+        if let Some(teaching_task) = confirmed.get(file.path.as_str()) {
+            candidate.add_consensus_boost(
+                MEMORY_CONFIRMED_BOOST,
+                format!("agent-confirmed read in a similar session: {teaching_task}"),
+            );
+        }
+    }
+    let missing: Vec<(String, String)> = confirmed
+        .iter()
+        .filter(|(path, _)| !seen.contains(*path))
+        .filter_map(|(path, teaching_task)| {
+            lookup
+                .file_by_path(path)
+                .map(|file| (file.id.clone(), (*teaching_task).to_string()))
+        })
+        .collect();
+    for (file_id, teaching_task) in missing {
+        let mut candidate = ContextCandidate::new(file_id, 0, usize::MAX);
+        candidate.add_consensus_boost(
+            MEMORY_CONFIRMED_BOOST,
+            format!("agent-confirmed read in a similar session: {teaching_task}"),
+        );
+        candidates.push(candidate);
+    }
+}
+
+/// Merge an exported memory store into this repo's store: entries are keyed
+/// by task identity, the newer `created_at` wins, confirmed files union, and
+/// the FIFO cap holds. Returns (imported, merged_total).
+pub fn merge_task_memory(root: &Path, imported: &str) -> Result<(usize, usize)> {
+    let incoming: TaskMemoryStore =
+        serde_json::from_str(imported).context("failed to parse exported task memory")?;
+    let path = task_memory_path(root);
+    let mut memory = load_task_memory(&path);
+    let mut imported_count = 0usize;
+    for entry in incoming.entries {
+        if let Some(existing) = memory
+            .entries
+            .iter_mut()
+            .find(|existing| existing.task == entry.task)
+        {
+            for file in &entry.confirmed_files {
+                if !existing.confirmed_files.contains(file) {
+                    existing.confirmed_files.push(file.clone());
+                }
+            }
+            existing
+                .confirmed_files
+                .truncate(MAX_TASK_MEMORY_RECOMMENDED_FILES);
+            if entry.created_at > existing.created_at {
+                existing.created_at = entry.created_at;
+                existing.read_first_files = entry.read_first_files;
+                existing.symbols = entry.symbols;
+                existing.tests = entry.tests;
+            }
+            if existing.client.is_empty() {
+                existing.client = entry.client;
+            }
+        } else {
+            memory.entries.push(entry);
+        }
+        imported_count += 1;
+    }
+    memory.entries.sort_by_key(|entry| entry.created_at);
+    if memory.entries.len() > MAX_TASK_MEMORY_ENTRIES {
+        let excess = memory.entries.len() - MAX_TASK_MEMORY_ENTRIES;
+        memory.entries.drain(0..excess);
+    }
+    let total = memory.entries.len();
+    save_task_memory(&path, &memory)?;
+    Ok((imported_count, total))
+}
+
+/// Serialized form of this repo's task memory for `memory-export`.
+pub fn export_task_memory(root: &Path) -> Result<(String, usize)> {
+    let memory = load_task_memory(&task_memory_path(root));
+    let count = memory.entries.len();
+    Ok((serde_json::to_string_pretty(&memory)?, count))
+}
+
 pub fn task_memory_path(root: &Path) -> PathBuf {
     root.join(store::json_store::INDEX_DIR)
         .join(TASK_MEMORY_FILE)
@@ -4086,21 +4312,42 @@ pub fn task_memory_for_context(
         .map(|scored| TaskMemorySimilarTask {
             task: scored.entry.task.clone(),
             score: rounded_score(scored.score),
+            client: scored.entry.client.clone(),
             shared_terms: scored.shared_terms.clone(),
-            read_first_files: scored
-                .entry
-                .read_first_files
-                .iter()
-                .take(MAX_TASK_MEMORY_RECOMMENDED_FILES)
-                .cloned()
-                .collect(),
+            read_first_files: if scored.entry.read_first_files.is_empty() {
+                scored
+                    .entry
+                    .confirmed_files
+                    .iter()
+                    .take(MAX_TASK_MEMORY_RECOMMENDED_FILES)
+                    .cloned()
+                    .collect()
+            } else {
+                scored
+                    .entry
+                    .read_first_files
+                    .iter()
+                    .take(MAX_TASK_MEMORY_RECOMMENDED_FILES)
+                    .cloned()
+                    .collect()
+            },
         })
         .collect();
     let recommended_files = recommended_task_memory_files(&similar);
     let recommended_symbols = recommended_task_memory_symbols(&similar);
 
-    let entry = task_memory_entry_from_context(context, current_terms, created_at);
+    let mut entry = task_memory_entry_from_context(context, current_terms, created_at);
     if !entry.read_first_files.is_empty() {
+        // Re-running the same task must refresh recency without erasing what
+        // observed sessions taught: carry learned fields into the new entry.
+        if let Some(previous) = memory
+            .entries
+            .iter()
+            .find(|existing| existing.task == entry.task)
+        {
+            entry.confirmed_files = previous.confirmed_files.clone();
+            entry.client = previous.client.clone();
+        }
         memory.entries.retain(|existing| {
             existing.task != entry.task || existing.read_first_files != entry.read_first_files
         });
@@ -4166,6 +4413,8 @@ fn task_memory_entry_from_context(
     }
 
     TaskMemoryEntry {
+        confirmed_files: Vec::new(),
+        client: String::new(),
         task: context.task.clone(),
         task_terms,
         created_at,
@@ -4190,7 +4439,7 @@ fn similar_task_memory_entries<'a>(
     let mut scored: Vec<ScoredTaskMemoryEntry<'a>> = entries
         .iter()
         .filter_map(|entry| {
-            if entry.read_first_files.is_empty() {
+            if entry.read_first_files.is_empty() && entry.confirmed_files.is_empty() {
                 return None;
             }
             let entry_set: BTreeSet<&str> = entry.task_terms.iter().map(String::as_str).collect();
@@ -6435,6 +6684,135 @@ fn miss_reasons_for(
     reasons
 }
 
+/// Anchor-weighted graph consensus. Measured motivation
+/// (benchmarks/public/results/nl-miss-graph-adjacency-study.json): 82% of the
+/// public NL-bench misses are one import/reference/directory hop from the
+/// lexical pool, and 17/22 are adjacent to a top-3 candidate — natural-language
+/// issue text matches the consumer layer around the buggy file, and the graph
+/// closes the hop vocabulary cannot. Files adjacent to the top-ranked
+/// candidates get support proportional to how many anchors agree, weighted by
+/// anchor rank; same-directory counts only for the top anchor.
+const GRAPH_CONSENSUS_BASE: i32 = 60;
+const GRAPH_CONSENSUS_ANCHORS: usize = 3;
+
+fn add_graph_consensus_boost(lookup: &IndexLookup<'_>, candidates: &mut [ContextCandidate]) {
+    if candidates.len() <= 1 {
+        return;
+    }
+    let mut order: Vec<usize> = (0..candidates.len()).collect();
+    order.sort_by(|&left, &right| {
+        candidates[right]
+            .score()
+            .cmp(&candidates[left].score())
+            .then_with(|| candidates[left].file_id.cmp(&candidates[right].file_id))
+    });
+
+    struct Anchor {
+        path: String,
+        weight: i32,
+        score: i32,
+    }
+    let anchors: Vec<Anchor> = order
+        .iter()
+        .take(GRAPH_CONSENSUS_ANCHORS)
+        .enumerate()
+        .filter_map(|(rank, &index)| {
+            let file = lookup.file_by_id(&candidates[index].file_id)?;
+            Some(Anchor {
+                path: file.path.clone(),
+                weight: (GRAPH_CONSENSUS_ANCHORS - rank) as i32,
+                score: candidates[index].score(),
+            })
+        })
+        .collect();
+    if anchors.is_empty() {
+        return;
+    }
+    let anchor_paths: BTreeSet<&str> = anchors.iter().map(|anchor| anchor.path.as_str()).collect();
+
+    // neighbor path -> (consensus points, agreeing anchor paths)
+    let mut consensus: BTreeMap<String, (i32, BTreeSet<String>)> = BTreeMap::new();
+    for anchor in &anchors {
+        let mut neighbors: BTreeSet<String> = BTreeSet::new();
+        neighbors.extend(resolved_imports_for_file(lookup, &anchor.path));
+        for import in lookup.imports_to_path(&anchor.path) {
+            neighbors.insert(import.source_path.clone());
+        }
+        for reference in lookup.references_from_path(&anchor.path) {
+            if let Some(target) = &reference.target_path {
+                neighbors.insert(target.clone());
+            }
+        }
+        for reference in lookup.references_to_path(&anchor.path) {
+            neighbors.insert(reference.source_path.clone());
+        }
+        for neighbor in neighbors {
+            if anchor_paths.contains(neighbor.as_str()) {
+                continue;
+            }
+            let entry = consensus.entry(neighbor).or_default();
+            if entry.1.insert(anchor.path.clone()) {
+                entry.0 += anchor.weight;
+            }
+        }
+    }
+
+    let top_anchor_dir = lookup
+        .file_by_path(&anchors[0].path)
+        .map(|file| file.module_path.clone());
+
+    for candidate in candidates.iter_mut() {
+        let Some(file) = lookup.file_by_id(&candidate.file_id) else {
+            continue;
+        };
+        if anchor_paths.contains(file.path.as_str()) {
+            continue;
+        }
+        let mut points = 0;
+        let mut agreeing_anchors = 0usize;
+        let mut agreeing: Vec<String> = Vec::new();
+        if let Some((edge_points, anchors_agreeing)) = consensus.get(&file.path) {
+            points += edge_points;
+            agreeing_anchors += anchors_agreeing.len();
+            agreeing.extend(anchors_agreeing.iter().cloned());
+        }
+        if agreeing_anchors > 0 && top_anchor_dir.as_deref() == Some(file.module_path.as_str()) {
+            points += 1;
+            agreeing.push(format!("same directory as {}", anchors[0].path));
+        }
+        // A single anchor's neighborhood is too noisy to act on (hub files
+        // like a package __init__ or a client facade touch everything);
+        // boosting requires independent agreement of at least two anchors.
+        // And a recommender outranks its recommendations: the boost may lift
+        // a candidate at most to just below the strongest endorsing anchor's
+        // pre-boost score, so a truth that IS the top anchor can never be
+        // displaced by its own neighborhood.
+        if agreeing_anchors >= 2 {
+            let endorsement_ceiling = anchors
+                .iter()
+                .filter(|anchor| {
+                    agreeing
+                        .iter()
+                        .any(|endorser| endorser.contains(anchor.path.as_str()))
+                })
+                .map(|anchor| anchor.score)
+                .max()
+                .unwrap_or(0);
+            let boost = (points * GRAPH_CONSENSUS_BASE)
+                .min((endorsement_ceiling - 1 - candidate.score()).max(0));
+            if boost > 0 {
+                candidate.add_consensus_boost(
+                    boost,
+                    format!(
+                        "graph consensus with top candidates: {}",
+                        agreeing.join(", ")
+                    ),
+                );
+            }
+        }
+    }
+}
+
 fn add_graph_context(
     lookup: &IndexLookup<'_>,
     ranked: &[ranker::RankedMatch],
@@ -6698,6 +7076,38 @@ fn reference_edge(lookup: &IndexLookup<'_>, reference: &ReferenceRecord) -> Refe
             .or(Some([reference.line, reference.line])),
         target_range: reference.target_range,
     }
+}
+
+/// Compact impact summary for a just-edited file, sized for a PostToolUse
+/// hook message: who calls it, which tests cover it, and the blast-radius
+/// risk level. None when the file is not indexed.
+#[derive(Debug, Serialize)]
+pub struct EditImpact {
+    pub file: String,
+    pub risk: String,
+    pub callers: Vec<String>,
+    pub tests: Vec<String>,
+}
+
+pub fn edit_impact_for_file(index: &CodeIndex, path: &str) -> Option<EditImpact> {
+    let lookup = IndexLookup::new(index);
+    let file = lookup.file_by_path(path)?;
+    let imports = resolved_imports_for_file(&lookup, &file.path);
+    let referenced_by = references_to_file(&lookup, &file.path);
+    let tests = related_tests(&lookup, file);
+    let calls = calls_from_file(&lookup, file);
+    let called_by = called_by_file(&lookup, file);
+    let radius = blast_radius_for(&imports, &referenced_by, &tests, &calls, &called_by);
+    let mut callers: Vec<String> = called_by.iter().map(|edge| edge.file.clone()).collect();
+    callers.sort();
+    callers.dedup();
+    callers.truncate(3);
+    Some(EditImpact {
+        file: file.path.clone(),
+        risk: radius.risk,
+        callers,
+        tests: tests.iter().map(|test| test.file.clone()).take(2).collect(),
+    })
 }
 
 fn blast_radius_for(
@@ -7866,6 +8276,218 @@ mod tests {
         }
     }
 
+    fn import_record(source: &str, resolved: &str) -> ImportRecord {
+        ImportRecord {
+            file_id: format!("file:{source}"),
+            source_path: source.to_string(),
+            imported: resolved.to_string(),
+            resolved_path: Some(resolved.to_string()),
+            aliases: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn graph_consensus_requires_two_independent_anchors() {
+        let mut files = vec![
+            minimal_file("a1", "src/api/client.rs"),
+            minimal_file("a2", "src/api/server.rs"),
+            minimal_file("a3", "src/api/router.rs"),
+            minimal_file("nb", "src/core/shared.rs"),
+            minimal_file("n1", "src/core/single.rs"),
+        ];
+        for file in &mut files {
+            file.module_path = std::path::Path::new(&file.path)
+                .parent()
+                .unwrap()
+                .to_string_lossy()
+                .to_string();
+        }
+        let mut index = minimal_index(files);
+        index.imports = vec![
+            import_record("src/api/client.rs", "src/core/shared.rs"),
+            import_record("src/api/server.rs", "src/core/shared.rs"),
+            import_record("src/api/client.rs", "src/core/single.rs"),
+        ];
+        let lookup = IndexLookup::new(&index);
+        let mut candidates = vec![
+            ContextCandidate::new("a1".to_string(), 300, 0),
+            ContextCandidate::new("a2".to_string(), 200, 1),
+            ContextCandidate::new("a3".to_string(), 100, 2),
+            ContextCandidate::new("nb".to_string(), 10, 3),
+            ContextCandidate::new("n1".to_string(), 10, 4),
+        ];
+
+        add_graph_consensus_boost(&lookup, &mut candidates);
+
+        // nb: anchors 1 (weight 3) and 2 (weight 2) agree -> 5 * BASE, but a
+        // recommendation never outranks its strongest recommender (score 300),
+        // so the boost caps at one below it.
+        assert_eq!(candidates[3].score(), 299);
+        // n1: single-anchor adjacency is hub noise, no boost
+        assert_eq!(candidates[4].score(), 10);
+        // anchors themselves are never boosted
+        assert_eq!(candidates[0].score(), 300);
+        assert_eq!(candidates[1].score(), 200);
+        assert_eq!(candidates[2].score(), 100);
+    }
+
+    #[test]
+    fn graph_consensus_same_directory_counts_only_alongside_edges() {
+        let mut files = vec![
+            minimal_file("a1", "src/api/client.rs"),
+            minimal_file("a2", "src/api/server.rs"),
+            minimal_file("a3", "src/api/router.rs"),
+            minimal_file("sib", "src/api/helpers.rs"),
+            minimal_file("sib2", "src/api/other.rs"),
+        ];
+        for file in &mut files {
+            file.module_path = "src/api".to_string();
+        }
+        let mut index = minimal_index(files);
+        index.imports = vec![
+            import_record("src/api/server.rs", "src/api/helpers.rs"),
+            import_record("src/api/router.rs", "src/api/helpers.rs"),
+        ];
+        let lookup = IndexLookup::new(&index);
+        let mut candidates = vec![
+            ContextCandidate::new("a1".to_string(), 300, 0),
+            ContextCandidate::new("a2".to_string(), 200, 1),
+            ContextCandidate::new("a3".to_string(), 100, 2),
+            ContextCandidate::new("sib".to_string(), 10, 3),
+            ContextCandidate::new("sib2".to_string(), 10, 4),
+        ];
+
+        add_graph_consensus_boost(&lookup, &mut candidates);
+
+        // sib: edges from anchors 2 (weight 2) + 3 (weight 1) plus same-dir
+        // with the top anchor (+1) -> 4 * BASE
+        assert_eq!(candidates[3].score(), 10 + 4 * GRAPH_CONSENSUS_BASE);
+        // sib2: same-directory alone never boosts
+        assert_eq!(candidates[4].score(), 10);
+    }
+
+    #[test]
+    fn confirm_task_memory_reads_upserts_and_enriches() {
+        let temp = tempfile::tempdir().unwrap();
+        let task = "investigate session creation lifecycle pool connection handling";
+
+        let stored = confirm_task_memory_reads(
+            temp.path(),
+            task,
+            &["session.ts".to_string()],
+            &["obscure.ts".to_string()],
+            "claude",
+            100,
+        )
+        .unwrap();
+        assert_eq!(stored, 1);
+
+        // Second session for the same task adds without duplicating; the
+        // returned count is actual insertions, not inputs (obscure.ts is
+        // already known, so only extra.ts counts).
+        let stored = confirm_task_memory_reads(
+            temp.path(),
+            task,
+            &[],
+            &["obscure.ts".to_string(), "extra.ts".to_string()],
+            "cursor",
+            200,
+        )
+        .unwrap();
+        assert_eq!(stored, 1);
+
+        let memory = load_task_memory(&task_memory_path(temp.path()));
+        assert_eq!(memory.entries.len(), 1);
+        let entry = &memory.entries[0];
+        assert_eq!(entry.confirmed_files, vec!["obscure.ts", "extra.ts"]);
+        assert_eq!(entry.client, "claude", "first teacher keeps provenance");
+    }
+
+    #[test]
+    fn merge_task_memory_unions_and_caps() {
+        let temp = tempfile::tempdir().unwrap();
+        confirm_task_memory_reads(
+            temp.path(),
+            "investigate session creation lifecycle pool connection handling",
+            &[],
+            &["a.ts".to_string()],
+            "claude",
+            100,
+        )
+        .unwrap();
+
+        let exported = serde_json::json!({
+            "schema_version": 1,
+            "entries": [{
+                "task": "investigate session creation lifecycle pool connection handling",
+                "task_terms": ["connection","creation","handling","investigate","lifecycle","pool","session"],
+                "created_at": 200,
+                "read_first_files": ["b.ts"],
+                "symbols": [],
+                "tests": [],
+                "confirmed_files": ["b.ts"],
+                "client": "cursor"
+            }, {
+                "task": "another task entirely about widgets",
+                "task_terms": ["another","entirely","task","widgets"],
+                "created_at": 150,
+                "read_first_files": ["w.ts"],
+                "symbols": [],
+                "tests": []
+            }]
+        })
+        .to_string();
+
+        let (imported, total) = merge_task_memory(temp.path(), &exported).unwrap();
+        assert_eq!(imported, 2);
+        assert_eq!(total, 2);
+
+        let memory = load_task_memory(&task_memory_path(temp.path()));
+        let merged = memory
+            .entries
+            .iter()
+            .find(|entry| entry.task.starts_with("investigate"))
+            .unwrap();
+        assert_eq!(merged.confirmed_files, vec!["a.ts", "b.ts"]);
+        assert_eq!(merged.created_at, 200, "newer entry wins recency");
+        assert_eq!(merged.client, "claude", "local provenance is kept");
+    }
+
+    #[test]
+    fn memory_boost_injects_confirmed_files_lexical_missed() {
+        let temp = tempfile::tempdir().unwrap();
+        let index = minimal_index(vec![
+            minimal_file("hit", "src/session.rs"),
+            minimal_file("obscure", "src/obscure.rs"),
+        ]);
+        let lookup = IndexLookup::new(&index);
+        confirm_task_memory_reads(
+            temp.path(),
+            "investigate session creation lifecycle pool connection handling",
+            &[],
+            &["src/obscure.rs".to_string()],
+            "claude",
+            100,
+        )
+        .unwrap();
+
+        let mut candidates = vec![ContextCandidate::new("hit".to_string(), 100, 0)];
+        add_memory_confirmed_boost(
+            temp.path(),
+            "fix session creation lifecycle pool connection handling regression",
+            &lookup,
+            &mut candidates,
+        );
+
+        assert_eq!(candidates.len(), 2, "confirmed file must be injected");
+        let injected = candidates
+            .iter()
+            .find(|candidate| candidate.file_id == "obscure")
+            .unwrap();
+        assert_eq!(injected.score(), MEMORY_CONFIRMED_BOOST);
+        assert!(injected.why[0].contains("agent-confirmed read"));
+    }
+
     #[test]
     fn ownership_tie_break_prefers_matching_owner() {
         let mut owned = minimal_file("a", "src/a.rs");
@@ -8409,6 +9031,7 @@ mod tests {
                 hybrid: HybridOptions::default(),
                 error_frames: &[],
                 git_boost: false,
+                memory_boost: false,
             },
         )
         .unwrap();
@@ -8433,6 +9056,7 @@ mod tests {
                 hybrid: HybridOptions::default(),
                 error_frames: &frames,
                 git_boost: false,
+                memory_boost: false,
             },
         )
         .unwrap();

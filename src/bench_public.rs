@@ -1147,6 +1147,7 @@ fn evaluate_issue(
             hybrid: hybrid_options_from_run_options(options),
             error_frames: &[],
             git_boost: false,
+            memory_boost: false,
         },
     )
     .with_context(|| format!("failed to build context for {}", issue.id))?;
@@ -1237,6 +1238,7 @@ fn evaluate_issue_compare(
             hybrid: query::HybridOptions::with_embedder(true, embedder),
             error_frames: &[],
             git_boost: false,
+            memory_boost: false,
         },
     )
     .with_context(|| format!("failed to build hybrid context for {}", issue.id))?;

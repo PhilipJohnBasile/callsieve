@@ -160,6 +160,20 @@ callsieve hook doctor /path/to/repo
 
 This writes `.callsieve/agent-launch.ps1`, `.callsieve/agent-launch.sh`, local shims, policy files, and MCP config. The launchers start the daemon, prepend `.callsieve/bin` only for the launched process, and then run the agent command passed to them.
 
+## Team Warm Starts And Shared Memory
+
+One machine (or CI) can do the heavy lifting and ship the results through any channel the team already trusts:
+
+```bash
+callsieve index-export /path/to/repo --out team-index.json
+callsieve memory-export /path/to/repo --out team-memory.json
+# on a teammate's checkout:
+callsieve index-import /path/to/repo --from team-index.json
+callsieve memory-import /path/to/repo --from team-memory.json
+```
+
+`index-import` verifies every file by content hash before installing, so freshness checks pass without a rebuild. `memory-import` merges learned task-to-file associations (including agent-confirmed reads from observed sessions) so one teammate's Claude Code session can teach another teammate's Cursor session. After any session served by hooks, `callsieve receipt /path/to/repo --latest` prints a tamper-evident summary of packets, tokens, reads, and searches.
+
 ## Add To AI Tools
 
 The fastest path is automatic detection:

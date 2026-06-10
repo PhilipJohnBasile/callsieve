@@ -4,9 +4,13 @@ pub enum QueryKind {
     NaturalLanguage,
 }
 
+#[cfg(feature = "embed")]
 pub const IDENTIFIER_LEXICAL_WEIGHT: f64 = 0.85;
+#[cfg(feature = "embed")]
 pub const IDENTIFIER_SEMANTIC_WEIGHT: f64 = 0.15;
+#[cfg(feature = "embed")]
 pub const NATURAL_LANGUAGE_LEXICAL_WEIGHT: f64 = 0.40;
+#[cfg(feature = "embed")]
 pub const NATURAL_LANGUAGE_SEMANTIC_WEIGHT: f64 = 0.60;
 
 const SYMBOL_LOOKUP_INTENT: &[&str] = &[
@@ -35,6 +39,7 @@ pub fn query_kind(task: &str, query_tokens: &[String]) -> QueryKind {
 }
 
 impl QueryKind {
+    #[cfg(feature = "embed")]
     pub fn weights(self) -> (f64, f64) {
         match self {
             Self::Identifier => (IDENTIFIER_LEXICAL_WEIGHT, IDENTIFIER_SEMANTIC_WEIGHT),
@@ -45,6 +50,7 @@ impl QueryKind {
         }
     }
 
+    #[cfg(feature = "embed")]
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Identifier => "identifier",
@@ -52,6 +58,7 @@ impl QueryKind {
         }
     }
 
+    #[cfg(feature = "embed")]
     pub fn cosine_floor(self) -> f32 {
         match self {
             Self::NaturalLanguage => 0.10,

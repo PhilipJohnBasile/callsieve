@@ -71,6 +71,16 @@ CallSieve should be better in the places competitors are structurally weak:
 6. Keep expanding competitor-style evals: local suite and report outputs now include first-correct-file@k, expected-file recall, context packet tokens, avoided grep commands, and avoided file reads; use `perf-report` for wall-clock retrieval time.
 7. Make setup harder to ignore: generated rules and hooks should block broad search before context and inject focused expansion commands.
 
+## Five Differentiators No Competitor Ships (June 2026)
+
+Every competitor retrieves statelessly from text. CallSieve owns three assets they lack — a deterministic code graph, the agent's whole session stream (hooks), and a local proof pipeline — and now ships five features built on them:
+
+1. **Graph-consensus recall**: natural-language queries get candidates boosted when multiple top-ranked files agree via import/reference edges — validated on a local harness over the full public NL slice (20.0% → 33.3% first-correct-file@5; the adjacency study shows 82% of misses are one hop from the pool), formal A/B re-run pending. Deterministic and explainable: the packet says which top candidates agree.
+2. **Session-learning retrieval**: hooks observe which files the agent actually read after context; Stop folds them into local task memory; `--memory-boost` recalls them when a similar task recurs. The learning loop no cloud product can run without exfiltrating usage data.
+3. **Edit-impact packets**: editing an indexed file returns callers, related tests, and blast-radius risk through the PostToolUse hook — the only tool participating in the write half of the agent loop.
+4. **Retrieval receipts**: `callsieve receipt` turns any observed session trace into a tamper-evident summary of packets, tokens, reads, and searches; `receipts` rolls up the repo. Auditable AI-cost reduction, not vibes.
+5. **Cross-agent memory**: one agent's confirmed reads teach every other agent on the repo (shared local store with client provenance), and `memory-export`/`memory-import` move learning between teammates alongside index warm starts.
+
 ## Distribution Next Steps (need owner credentials)
 
 - crates.io: `cargo publish` (needs a crates.io token) so `cargo install callsieve` works without `--git`.

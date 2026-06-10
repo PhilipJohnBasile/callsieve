@@ -490,6 +490,7 @@ mod daemon_socket_tests {
             token_budget: query::DEFAULT_AGENT_CONTEXT_TOKEN_BUDGET,
             format: "json".to_string(),
             git_boost: false,
+            memory_boost: false,
             pretty: false,
         }
     }
