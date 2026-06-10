@@ -8272,3 +8272,73 @@ fn session_finish_without_ground_truth_omits_metrics() {
     assert!(summary_json.get("turns_to_first_edit").is_none());
     assert!(summary_json.get("wrong_files_read").is_none());
 }
+
+#[cfg(unix)]
+#[test]
+fn daemon_serves_agent_context_identical_to_direct_and_falls_back_after_stop() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    fs::write(
+        root.join("session.ts"),
+        "export function createSession() {}\nexport function destroySession() {}\n",
+    )
+    .unwrap();
+    let root_str = root.to_str().unwrap();
+    assert!(run(&["index", root_str]).status.success());
+
+    // Foreground daemon as a child process; socket appears once it binds.
+    let mut daemon = Command::new(callsieve())
+        .args(["daemon", root_str, "--foreground", "--interval-ms", "200"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("failed to start daemon");
+    let socket = root.join(".callsieve/daemon.sock");
+    let context_args = [
+        "agent-context",
+        root_str,
+        "where is createSession handled",
+        "--limit",
+        "2",
+    ];
+
+    // Wait until the daemon has primed its in-memory index: the served
+    // response only succeeds after the first refresh + load completes, so
+    // poll until daemon output matches the direct output.
+    let direct = run(&[&context_args[..], &["--no-daemon"]].concat());
+    assert!(direct.status.success());
+    let direct_stdout = String::from_utf8_lossy(&direct.stdout).to_string();
+
+    let mut served = None;
+    for _ in 0..50 {
+        if socket.exists() {
+            let via_daemon = run(&context_args);
+            if via_daemon.status.success() {
+                let stdout = String::from_utf8_lossy(&via_daemon.stdout).to_string();
+                if stdout == direct_stdout {
+                    served = Some(stdout);
+                    break;
+                }
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+
+    // Stop the daemon and confirm the CLI falls back to direct loading.
+    let stop = run(&["daemon-stop", root_str]);
+    assert!(stop.status.success());
+    let _ = daemon.wait();
+    let fallback = run(&context_args);
+
+    assert_eq!(
+        served.as_deref(),
+        Some(direct_stdout.as_str()),
+        "daemon-served output must be byte-identical to direct output"
+    );
+    assert!(fallback.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&fallback.stdout),
+        direct_stdout,
+        "after daemon stop the direct path must serve the same packet"
+    );
+}
