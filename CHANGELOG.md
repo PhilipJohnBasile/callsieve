@@ -4,6 +4,8 @@
 
 ### Changed
 
+- Bench-validated the ranking changes shipped after v0.3.2: identifier-kind queries keep pure lexical order in hybrid retrieval (semantic reordering of them produced zero wins and one persistent loss across every configuration), semantic similarity cannot lift a test file above source it trailed lexically, and test-companion eviction tie-breaks on original rank instead of current position. Result: the 50-issue SWE-bench Lite set now scores `60.0%` lexical = `60.0%` hybrid (50 ties, zero losses) and the natural-language slice keeps `23.3%` hybrid vs `20.0%` lexical — `--embeddings` is strictly non-regressing, resolving the hybrid edge recorded in v0.3.2.
+
 - Daemon serving skips the per-request freshness stat walk while the poll loop's own verification is recent (within 2× the poll interval), removing per-file stat calls from the hot path; an unverified or stalled loop falls back to the full check. The staleness window is unchanged from what the daemon's refresh interval already promises.
 
 ## v0.3.2 - 2026-06-09
