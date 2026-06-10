@@ -17029,10 +17029,16 @@ fn run_daemon(
         std::sync::RwLock<Option<std::sync::Arc<store::CodeIndex>>>,
     > = std::sync::Arc::new(std::sync::RwLock::new(None));
     #[cfg(unix)]
+    let freshness = std::sync::Arc::new(DaemonFreshness::new(interval_ms));
+    #[cfg(unix)]
     let socket = if once {
         None
     } else {
-        spawn_daemon_socket_listener(root.to_path_buf(), std::sync::Arc::clone(&shared_index))
+        spawn_daemon_socket_listener(
+            root.to_path_buf(),
+            std::sync::Arc::clone(&shared_index),
+            std::sync::Arc::clone(&freshness),
+        )
     };
     loop {
         // With an in-memory index a stat-level freshness check (cheap) can
@@ -17048,6 +17054,8 @@ fn run_daemon(
         let already_fresh = false;
 
         if already_fresh {
+            #[cfg(unix)]
+            freshness.mark_verified();
             state.status = if once { "indexed_once" } else { "running" }.to_string();
             state.last_error = None;
             state.stale_files = 0;
@@ -17093,6 +17101,8 @@ fn run_daemon(
             && let Ok(mut guard) = shared_index.write()
         {
             *guard = Some(std::sync::Arc::new(index));
+            drop(guard);
+            freshness.mark_verified();
         }
         if once || daemon_stop_path(root).is_file() {
             state.status = if once { "indexed_once" } else { "stopped" }.to_string();
@@ -17145,6 +17155,7 @@ fn serve_daemon_connection(
     stream: &mut std::os::unix::net::UnixStream,
     root: &Path,
     shared_index: &std::sync::RwLock<Option<std::sync::Arc<store::CodeIndex>>>,
+    freshness: &DaemonFreshness,
 ) {
     use std::io::{Read, Write};
 
@@ -17155,7 +17166,7 @@ fn serve_daemon_connection(
         return;
     }
     let response = match serde_json::from_str::<AgentContextRequest>(&raw) {
-        Ok(request) => daemon_context_response(root, shared_index, &request),
+        Ok(request) => daemon_context_response(root, shared_index, freshness, &request),
         Err(error) => DaemonContextResponse {
             ok: false,
             rendered: String::new(),
@@ -17167,10 +17178,52 @@ fn serve_daemon_connection(
     }
 }
 
+/// The daemon poll loop verifies index freshness every `interval_ms`. While
+/// that verification is recent, serving skips the per-request stat walk —
+/// the staleness window is the same one the daemon already promises. A
+/// zeroed timestamp (or a stalled loop) falls back to the full check.
+#[cfg(unix)]
+struct DaemonFreshness {
+    verified_at_ms: std::sync::atomic::AtomicU64,
+    interval_ms: u64,
+}
+
+#[cfg(unix)]
+impl DaemonFreshness {
+    fn new(interval_ms: u64) -> Self {
+        Self {
+            verified_at_ms: std::sync::atomic::AtomicU64::new(0),
+            interval_ms,
+        }
+    }
+
+    fn mark_verified(&self) {
+        self.verified_at_ms
+            .store(now_epoch_ms(), std::sync::atomic::Ordering::Relaxed);
+    }
+
+    fn recently_verified(&self) -> bool {
+        let verified = self
+            .verified_at_ms
+            .load(std::sync::atomic::Ordering::Relaxed);
+        verified != 0
+            && now_epoch_ms().saturating_sub(verified) <= self.interval_ms.saturating_mul(2)
+    }
+}
+
+#[cfg(unix)]
+fn now_epoch_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or_default()
+}
+
 #[cfg(unix)]
 fn daemon_context_response(
     root: &Path,
     shared_index: &std::sync::RwLock<Option<std::sync::Arc<store::CodeIndex>>>,
+    freshness: &DaemonFreshness,
     request: &AgentContextRequest,
 ) -> DaemonContextResponse {
     let index = shared_index
@@ -17184,7 +17237,7 @@ fn daemon_context_response(
             error: "daemon index not loaded yet".to_string(),
         };
     };
-    if !query::index_status(root, Some(&index)).is_fresh() {
+    if !freshness.recently_verified() && !query::index_status(root, Some(&index)).is_fresh() {
         return DaemonContextResponse {
             ok: false,
             rendered: String::new(),
@@ -17251,6 +17304,7 @@ fn try_daemon_agent_context(root: &Path, request: &AgentContextRequest) -> Optio
 fn spawn_daemon_socket_listener(
     root: PathBuf,
     shared_index: std::sync::Arc<std::sync::RwLock<Option<std::sync::Arc<store::CodeIndex>>>>,
+    freshness: std::sync::Arc<DaemonFreshness>,
 ) -> Option<PathBuf> {
     let socket = daemon_socket_path(&root);
     let _ = fs::remove_file(&socket);
@@ -17261,7 +17315,9 @@ fn spawn_daemon_socket_listener(
     thread::spawn(move || {
         for stream in listener.incoming() {
             match stream {
-                Ok(mut stream) => serve_daemon_connection(&mut stream, &root, &shared_index),
+                Ok(mut stream) => {
+                    serve_daemon_connection(&mut stream, &root, &shared_index, &freshness)
+                }
                 Err(_) => break,
             }
         }
@@ -19101,8 +19157,12 @@ mod daemon_socket_tests {
             std::sync::Arc::new(std::sync::RwLock::new(Some(std::sync::Arc::new(
                 index.clone(),
             ))));
-        let socket =
-            spawn_daemon_socket_listener(root.clone(), std::sync::Arc::clone(&shared)).unwrap();
+        let socket = spawn_daemon_socket_listener(
+            root.clone(),
+            std::sync::Arc::clone(&shared),
+            std::sync::Arc::new(DaemonFreshness::new(1000)),
+        )
+        .unwrap();
         assert!(socket.exists());
 
         let request = request("where is createSession handled");
@@ -19139,8 +19199,12 @@ mod daemon_socket_tests {
 
         let shared: std::sync::Arc<std::sync::RwLock<Option<std::sync::Arc<store::CodeIndex>>>> =
             std::sync::Arc::new(std::sync::RwLock::new(Some(std::sync::Arc::new(index))));
-        let socket =
-            spawn_daemon_socket_listener(root.clone(), std::sync::Arc::clone(&shared)).unwrap();
+        let socket = spawn_daemon_socket_listener(
+            root.clone(),
+            std::sync::Arc::clone(&shared),
+            std::sync::Arc::new(DaemonFreshness::new(1000)),
+        )
+        .unwrap();
 
         // Mutate a source file: the served index is now stale and the daemon
         // must refuse so the client falls back to a direct load.
@@ -19152,6 +19216,42 @@ mod daemon_socket_tests {
 
         assert!(try_daemon_agent_context(&root, &request("anything")).is_none());
         let _ = fs::remove_file(socket);
+    }
+
+    #[test]
+    fn recently_verified_daemon_skips_the_per_request_stat_walk() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        fs::write(
+            root.join("session.ts"),
+            "export function createSession() {}\n",
+        )
+        .unwrap();
+        let index = indexer::build_index(&root).unwrap();
+        store::json_store::save_index(&root, &index).unwrap();
+
+        let shared: std::sync::RwLock<Option<std::sync::Arc<store::CodeIndex>>> =
+            std::sync::RwLock::new(Some(std::sync::Arc::new(index)));
+
+        // Within the poll loop's verification window, a mutation is served
+        // until the next tick — the same staleness contract the daemon's
+        // refresh interval already promises.
+        let freshness = DaemonFreshness::new(60_000);
+        freshness.mark_verified();
+        fs::write(
+            root.join("session.ts"),
+            "export function createSession() { return 1; }\n",
+        )
+        .unwrap();
+        let response = daemon_context_response(&root, &shared, &freshness, &request("anything"));
+        assert!(response.ok, "{}", response.error);
+
+        // A zeroed (never-verified) timestamp falls back to the full check
+        // and refuses the stale index.
+        let unverified = DaemonFreshness::new(60_000);
+        let response = daemon_context_response(&root, &shared, &unverified, &request("anything"));
+        assert!(!response.ok);
+        assert!(response.error.contains("stale"), "{}", response.error);
     }
 
     #[test]

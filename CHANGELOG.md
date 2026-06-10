@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Changed
+
+- Daemon serving skips the per-request freshness stat walk while the poll loop's own verification is recent (within 2× the poll interval), removing per-file stat calls from the hot path; an unverified or stalled loop falls back to the full check. The staleness window is unchanged from what the daemon's refresh interval already promises.
+
 ## v0.3.2 - 2026-06-09
 
 ### Added
