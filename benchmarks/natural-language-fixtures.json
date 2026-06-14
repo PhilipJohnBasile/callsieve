@@ -1,0 +1,61 @@
+{
+  "path": ".",
+  "tasks": [
+    {
+      "id": "nl-speed-report",
+      "category": "natural_language",
+      "task": "where is the local speed report for context generation implemented",
+      "expected_files": ["src/cli/mod.rs"],
+      "critical_files": ["src/cli/mod.rs"]
+    },
+    {
+      "id": "nl-stale-index",
+      "category": "natural_language",
+      "task": "what code decides whether a saved index is stale before serving context",
+      "expected_files": ["src/cli/daemon.rs", "src/query/mod.rs"],
+      "critical_files": ["src/cli/daemon.rs"]
+    },
+    {
+      "id": "nl-proof-tests",
+      "category": "natural_language",
+      "task": "where do integration tests prove command line proof workflows",
+      "expected_files": ["tests/cli.rs"],
+      "critical_files": ["tests/cli.rs"]
+    },
+    {
+      "id": "nl-mcp-context",
+      "category": "natural_language",
+      "task": "where is the MCP server tool that returns compact repository context implemented",
+      "expected_files": ["src/mcp.rs"],
+      "critical_files": ["src/mcp.rs"]
+    },
+    {
+      "id": "nl-stacktrace-error-context",
+      "category": "natural_language",
+      "task": "where are stack traces parsed so error context can promote crashing files",
+      "expected_files": ["src/query/mod.rs", "src/query/stacktrace.rs"],
+      "critical_files": ["src/query/mod.rs"]
+    },
+    {
+      "id": "nl-ownership",
+      "category": "natural_language",
+      "task": "where is ownership information attached to selected files",
+      "expected_files": ["src/indexer/ownership.rs", "src/query/mod.rs"],
+      "critical_files": ["src/indexer/ownership.rs"]
+    },
+    {
+      "id": "nl-benchmark-docs",
+      "category": "natural_language",
+      "task": "what documentation explains benchmark manifests and evidence collection",
+      "expected_files": ["README.md", "docs/BENCHMARKS.md"],
+      "critical_files": ["README.md"]
+    },
+    {
+      "id": "nl-editor-local-context",
+      "category": "natural_language",
+      "task": "where does the editor extension ask the local command line tool for context",
+      "expected_files": ["editors/vscode/src/client.ts", "src/cli/mod.rs"],
+      "critical_files": ["editors/vscode/src/client.ts"]
+    }
+  ]
+}

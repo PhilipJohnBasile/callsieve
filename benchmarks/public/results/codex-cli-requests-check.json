@@ -1,0 +1,30 @@
+{
+  "command": "agent-native-check",
+  "schema_version": 1,
+  "status": "pass",
+  "mode": "measured",
+  "tasks_path": "benchmarks/public/results/codex-cli-requests-task-log.json",
+  "task_count": 10,
+  "tasks_with_expected_files": 10,
+  "tasks_with_callsieve_files": 10,
+  "tasks_with_callsieve_packet_tokens": 10,
+  "tasks_with_agent_native_files": 10,
+  "tasks_with_agent_native_context_tokens": 10,
+  "tasks_ready_for_mode": 10,
+  "source_artifact_evidence": [
+    {
+      "path": "benchmarks/public/results/codex-cli-requests-task-log.json",
+      "role": "task_log",
+      "bytes": 10001,
+      "hash": "fnv1a64:2f735c0f7d21857d"
+    },
+    {
+      "path": "benchmarks/public/results/codex-cli-requests-transcript.json",
+      "role": "agent_native_transcript_or_export",
+      "bytes": 1386357,
+      "hash": "fnv1a64:20dc344a5adaefc3"
+    }
+  ],
+  "issues": [],
+  "next_step": "Run agent-native-baseline with the same task log and source artifacts, then add the generated artifact to agent_native_search_baselines."
+}

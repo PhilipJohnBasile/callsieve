@@ -1,0 +1,85 @@
+{
+  "command": "repo-pack-baseline",
+  "schema_version": 1,
+  "id": "full-repo-pack-proxy-requests",
+  "tool": "FullRepoPackProxy",
+  "generated_at": 1781399683,
+  "root": "/Users/pjb/git/callsieve/benchmarks/public/repos/psf/requests",
+  "inclusion_scope": "gitignore-respecting source/config/docs files from the local checkout, measured as a full-repo prompt-pack proxy",
+  "token_estimate": "ceil(total_bytes / 4)",
+  "locally_measured": true,
+  "measurement_notes": [
+    "No external repo-packer CLI was executed.",
+    "This proxy measures the local prompt payload class that repo packers produce: file headers plus source/config/docs bytes.",
+    "Use external Repomix, Gitingest, or Code2Prompt JSON artifacts when those tools are installed and approved."
+  ],
+  "metrics": {
+    "file_count": 48,
+    "source_bytes": 403268,
+    "framing_bytes": 1473,
+    "total_bytes": 404741,
+    "total_tokens": 101186
+  },
+  "largest_files": [
+    {
+      "path": "tests/test_requests.py",
+      "bytes": 90921,
+      "tokens": 22731
+    },
+    {
+      "path": "HISTORY.md",
+      "bytes": 49858,
+      "tokens": 12465
+    },
+    {
+      "path": "requests/models.py",
+      "bytes": 34308,
+      "tokens": 8577
+    },
+    {
+      "path": "requests/utils.py",
+      "bytes": 30177,
+      "tokens": 7545
+    },
+    {
+      "path": "requests/sessions.py",
+      "bytes": 30135,
+      "tokens": 7534
+    },
+    {
+      "path": "tests/test_utils.py",
+      "bytes": 26055,
+      "tokens": 6514
+    },
+    {
+      "path": "requests/adapters.py",
+      "bytes": 21344,
+      "tokens": 5336
+    },
+    {
+      "path": "requests/cookies.py",
+      "bytes": 18430,
+      "tokens": 4608
+    },
+    {
+      "path": "docs/conf.py",
+      "bytes": 12270,
+      "tokens": 3068
+    },
+    {
+      "path": "tests/test_lowlevel.py",
+      "bytes": 11512,
+      "tokens": 2878
+    },
+    {
+      "path": "requests/auth.py",
+      "bytes": 10207,
+      "tokens": 2552
+    },
+    {
+      "path": "requests/api.py",
+      "bytes": 6496,
+      "tokens": 1624
+    }
+  ]
+}

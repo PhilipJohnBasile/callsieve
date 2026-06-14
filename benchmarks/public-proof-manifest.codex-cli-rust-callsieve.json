@@ -1,0 +1,256 @@
+{
+  "goal": "Make CallSieve the default local-first MCP retrieval layer for coding agents, backed by external proof that it selects the right files before model tokens are spent.",
+  "competitive_report": "benchmarks/competitive-response-manifest.example.json",
+  "public_repos_dir": "benchmarks/public/repos",
+  "miss_triage": "benchmarks/public/results/nl-miss-graph-adjacency-study.json",
+  "targets": {
+    "require_competitive_report_pass": true,
+    "require_zero_retrieval_model_tokens": true,
+    "require_zero_per_query_retrieval_cost": true,
+    "require_no_default_code_upload": true,
+    "maximum_default_packet_tokens": 5000,
+    "require_broad_read_payload_reduction": true,
+    "require_context_packet_quality": true,
+    "require_current_public_report_retrieval_contract": true,
+    "minimum_broad_read_context_payload_reduction_percent": 90.0,
+    "minimum_public_reports": 7,
+    "minimum_total_public_evaluated": 186,
+    "target_swe_bench_style_first_correct_file_rate_at_k": 1.0,
+    "target_natural_language_first_correct_file_rate_at_k": 1.0
+  },
+  "public_reports": [
+    {
+      "id": "swe-bench-lite-50",
+      "category": "swe_bench_style",
+      "path": "benchmarks/public/results/compare-50-stemboost.json",
+      "preferred_arm": "lexical",
+      "minimum_first_correct_file_rate_at_k": 0.6,
+      "minimum_minus_grep": 0.5,
+      "require_grep_baseline": true,
+      "minimum_evaluated": 50,
+      "require_current_retrieval_contract": false
+    },
+    {
+      "id": "swe-bench-lite-natural-language-30",
+      "category": "natural_language",
+      "path": "benchmarks/public/results/compare-nl-ceiling.json",
+      "preferred_arm": "hybrid",
+      "minimum_first_correct_file_rate_at_k": 0.36,
+      "minimum_minus_grep": 0.2,
+      "require_grep_baseline": true,
+      "minimum_evaluated": 30,
+      "require_current_retrieval_contract": false
+    },
+    {
+      "id": "swe-bench-lite-50-domain",
+      "category": "swe_bench_style",
+      "path": "benchmarks/public/results/mode-a-50-domain.json",
+      "preferred_arm": "lexical",
+      "minimum_first_correct_file_rate_at_k": 1.0,
+      "require_grep_baseline": false,
+      "minimum_evaluated": 50
+    },
+    {
+      "id": "requests-seed-10-domain",
+      "category": "swe_bench_style",
+      "path": "benchmarks/public/results/mode-a-requests-seed.json",
+      "preferred_arm": "lexical",
+      "minimum_first_correct_file_rate_at_k": 1.0,
+      "require_grep_baseline": false,
+      "minimum_evaluated": 10
+    },
+    {
+      "id": "swe-bench-lite-natural-language-domain-30",
+      "category": "natural_language",
+      "path": "benchmarks/public/results/mode-a-nl-domain.json",
+      "preferred_arm": "lexical",
+      "minimum_first_correct_file_rate_at_k": 1.0,
+      "require_grep_baseline": false,
+      "minimum_evaluated": 30
+    },
+    {
+      "id": "callsieve-rust-language-slice-12",
+      "category": "language_slice_rust",
+      "path": "benchmarks/public/results/mode-a-rust-callsieve.json",
+      "preferred_arm": "lexical",
+      "minimum_first_correct_file_rate_at_k": 1.0,
+      "require_grep_baseline": false,
+      "minimum_evaluated": 12
+    },
+    {
+      "id": "callsieve-typescript-language-slice-4",
+      "category": "language_slice_typescript",
+      "path": "benchmarks/public/results/mode-a-typescript-callsieve.json",
+      "preferred_arm": "lexical",
+      "minimum_first_correct_file_rate_at_k": 1.0,
+      "require_grep_baseline": false,
+      "minimum_evaluated": 4
+    }
+  ],
+  "public_result_catalog": [
+    "benchmarks/public/results/compare-50.json",
+    "benchmarks/public/results/compare-50-lowfloor2.json",
+    "benchmarks/public/results/compare-50-lexorder.json",
+    "benchmarks/public/results/compare-50-stemboost.json",
+    "benchmarks/public/results/compare-50-ceiling.json",
+    "benchmarks/public/results/mode-a-50-pyconstants.json",
+    "benchmarks/public/results/mode-a-50-domain.json",
+    "benchmarks/public/results/mode-a-requests-seed.json",
+    "benchmarks/public/results/compare-nl.json",
+    "benchmarks/public/results/compare-nl-lowfloor2.json",
+    "benchmarks/public/results/compare-nl-lexorder.json",
+    "benchmarks/public/results/compare-nl-stemboost.json",
+    "benchmarks/public/results/compare-nl-codemodel.json",
+    "benchmarks/public/results/compare-nl-ceiling.json",
+    "benchmarks/public/results/mode-a-nl-vocab.json",
+    "benchmarks/public/results/mode-a-nl-domain.json"
+  ],
+  "repo_packer_baselines": [
+    {
+      "id": "full-repo-pack-proxy-astropy",
+      "tool": "FullRepoPackProxy",
+      "path": "benchmarks/public/results/full-repo-pack-proxy-astropy.json",
+      "command": "cargo run -- repo-pack-baseline benchmarks/public/repos/astropy/astropy --id full-repo-pack-proxy-astropy --tool FullRepoPackProxy --out benchmarks/public/results/full-repo-pack-proxy-astropy.json",
+      "required": true,
+      "token_count_pointer": "/metrics/total_tokens",
+      "byte_count_pointer": "/metrics/total_bytes",
+      "file_count_pointer": "/metrics/file_count",
+      "minimum_token_ratio_vs_callsieve_packet": 1000.0
+    },
+    {
+      "id": "full-repo-pack-proxy-django",
+      "tool": "FullRepoPackProxy",
+      "path": "benchmarks/public/results/full-repo-pack-proxy-django.json",
+      "command": "cargo run -- repo-pack-baseline benchmarks/public/repos/django/django --id full-repo-pack-proxy-django --tool FullRepoPackProxy --out benchmarks/public/results/full-repo-pack-proxy-django.json",
+      "required": true,
+      "token_count_pointer": "/metrics/total_tokens",
+      "byte_count_pointer": "/metrics/total_bytes",
+      "file_count_pointer": "/metrics/file_count",
+      "minimum_token_ratio_vs_callsieve_packet": 1000.0
+    },
+    {
+      "id": "full-repo-pack-proxy-requests",
+      "tool": "FullRepoPackProxy",
+      "path": "benchmarks/public/results/full-repo-pack-proxy-requests.json",
+      "command": "cargo run -- repo-pack-baseline benchmarks/public/repos/psf/requests --id full-repo-pack-proxy-requests --tool FullRepoPackProxy --out benchmarks/public/results/full-repo-pack-proxy-requests.json",
+      "required": true,
+      "token_count_pointer": "/metrics/total_tokens",
+      "byte_count_pointer": "/metrics/total_bytes",
+      "file_count_pointer": "/metrics/file_count",
+      "minimum_token_ratio_vs_callsieve_packet": 20.0
+    }
+  ],
+  "agent_native_search_baselines": [
+    {
+      "id": "codex-cli-public-requests",
+      "tool": "Codex CLI native search/read workflow",
+      "path": "benchmarks/public/results/codex-cli-requests.json",
+      "command": "benchmarks/tools/codex-agent-native-requests.py --suite requests",
+      "required": true,
+      "minimum_tasks": 10,
+      "minimum_callsieve_minus_agent_native_first_correct_file_rate_at_k": 0.0,
+      "minimum_agent_native_context_token_ratio_vs_callsieve": 2.0
+    },
+    {
+      "id": "codex-cli-public-typescript-callsieve",
+      "tool": "Codex CLI native search/read workflow",
+      "path": "benchmarks/public/results/codex-cli-typescript-callsieve.json",
+      "command": "benchmarks/tools/codex-agent-native-requests.py --suite typescript",
+      "required": true,
+      "minimum_tasks": 4,
+      "minimum_callsieve_minus_agent_native_first_correct_file_rate_at_k": 0.0,
+      "minimum_agent_native_context_token_ratio_vs_callsieve": 2.0
+    },
+    {
+      "id": "codex-cli-public-rust-callsieve",
+      "tool": "Codex CLI native search/read workflow",
+      "path": "benchmarks/public/results/codex-cli-rust-callsieve.json",
+      "command": "benchmarks/tools/codex-agent-native-requests.py --suite rust",
+      "required": true,
+      "minimum_tasks": 12,
+      "minimum_callsieve_minus_agent_native_first_correct_file_rate_at_k": 0.0,
+      "minimum_agent_native_context_token_ratio_vs_callsieve": 2.0
+    }
+  ],
+  "evidence_commands": [
+    "cargo run -- index .",
+    "cargo run -- competitive-report benchmarks/competitive-response-manifest.example.json",
+    "cargo run -- public-proof-report benchmarks/public-proof-manifest.example.json",
+    "cargo run -- setup-auto . --dry-run",
+    "cargo run -- mcp-config . --format json",
+    "cargo run -- mcp-registry-manifest --out server.json",
+    "cargo run -- mcp-contract --out benchmarks/public/results/mcp-contract.json",
+    "cargo run -- agent-native-protocol --out benchmarks/public/results/agent-native-protocol.json",
+    "cargo run -- agent-native-template benchmarks/public/repos/psf/requests benchmarks/public/manifest.json --k 5 --out benchmarks/public/results/agent-native-requests-template.json",
+    "python3 benchmarks/tools/codex-agent-native-requests.py --suite requests --plan-only",
+    "python3 benchmarks/tools/codex-agent-native-requests.py --suite requests --validate-plan",
+    "python3 benchmarks/tools/codex-agent-native-requests.py --suite requests",
+    "python3 benchmarks/tools/codex-agent-native-requests.py --suite rust --plan-only",
+    "python3 benchmarks/tools/codex-agent-native-requests.py --suite rust --validate-plan",
+    "python3 benchmarks/tools/codex-agent-native-requests.py --suite rust",
+    "python3 benchmarks/tools/codex-agent-native-requests.py --suite typescript --plan-only",
+    "python3 benchmarks/tools/codex-agent-native-requests.py --suite typescript --validate-plan",
+    "python3 benchmarks/tools/codex-agent-native-requests.py --suite typescript",
+    "cargo run -- repo-pack-baseline benchmarks/public/repos/astropy/astropy --id full-repo-pack-proxy-astropy --tool FullRepoPackProxy --out benchmarks/public/results/full-repo-pack-proxy-astropy.json",
+    "cargo run -- repo-pack-baseline benchmarks/public/repos/django/django --id full-repo-pack-proxy-django --tool FullRepoPackProxy --out benchmarks/public/results/full-repo-pack-proxy-django.json",
+    "cargo run -- repo-pack-baseline benchmarks/public/repos/psf/requests --id full-repo-pack-proxy-requests --tool FullRepoPackProxy --out benchmarks/public/results/full-repo-pack-proxy-requests.json",
+    "cargo run --features embed -- bench-run benchmarks/public/manifest-50.json --workdir benchmarks/public/repos --compare --out benchmarks/public/results/compare-50-rerun.json --resume",
+    "cargo run --features embed -- bench-run benchmarks/public/manifest-50.json --workdir benchmarks/public/repos --out benchmarks/public/results/mode-a-50-domain-rerun.json --resume",
+    "cargo run --features embed -- bench-run benchmarks/public/manifest.json --workdir benchmarks/public/repos --out benchmarks/public/results/mode-a-requests-seed-rerun.json --resume",
+    "cargo run --features embed -- bench-run benchmarks/public/manifest-nl.json --workdir benchmarks/public/repos --compare --out benchmarks/public/results/compare-nl-rerun.json --resume",
+    "cargo run --features embed -- bench-run benchmarks/public/manifest-nl.json --workdir benchmarks/public/repos --out benchmarks/public/results/mode-a-nl-domain-rerun.json --resume",
+    "cargo run --features embed -- bench-run benchmarks/public/manifest-rust.json --workdir benchmarks/public/repos --out benchmarks/public/results/mode-a-rust-callsieve-rerun.json --resume",
+    "cargo run --features embed -- bench-run benchmarks/public/manifest-typescript.json --workdir benchmarks/public/repos --out benchmarks/public/results/mode-a-typescript-callsieve-rerun.json --resume"
+  ],
+  "terminal_artifacts": [
+    {
+      "id": "public-proof-terminal-example",
+      "path": "benchmarks/public/results/public-proof-terminal.example.txt",
+      "kind": "terminal_output",
+      "description": "Example terminal transcript showing the public proof report command and headline metrics.",
+      "required": true
+    },
+    {
+      "id": "mcp-contract",
+      "path": "benchmarks/public/results/mcp-contract.json",
+      "kind": "json_artifact",
+      "description": "Standalone exported MCP structuredContent contract for callsieve_context.",
+      "required": true
+    },
+    {
+      "id": "agent-native-protocol",
+      "path": "benchmarks/public/results/agent-native-protocol.json",
+      "kind": "json_artifact",
+      "description": "Standalone exported protocol for approved agent-native search measurements.",
+      "required": true
+    },
+    {
+      "id": "agent-native-template",
+      "path": "benchmarks/public/results/agent-native-requests-template.json",
+      "kind": "json_artifact",
+      "description": "Prepared native-search measurement template with CallSieve files and packet tokens filled for public Requests tasks.",
+      "required": true
+    },
+    {
+      "id": "agent-native-check",
+      "path": "benchmarks/public/results/codex-cli-requests-check.json",
+      "kind": "json_artifact",
+      "description": "Measured Codex CLI native-search preflight check for public Requests tasks.",
+      "required": true
+    },
+    {
+      "id": "agent-native-check",
+      "path": "benchmarks/public/results/codex-cli-typescript-callsieve-check.json",
+      "kind": "json_artifact",
+      "description": "Measured Codex CLI native-search preflight check for public CallSieve TypeScript tasks.",
+      "required": true
+    },
+    {
+      "id": "agent-native-check",
+      "path": "benchmarks/public/results/codex-cli-rust-callsieve-check.json",
+      "kind": "json_artifact",
+      "description": "Measured Codex CLI native-search preflight check for public CallSieve Rust tasks.",
+      "required": true
+    }
+  ]
+}

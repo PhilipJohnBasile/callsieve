@@ -1,0 +1,24 @@
+{
+  "type": "object",
+  "properties": {
+    "task_id": {
+      "type": "string"
+    },
+    "files_selected_or_read": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1
+    },
+    "rationale": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "task_id",
+    "files_selected_or_read",
+    "rationale"
+  ],
+  "additionalProperties": false
+}

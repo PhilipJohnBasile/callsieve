@@ -28,6 +28,8 @@
 
 # Local benchmark fixture clones
 /benchmarks/github-*/
+/benchmarks/public/repos/
+/benchmarks/public/results/*-rerun.json
 
 # Local evidence, transcripts, manifests, and rehearsal outputs
 /benchmarks/**/*.local*.json

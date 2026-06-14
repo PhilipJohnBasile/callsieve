@@ -1,0 +1,89 @@
+{
+  "command": "agent-native-protocol",
+  "schema_version": 1,
+  "status": "pass",
+  "claim_boundary": "Protocol only: this artifact defines how to collect approved agent-native search measurements. It does not claim a measured win until transcript/export-backed baselines are added to public proof.",
+  "workflow": [
+    {
+      "step": 1,
+      "name": "prepare_callsieve_side",
+      "command": "callsieve agent-native-template <repo> <tasks-or-public-manifest.json> --k 5 --out <task-log.json>",
+      "evidence": "unmeasured task log with expected_files, callsieve_files, callsieve_packet_tokens, source task hash, index fingerprint, and retrieval contract fingerprint"
+    },
+    {
+      "step": 2,
+      "name": "record_native_search_run",
+      "command": "run the approved native agent on the same pinned tasks without using CallSieve for the native side",
+      "evidence": "transcript or native-search export showing files selected/read and transcript-backed context-token counts"
+    },
+    {
+      "step": 3,
+      "name": "preflight_measurement",
+      "command": "callsieve agent-native-check <filled-task-log.json> --mode measured --source-artifact <transcript-or-export>...",
+      "evidence": "status pass with measured agent_native_files, agent_native_context_tokens, recording_status=measured, and hashed source artifacts"
+    },
+    {
+      "step": 4,
+      "name": "standardize_baseline",
+      "command": "callsieve agent-native-baseline <filled-task-log.json> --source-artifact <transcript-or-export>... --out <baseline.json>",
+      "evidence": "locally measured baseline artifact with first-correct rates, context-token ratios, source_artifact_evidence, and transcript_provenance_status pass"
+    },
+    {
+      "step": 5,
+      "name": "publish_guardrail",
+      "command": "add <baseline.json> to public-proof manifest agent_native_search_baselines and rerun callsieve public-proof-report <manifest.json>",
+      "evidence": "public proof passes only after source artifacts are reread and byte counts and hashes are recomputed"
+    }
+  ],
+  "required_task_fields": {
+    "template": [
+      "id",
+      "task",
+      "expected_files",
+      "callsieve_files",
+      "callsieve_packet_tokens",
+      "recording_status=needs_agent_native_measurement",
+      "agent_native_files=[]",
+      "agent_native_context_tokens=0"
+    ],
+    "measured": [
+      "id",
+      "expected_files",
+      "callsieve_files",
+      "callsieve_packet_tokens",
+      "agent_native_files",
+      "agent_native_context_tokens",
+      "recording_status=measured"
+    ],
+    "recording_status": [
+      "needs_agent_native_measurement before the external run",
+      "measured after agent_native_files and transcript-backed agent_native_context_tokens are filled"
+    ]
+  },
+  "source_artifact_requirements": {
+    "required_roles": [
+      "task_log",
+      "agent_native_transcript_or_export"
+    ],
+    "hash_algorithm": "fnv1a64 stable_content_hash",
+    "requirements": [
+      "at least one transcript or native-search export is required for measured baselines",
+      "source artifacts must be readable locally when public proof runs",
+      "public proof recomputes source artifact byte counts and hashes",
+      "artifacts must not require network access, cloud credentials, or proprietary upload"
+    ]
+  },
+  "validation_commands": [
+    "callsieve agent-native-check <task-log.json> --mode template",
+    "callsieve agent-native-check <filled-task-log.json> --mode measured --source-artifact <transcript-or-export>...",
+    "callsieve agent-native-baseline <filled-task-log.json> --source-artifact <transcript-or-export>... --out <baseline.json>",
+    "callsieve public-proof-report <public-proof-manifest.json>"
+  ],
+  "public_proof_integration": [
+    "terminal_artifacts id=agent-native-template validates the unmeasured template by recomputing CallSieve files and packet tokens from current source/index/retrieval provenance",
+    "terminal_artifacts id=agent-native-protocol validates this protocol artifact against the live CLI output",
+    "terminal_artifacts id=agent-native-check validates the measured preflight output by recomputing it from the task log and transcript/export source artifacts, and one passing check artifact must contain all source hashes for each measured baseline before it can support public proof",
+    "agent_native_search_baselines entries are optional until real approved external-agent runs exist",
+    "required agent_native_search_baselines fail closed when missing, not locally measured, below thresholds, lacking recomputed transcript/export provenance, missing the checked measured preflight artifact, or not hash-linked to that preflight artifact"
+  ]
+}

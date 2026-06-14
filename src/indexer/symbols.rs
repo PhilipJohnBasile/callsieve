@@ -190,7 +190,44 @@ fn parse_python_line(line: &str) -> Option<(String, String, String)> {
         }
     }
 
+    if indentation(line) == 0
+        && let Some(name) = parse_python_constant_assignment(rest)
+    {
+        return Some((name, "constant".to_string(), "public".to_string()));
+    }
+
     None
+}
+
+fn parse_python_constant_assignment(line: &str) -> Option<String> {
+    if line.starts_with('#') {
+        return None;
+    }
+    let (left, _) = line.split_once('=')?;
+    if left.contains("==") || left.contains("!=") || left.contains("<=") || left.contains(">=") {
+        return None;
+    }
+    let name = left.split_once(':').map_or(left, |(name, _)| name).trim();
+    (is_python_constant_name(name)).then(|| name.to_string())
+}
+
+fn is_python_constant_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !first.is_ascii_uppercase() {
+        return false;
+    }
+    let mut saw_uppercase = true;
+    for character in chars {
+        if character.is_ascii_uppercase() {
+            saw_uppercase = true;
+        } else if !character.is_ascii_digit() && character != '_' {
+            return false;
+        }
+    }
+    saw_uppercase
 }
 
 fn parse_php_line(line: &str) -> Option<(String, String, String)> {
@@ -871,6 +908,20 @@ mod tests {
 
         assert!(symbols.iter().any(|symbol| symbol.name == "User"));
         assert!(symbols.iter().any(|symbol| symbol.name == "create_user"));
+    }
+
+    #[test]
+    fn python_fallback_detects_top_level_constants() {
+        assert_eq!(
+            parse_python_line("FILE_UPLOAD_PERMISSIONS = None"),
+            Some((
+                "FILE_UPLOAD_PERMISSIONS".to_string(),
+                "constant".to_string(),
+                "public".to_string()
+            ))
+        );
+        assert!(parse_python_line("lower_value = 1").is_none());
+        assert!(parse_python_line("    LOCAL_SETTING = True").is_none());
     }
 
     #[test]

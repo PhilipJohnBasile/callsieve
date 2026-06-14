@@ -194,6 +194,7 @@ pub struct ModeAReport {
     pub schema_version: u32,
     pub generated_at_unix: u64,
     pub generated_at_iso_date: String,
+    pub retrieval_contract_fingerprint: String,
     pub manifest: ManifestSummary,
     pub k: usize,
     pub aggregate: Aggregate,
@@ -206,6 +207,7 @@ pub struct CompareReport {
     pub schema_version: u32,
     pub generated_at_unix: u64,
     pub generated_at_iso_date: String,
+    pub retrieval_contract_fingerprint: String,
     pub manifest: ManifestSummary,
     pub k: usize,
     pub aggregate: CompareAggregate,
@@ -355,6 +357,7 @@ pub fn run_with_options(
         schema_version: 1,
         generated_at_unix: now,
         generated_at_iso_date: iso_date,
+        retrieval_contract_fingerprint: query::retrieval_contract_fingerprint(),
         manifest: ManifestSummary {
             path: manifest_path.display().to_string(),
             schema_version: manifest.schema_version,
@@ -423,6 +426,7 @@ pub fn run_compare_with_embedder(
         schema_version: 1,
         generated_at_unix: now,
         generated_at_iso_date: iso_date,
+        retrieval_contract_fingerprint: query::retrieval_contract_fingerprint(),
         manifest: ManifestSummary {
             path: manifest_path.display().to_string(),
             schema_version: manifest.schema_version,
@@ -805,6 +809,7 @@ fn mode_a_report(
         schema_version: 1,
         generated_at_unix: now,
         generated_at_iso_date: iso_date,
+        retrieval_contract_fingerprint: query::retrieval_contract_fingerprint(),
         manifest: manifest_summary(manifest_path, manifest),
         k,
         aggregate,
@@ -826,6 +831,7 @@ fn compare_report(
         schema_version: 1,
         generated_at_unix: now,
         generated_at_iso_date: iso_date,
+        retrieval_contract_fingerprint: query::retrieval_contract_fingerprint(),
         manifest: manifest_summary(manifest_path, manifest),
         k,
         aggregate,
@@ -1931,7 +1937,7 @@ mod tests {
         }
         let json = std::fs::read_to_string(path).expect("read seed manifest");
         let manifest = Manifest::from_str(&json).expect("seed manifest parses");
-        assert_eq!(manifest.issues.len(), 5);
+        assert_eq!(manifest.issues.len(), 10);
         for issue in &manifest.issues {
             assert_eq!(issue.repo, "psf/requests");
             assert!(!issue.base_commit.is_empty());
@@ -2113,6 +2119,7 @@ mod tests {
             schema_version: 1,
             generated_at_unix: 0,
             generated_at_iso_date: "1970-01-01".to_string(),
+            retrieval_contract_fingerprint: query::retrieval_contract_fingerprint(),
             manifest: ManifestSummary {
                 path: manifest_path.display().to_string(),
                 schema_version: None,
@@ -2366,6 +2373,7 @@ mod tests {
             schema_version: 1,
             generated_at_unix: 0,
             generated_at_iso_date: "1970-01-01".to_string(),
+            retrieval_contract_fingerprint: query::retrieval_contract_fingerprint(),
             manifest: ManifestSummary {
                 path: manifest_path.display().to_string(),
                 schema_version: None,

@@ -1,0 +1,85 @@
+{
+  "command": "repo-pack-baseline",
+  "schema_version": 1,
+  "id": "full-repo-pack-proxy-django",
+  "tool": "FullRepoPackProxy",
+  "generated_at": 1781375463,
+  "root": "/Users/pjb/git/callsieve/benchmarks/public/repos/django/django",
+  "inclusion_scope": "gitignore-respecting source/config/docs files from the local checkout, measured as a full-repo prompt-pack proxy",
+  "token_estimate": "ceil(total_bytes / 4)",
+  "locally_measured": true,
+  "measurement_notes": [
+    "No external repo-packer CLI was executed.",
+    "This proxy measures the local prompt payload class that repo packers produce: file headers plus source/config/docs bytes.",
+    "Use external Repomix, Gitingest, or Code2Prompt JSON artifacts when those tools are installed and approved."
+  ],
+  "metrics": {
+    "file_count": 3283,
+    "source_bytes": 20467046,
+    "framing_bytes": 155446,
+    "total_bytes": 20622492,
+    "total_tokens": 5155623
+  },
+  "largest_files": [
+    {
+      "path": "tests/gis_tests/data/rasters/raster.numpy.txt",
+      "bytes": 709050,
+      "tokens": 177263
+    },
+    {
+      "path": "tests/admin_views/tests.py",
+      "bytes": 299195,
+      "tokens": 74799
+    },
+    {
+      "path": "tests/forms_tests/tests/test_forms.py",
+      "bytes": 174546,
+      "tokens": 43637
+    },
+    {
+      "path": "tests/queries/tests.py",
+      "bytes": 168640,
+      "tokens": 42160
+    },
+    {
+      "path": "tests/migrations/test_operations.py",
+      "bytes": 166709,
+      "tokens": 41678
+    },
+    {
+      "path": "tests/schema/tests.py",
+      "bytes": 143984,
+      "tokens": 35996
+    },
+    {
+      "path": "docs/ref/models/querysets.txt",
+      "bytes": 138461,
+      "tokens": 34616
+    },
+    {
+      "path": "tests/migrations/test_autodetector.py",
+      "bytes": 132887,
+      "tokens": 33222
+    },
+    {
+      "path": "docs/ref/contrib/admin/index.txt",
+      "bytes": 132369,
+      "tokens": 33093
+    },
+    {
+      "path": "tests/model_forms/tests.py",
+      "bytes": 121354,
+      "tokens": 30339
+    },
+    {
+      "path": "docs/ref/settings.txt",
+      "bytes": 113095,
+      "tokens": 28274
+    },
+    {
+      "path": "django/db/models/sql/query.py",
+      "bytes": 109818,
+      "tokens": 27455
+    }
+  ]
+}

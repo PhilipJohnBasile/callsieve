@@ -1,0 +1,263 @@
+{
+  "task_id": "psf__requests-6017",
+  "repo": "psf/requests",
+  "base_commit": "e2064a2c0512d0a93cf0162bf8936cf76e898ffc",
+  "checked_out_commit": "e2064a2c0512d0a93cf0162bf8936cf76e898ffc",
+  "prompt": "Measurement task for CallSieve public proof.\nDo not use CallSieve, callsieve commands, callsieve MCP tools, or any repo-specific precomputed CallSieve context.\nDo not use browser, web, MCP, plugin, memory, or external documentation tools.\nDo not edit files.\nUse only Codex native read-only shell search and file-read commands inside this Requests checkout.\nInspect the repository as needed. You must read every file you rely on.\nReturn JSON only, matching the provided schema.\n\nTask id: psf__requests-6017\nRepository task: Fix erroneous use of 'schema' instead of 'scheme'\n\nReturn files_selected_or_read as repo-relative paths ordered by first use.",
+  "command": [
+    "/Applications/Codex.app/Contents/Resources/codex",
+    "--ask-for-approval",
+    "never",
+    "--disable",
+    "plugins",
+    "--disable",
+    "memories",
+    "--disable",
+    "chronicle",
+    "--disable",
+    "apps",
+    "--disable",
+    "browser_use",
+    "--disable",
+    "browser_use_external",
+    "--disable",
+    "computer_use",
+    "--disable",
+    "multi_agent",
+    "--disable",
+    "goals",
+    "--disable",
+    "hooks",
+    "exec",
+    "--ephemeral",
+    "--json",
+    "--ignore-user-config",
+    "--ignore-rules",
+    "-C",
+    "/Users/pjb/git/callsieve/benchmarks/public/repos/psf/requests",
+    "--sandbox",
+    "read-only",
+    "--output-schema",
+    "/Users/pjb/git/callsieve/benchmarks/public/results/codex-cli-requests-result-schema.json",
+    "Measurement task for CallSieve public proof.\nDo not use CallSieve, callsieve commands, callsieve MCP tools, or any repo-specific precomputed CallSieve context.\nDo not use browser, web, MCP, plugin, memory, or external documentation tools.\nDo not edit files.\nUse only Codex native read-only shell search and file-read commands inside this Requests checkout.\nInspect the repository as needed. You must read every file you rely on.\nReturn JSON only, matching the provided schema.\n\nTask id: psf__requests-6017\nRepository task: Fix erroneous use of 'schema' instead of 'scheme'\n\nReturn files_selected_or_read as repo-relative paths ordered by first use."
+  ],
+  "parsed_result": {
+    "task_id": "psf__requests-6017",
+    "files_selected_or_read": [
+      "requests/exceptions.py",
+      "requests/models.py",
+      "requests/sessions.py",
+      "tests/test_requests.py"
+    ],
+    "rationale": "The erroneous wording is in user-facing URL terminology. `requests/exceptions.py` defines `MissingSchema`/`InvalidSchema` and its docstrings use `schema` where URL terminology should say `scheme`; the exception class names are API and should remain unchanged. `requests/models.py` builds the missing-scheme error message as `No schema supplied`, which is the main runtime typo to change to `No scheme supplied`. `requests/sessions.py` was checked because `InvalidSchema` is raised from adapter lookup, but its message does not contain the typo. `tests/test_requests.py` was checked for invalid URL coverage and for any assertions that would need updating; it currently checks exception types, not the typo text."
+  },
+  "files_selected_or_read": [
+    "requests/exceptions.py",
+    "requests/models.py",
+    "requests/sessions.py",
+    "tests/test_requests.py"
+  ],
+  "agent_native_context_tokens": 55560,
+  "token_accounting": {
+    "source": "Codex CLI JSONL turn.completed usage.input_tokens",
+    "context_tokens": 55560,
+    "fields": {
+      "input_tokens": 55560,
+      "cached_input_tokens": 28160,
+      "output_tokens": 1804,
+      "reasoning_output_tokens": 708
+    }
+  },
+  "raw_events": [
+    {
+      "type": "thread.started",
+      "thread_id": "019ec67a-dbeb-7a90-a507-99331b50f2f5"
+    },
+    {
+      "type": "turn.started"
+    },
+    {
+      "type": "item.completed",
+      "item": {
+        "id": "item_0",
+        "type": "agent_message",
+        "text": "{\"task_id\":\"psf__requests-6017\",\"files_selected_or_read\":[\"requests/adapters.py\",\"requests/sessions.py\",\"requests/models.py\"],\"rationale\":\"The erroneous term appears in exception messages for URL scheme handling. I inspected `requests/adapters.py` first because it contains adapter lookup and raises `InvalidSchema` with the message `No connection adapters were found for {!r}` when no URL scheme adapter matches. I then checked `requests/sessions.py`, which calls `get_adapter()` during `Session.send()` and mounts adapters by URL prefix, confirming this is the user-facing path for unsupported URL schemes. Finally, I read `requests/models.py` to verify URL preparation already uses the correct term `scheme` in related validation (`MissingSchema`, `InvalidURL`) and to distinguish that from the adapter exception class name `InvalidSchema`. The scoped fix would be in `requests/adapters.py`: change the human-readable wording that says `schema` to `scheme` while leaving the exception class `InvalidSchema` unchanged.\"}"
+      }
+    },
+    {
+      "type": "item.completed",
+      "item": {
+        "id": "item_1",
+        "type": "agent_message",
+        "text": "{\"task_id\":\"psf__requests-6017\",\"files_selected_or_read\":[\"requests/adapters.py\",\"requests/sessions.py\",\"requests/models.py\"],\"rationale\":\"I need to verify the exact occurrences from the checkout before finalizing the measurement result. I will only use read-only shell commands and then return the final JSON.\"}"
+      }
+    },
+    {
+      "type": "item.started",
+      "item": {
+        "id": "item_2",
+        "type": "command_execution",
+        "command": "/bin/zsh -lc 'rg -n \"schema|scheme|InvalidSchema|No connection adapters|adapter\" requests tests'",
+        "aggregated_output": "",
+        "exit_code": null,
+        "status": "in_progress"
+      }
+    },
+    {
+      "type": "item.completed",
+      "item": {
+        "id": "item_2",
+        "type": "command_execution",
+        "command": "/bin/zsh -lc 'rg -n \"schema|scheme|InvalidSchema|No connection adapters|adapter\" requests tests'",
+        "aggregated_output": "tests/test_lowlevel.py:271:_schemes_by_var_prefix = [\ntests/test_lowlevel.py:278:for prefix, schemes in _schemes_by_var_prefix:\ntests/test_lowlevel.py:279:    for scheme in schemes:\ntests/test_lowlevel.py:280:        _proxy_combos.append((\"{}_proxy\".format(prefix), scheme))\ntests/test_lowlevel.py:282:_proxy_combos += [(var.upper(), scheme) for var, scheme in _proxy_combos]\ntests/test_lowlevel.py:285:@pytest.mark.parametrize(\"var,scheme\", _proxy_combos)\ntests/test_lowlevel.py:286:def test_use_proxy_from_environment(httpbin, var, scheme):\ntests/test_lowlevel.py:287:    url = \"{}://httpbin.org\".format(scheme)\nrequests/adapters.py:4:requests.adapters\nrequests/adapters.py:7:This module contains the transport adapters that Requests uses to define\nrequests/adapters.py:35:                    get_encoding_from_headers, prepend_scheme_if_needed,\nrequests/adapters.py:40:                         ProxyError, RetryError, InvalidSchema, InvalidProxyURL,\nrequests/adapters.py:48:        raise InvalidSchema(\"Missing dependencies for SOCKS support.\")\nrequests/adapters.py:81:        \"\"\"Cleans up adapter specific items.\"\"\"\nrequests/adapters.py:108:      >>> a = requests.adapters.HTTPAdapter(max_retries=3)\nrequests/adapters.py:152:        :class:`HTTPAdapter <requests.adapters.HTTPAdapter>`.\nrequests/adapters.py:172:        :class:`HTTPAdapter <requests.adapters.HTTPAdapter>`.\nrequests/adapters.py:207:        :class:`HTTPAdapter <requests.adapters.HTTPAdapter>`.\nrequests/adapters.py:260:        :class:`HTTPAdapter <requests.adapters.HTTPAdapter>`\nrequests/adapters.py:296:        :class:`HTTPAdapter <requests.adapters.HTTPAdapter>`.\nrequests/adapters.py:305:            proxy = prepend_scheme_if_needed(proxy, 'http')\nrequests/adapters.py:313:            # Only scheme should be lower case\nrequests/adapters.py:338:        :class:`HTTPAdapter <requests.adapters.HTTPAdapter>`.\nrequests/adapters.py:341:        :param proxies: A dictionary of schemes or schemes and hosts to proxy URLs.\nrequests/adapters.py:345:        scheme = urlparse(request.url).scheme\nrequests/adapters.py:347:        is_proxied_http_request = (proxy and scheme != 'https')\nrequests/adapters.py:350:            proxy_scheme = urlparse(proxy).scheme.lower()\nrequests/adapters.py:351:            using_socks_proxy = proxy_scheme.startswith('socks')\nrequests/adapters.py:362:        the :class:`HTTPAdapter <requests.adapters.HTTPAdapter>`.\nrequests/adapters.py:366:        :class:`HTTPAdapter <requests.adapters.HTTPAdapter>`.\nrequests/adapters.py:381:        :class:`HTTPAdapter <requests.adapters.HTTPAdapter>`.\ntests/test_requests.py:17:from requests.adapters import HTTPAdapter\ntests/test_requests.py:25:    ConnectionError, ConnectTimeout, InvalidSchema, InvalidURL,\ntests/test_requests.py:80:            (InvalidSchema, 'localhost:3128'),\ntests/test_requests.py:81:            (InvalidSchema, 'localhost.localdomain:3128/'),\ntests/test_requests.py:82:            (InvalidSchema, '10.122.1.1:3128/'),\ntests/test_requests.py:157:    @pytest.mark.parametrize('scheme', ('http://', 'HTTP://', 'hTTp://', 'HttP://'))\ntests/test_requests.py:158:    def test_mixed_case_scheme_acceptable(self, httpbin, scheme):\ntests/test_requests.py:162:        url = scheme + parts.netloc + parts.path\ntests/test_requests.py:165:        assert r.status_code == 200, 'failed for scheme {}'.format(scheme)\ntests/test_requests.py:1415:    def test_uppercase_scheme_redirect(self, httpbin):\ntests/test_requests.py:1422:    def test_transport_adapter_ordering(self):\ntests/test_requests.py:1425:        assert order == list(s.adapters)\ntests/test_requests.py:1438:        assert order == list(s.adapters)\ntests/test_requests.py:1453:        assert order == list(s.adapters)\ntests/test_requests.py:1455:        s2.adapters = {'http://': HTTPAdapter()}\ntests/test_requests.py:1457:        assert 'http://' in s2.adapters\ntests/test_requests.py:1458:        assert 'https://' in s2.adapters\ntests/test_requests.py:1460:    def test_session_get_adapter_prefix_matching(self):\ntests/test_requests.py:1469:        prefix_adapter = HTTPAdapter()\ntests/test_requests.py:1470:        more_specific_prefix_adapter = HTTPAdapter()\ntests/test_requests.py:1471:        s.mount(prefix, prefix_adapter)\ntests/test_requests.py:1472:        s.mount(more_specific_prefix, more_specific_prefix_adapter)\ntests/test_requests.py:1474:        assert s.get_adapter(url_matching_only_prefix) is prefix_adapter\ntests/test_requests.py:1475:        assert s.get_adapter(url_matching_more_specific_prefix) is more_specific_prefix_adapter\ntests/test_requests.py:1476:        assert s.get_adapter(url_not_matching_prefix) not in (prefix_adapter, more_specific_prefix_adapter)\ntests/test_requests.py:1478:    def test_session_get_adapter_prefix_matching_mixed_case(self):\ntests/test_requests.py:1483:        my_adapter = HTTPAdapter()\ntests/test_requests.py:1484:        s.mount(mixed_case_prefix, my_adapter)\ntests/test_requests.py:1486:        assert s.get_adapter(url_matching_prefix) is my_adapter\ntests/test_requests.py:1488:    def test_session_get_adapter_prefix_matching_is_case_insensitive(self):\ntests/test_requests.py:1493:        my_adapter = HTTPAdapter()\ntests/test_requests.py:1494:        s.mount(mixed_case_prefix, my_adapter)\ntests/test_requests.py:1496:        assert s.get_adapter(url_matching_prefix_with_different_case) is my_adapter\ntests/test_requests.py:1616:    def test_nonhttp_schemes_dont_check_URLs(self):\ntests/test_requests.py:1790:    def _patch_adapter_gzipped_redirect(self, session, url):\ntests/test_requests.py:1791:        adapter = session.get_adapter(url=url)\ntests/test_requests.py:1792:        org_build_response = adapter.build_response\ntests/test_requests.py:1802:        adapter.build_response = build_response\ntests/test_requests.py:1807:        self._patch_adapter_gzipped_redirect(s, url)\ntests/test_requests.py:1882:        mocker.patch.dict(session.adapters['http://'].proxy_manager, proxies)\ntests/test_requests.py:1888:        adapter = HTTPAdapter()\ntests/test_requests.py:1889:        headers = adapter.proxy_headers(\"http://user:pass@httpbin.org\")\ntests/test_requests.py:1893:        adapter = HTTPAdapter()\ntests/test_requests.py:1894:        headers = adapter.proxy_headers(\"http://user:@httpbin.org\")\ntests/test_requests.py:2352:    scheme = urlparse(url).scheme\ntests/test_requests.py:2355:        assert scheme in proxies\ntests/test_requests.py:2356:        assert proxies[scheme] == proxy\ntests/test_requests.py:2538:        any URL whose scheme doesn't begin with \"http\" is left alone, and\ntests/test_requests.py:2539:        those whose scheme *does* begin with \"http\" are mutated.\ntests/test_requests.py:2570:    def test_parameters_for_nonstandard_schemes(self, input, params, expected):\ntests/test_requests.py:2572:        Setting parameters for nonstandard schemes is allowed if those schemes\nrequests/exceptions.py:83:    \"\"\"The URL schema (e.g. http or https) is missing.\"\"\"\nrequests/exceptions.py:86:class InvalidSchema(RequestException, ValueError):\nrequests/exceptions.py:87:    \"\"\"See defaults.py for valid schemas.\"\"\"\nrequests/utils.py:814:    :param proxies: A dictionary of schemes or schemes and hosts to proxy URLs\nrequests/utils.py:819:        return proxies.get(urlparts.scheme, proxies.get('all'))\nrequests/utils.py:822:        urlparts.scheme + '://' + urlparts.hostname,\nrequests/utils.py:823:        urlparts.scheme,\nrequests/utils.py:842:    :param proxies: A dictionary of schemes or schemes and hosts to proxy URLs\nrequests/utils.py:849:    scheme = urlparse(url).scheme\nrequests/utils.py:857:        proxy = environ_proxies.get(scheme, environ_proxies.get('all'))\nrequests/utils.py:860:            new_proxies.setdefault(scheme, proxy)\nrequests/utils.py:960:def prepend_scheme_if_needed(url, new_scheme):\nrequests/utils.py:961:    \"\"\"Given a URL that may or may not have a scheme, prepend the given scheme.\nrequests/utils.py:962:    Does not replace a present scheme with the one provided as an argument.\nrequests/utils.py:966:    scheme, netloc, path, params, query, fragment = urlparse(url, new_scheme)\nrequests/utils.py:974:    return urlunparse((scheme, netloc, path, params, query, fragment))\nrequests/utils.py:1025:    scheme, netloc, path, params, query, fragment = urlparse(url)\nrequests/utils.py:1027:    # see func:`prepend_scheme_if_needed`\nrequests/utils.py:1033:    return urlunparse((scheme, netloc, path, params, query, ''))\ntests/test_utils.py:21:    parse_header_links, prepend_scheme_if_needed,\ntests/test_utils.py:605:def test_prepend_scheme_if_needed(value, expected):\ntests/test_utils.py:606:    assert prepend_scheme_if_needed(value, 'http') == expected\ntests/test_utils.py:626:        ('scheme:u:p@example.com/path', 'scheme://example.com/path'),\nrequests/models.py:324:        # Note that prepare_auth must be last to enable authentication schemes\nrequests/models.py:375:        # Don't do any URL preparation for non-HTTP schemes like `mailto`,\nrequests/models.py:384:            scheme, auth, host, port, path, query, fragment = parse_url(url)\nrequests/models.py:388:        if not scheme:\nrequests/models.py:389:            error = (\"Invalid URL {0!r}: No schema supplied. Perhaps you meant http://{0}?\")\nrequests/models.py:422:            if isinstance(scheme, str):\nrequests/models.py:423:                scheme = scheme.encode('utf-8')\nrequests/models.py:443:        url = requote_uri(urlunparse([scheme, netloc, path, None, query, fragment]))\nrequests/sessions.py:25:    TooManyRedirects, InvalidSchema, ChunkedEncodingError, ContentDecodingError)\nrequests/sessions.py:28:from .adapters import HTTPAdapter\nrequests/sessions.py:129:        if (old_parsed.scheme == 'http' and old_parsed.port in (80, None)\nrequests/sessions.py:130:                and new_parsed.scheme == 'https' and new_parsed.port in (443, None)):\nrequests/sessions.py:133:        # Handle default port usage corresponding to scheme.\nrequests/sessions.py:135:        changed_scheme = old_parsed.scheme != new_parsed.scheme\nrequests/sessions.py:136:        default_port = (DEFAULT_PORTS.get(old_parsed.scheme, None), None)\nrequests/sessions.py:137:        if (not changed_scheme and old_parsed.port in default_port\nrequests/sessions.py:142:        return changed_port or changed_scheme\nrequests/sessions.py:145:                          verify=True, cert=None, proxies=None, yield_requests=False, **adapter_kwargs):\nrequests/sessions.py:171:            # Handle redirection without scheme (see: RFC 1808 Section 4)\nrequests/sessions.py:174:                url = ':'.join([to_native_string(parsed_rurl.scheme), url])\nrequests/sessions.py:245:                    **adapter_kwargs\nrequests/sessions.py:285:        scheme = urlparse(prepared_request.url).scheme\nrequests/sessions.py:292:            username, password = get_auth_from_url(new_proxies[scheme])\nrequests/sessions.py:345:        'cert', 'adapters', 'stream', 'trust_env',\nrequests/sessions.py:406:        # Default connection adapters.\nrequests/sessions.py:407:        self.adapters = OrderedDict()\nrequests/sessions.py:638:        # Get the appropriate adapter to use\nrequests/sessions.py:639:        adapter = self.get_adapter(url=request.url)\nrequests/sessions.py:645:        r = adapter.send(request, **kwargs)\nrequests/sessions.py:720:    def get_adapter(self, url):\nrequests/sessions.py:722:        Returns the appropriate connection adapter for the given URL.\nrequests/sessions.py:724:        :rtype: requests.adapters.BaseAdapter\nrequests/sessions.py:726:        for (prefix, adapter) in self.adapters.items():\nrequests/sessions.py:729:                return adapter\nrequests/sessions.py:732:        raise InvalidSchema(\"No connection adapters were found for {!r}\".format(url))\nrequests/sessions.py:735:        \"\"\"Closes all adapters and as such the session\"\"\"\nrequests/sessions.py:736:        for v in self.adapters.values():\nrequests/sessions.py:739:    def mount(self, prefix, adapter):\nrequests/sessions.py:740:        \"\"\"Registers a connection adapter to a prefix.\nrequests/sessions.py:744:        self.adapters[prefix] = adapter\nrequests/sessions.py:745:        keys_to_move = [k for k in self.adapters if len(k) < len(prefix)]\nrequests/sessions.py:748:            self.adapters[key] = self.adapters.pop(key)\nrequests/cookies.py:40:        self.type = urlparse(self._r.url).scheme\nrequests/cookies.py:61:            parsed.scheme, host, parsed.path, parsed.params, parsed.query,\n",
+        "exit_code": 0,
+        "status": "completed"
+      }
+    },
+    {
+      "type": "item.completed",
+      "item": {
+        "id": "item_3",
+        "type": "agent_message",
+        "text": "{\"task_id\":\"psf__requests-6017\",\"files_selected_or_read\":[\"requests/exceptions.py\",\"requests/models.py\",\"requests/sessions.py\",\"tests/test_requests.py\"],\"rationale\":\"The initial search showed the meaningful `schema` occurrences are in exception documentation and URL validation messages, not in the adapter module itself. I am reading those files directly now to distinguish typo fixes from class/API names that should remain unchanged.\"}"
+      }
+    },
+    {
+      "type": "item.started",
+      "item": {
+        "id": "item_4",
+        "type": "command_execution",
+        "command": "/bin/zsh -lc \"sed -n '360,405p' requests/models.py\"",
+        "aggregated_output": "",
+        "exit_code": null,
+        "status": "in_progress"
+      }
+    },
+    {
+      "type": "item.started",
+      "item": {
+        "id": "item_5",
+        "type": "command_execution",
+        "command": "/bin/zsh -lc \"sed -n '70,95p' requests/exceptions.py\"",
+        "aggregated_output": "",
+        "exit_code": null,
+        "status": "in_progress"
+      }
+    },
+    {
+      "type": "item.completed",
+      "item": {
+        "id": "item_5",
+        "type": "command_execution",
+        "command": "/bin/zsh -lc \"sed -n '70,95p' requests/exceptions.py\"",
+        "aggregated_output": "class ReadTimeout(Timeout):\n    \"\"\"The server did not send any data in the allotted amount of time.\"\"\"\n\n\nclass URLRequired(RequestException):\n    \"\"\"A valid URL is required to make a request.\"\"\"\n\n\nclass TooManyRedirects(RequestException):\n    \"\"\"Too many redirects.\"\"\"\n\n\nclass MissingSchema(RequestException, ValueError):\n    \"\"\"The URL schema (e.g. http or https) is missing.\"\"\"\n\n\nclass InvalidSchema(RequestException, ValueError):\n    \"\"\"See defaults.py for valid schemas.\"\"\"\n\n\nclass InvalidURL(RequestException, ValueError):\n    \"\"\"The URL provided was somehow invalid.\"\"\"\n\n\nclass InvalidHeader(RequestException, ValueError):\n    \"\"\"The header value provided was somehow invalid.\"\"\"\n",
+        "exit_code": 0,
+        "status": "completed"
+      }
+    },
+    {
+      "type": "item.completed",
+      "item": {
+        "id": "item_4",
+        "type": "command_execution",
+        "command": "/bin/zsh -lc \"sed -n '360,405p' requests/models.py\"",
+        "aggregated_output": "    def prepare_url(self, url, params):\n        \"\"\"Prepares the given HTTP URL.\"\"\"\n        #: Accept objects that have string representations.\n        #: We're unable to blindly call unicode/str functions\n        #: as this will include the bytestring indicator (b'')\n        #: on python 3.x.\n        #: https://github.com/psf/requests/pull/2238\n        if isinstance(url, bytes):\n            url = url.decode('utf8')\n        else:\n            url = unicode(url) if is_py2 else str(url)\n\n        # Remove leading whitespaces from url\n        url = url.lstrip()\n\n        # Don't do any URL preparation for non-HTTP schemes like `mailto`,\n        # `data` etc to work around exceptions from `url_parse`, which\n        # handles RFC 3986 only.\n        if ':' in url and not url.lower().startswith('http'):\n            self.url = url\n            return\n\n        # Support for unicode domain names and paths.\n        try:\n            scheme, auth, host, port, path, query, fragment = parse_url(url)\n        except LocationParseError as e:\n            raise InvalidURL(*e.args)\n\n        if not scheme:\n            error = (\"Invalid URL {0!r}: No schema supplied. Perhaps you meant http://{0}?\")\n            error = error.format(to_native_string(url, 'utf8'))\n\n            raise MissingSchema(error)\n\n        if not host:\n            raise InvalidURL(\"Invalid URL %r: No host supplied\" % url)\n\n        # In general, we want to try IDNA encoding the hostname if the string contains\n        # non-ASCII characters. This allows users to automatically get the correct IDNA\n        # behaviour. For strings containing only ASCII characters, we need to also verify\n        # it doesn't start with a wildcard (*), before allowing the unencoded hostname.\n        if not unicode_is_ascii(host):\n            try:\n                host = self._get_idna_encoded_host(host)\n            except UnicodeError:\n                raise InvalidURL('URL has an invalid label.')\n",
+        "exit_code": 0,
+        "status": "completed"
+      }
+    },
+    {
+      "type": "item.started",
+      "item": {
+        "id": "item_6",
+        "type": "command_execution",
+        "command": "/bin/zsh -lc \"sed -n '720,735p' requests/sessions.py\"",
+        "aggregated_output": "",
+        "exit_code": null,
+        "status": "in_progress"
+      }
+    },
+    {
+      "type": "item.completed",
+      "item": {
+        "id": "item_6",
+        "type": "command_execution",
+        "command": "/bin/zsh -lc \"sed -n '720,735p' requests/sessions.py\"",
+        "aggregated_output": "    def get_adapter(self, url):\n        \"\"\"\n        Returns the appropriate connection adapter for the given URL.\n\n        :rtype: requests.adapters.BaseAdapter\n        \"\"\"\n        for (prefix, adapter) in self.adapters.items():\n\n            if url.lower().startswith(prefix.lower()):\n                return adapter\n\n        # Nothing matches :-/\n        raise InvalidSchema(\"No connection adapters were found for {!r}\".format(url))\n\n    def close(self):\n        \"\"\"Closes all adapters and as such the session\"\"\"\n",
+        "exit_code": 0,
+        "status": "completed"
+      }
+    },
+    {
+      "type": "item.started",
+      "item": {
+        "id": "item_7",
+        "type": "command_execution",
+        "command": "/bin/zsh -lc \"sed -n '60,95p' tests/test_requests.py && sed -n '1450,1502p' tests/test_requests.py\"",
+        "aggregated_output": "",
+        "exit_code": null,
+        "status": "in_progress"
+      }
+    },
+    {
+      "type": "item.completed",
+      "item": {
+        "id": "item_7",
+        "type": "command_execution",
+        "command": "/bin/zsh -lc \"sed -n '60,95p' tests/test_requests.py && sed -n '1450,1502p' tests/test_requests.py\"",
+        "aggregated_output": "class TestRequests:\n\n    digest_auth_algo = ('MD5', 'SHA-256', 'SHA-512')\n\n    def test_entry_points(self):\n\n        requests.session\n        requests.session().get\n        requests.session().head\n        requests.get\n        requests.head\n        requests.put\n        requests.patch\n        requests.post\n        # Not really an entry point, but people rely on it.\n        from requests.packages.urllib3.poolmanager import PoolManager\n\n    @pytest.mark.parametrize(\n        'exception, url', (\n            (MissingSchema, 'hiwpefhipowhefopw'),\n            (InvalidSchema, 'localhost:3128'),\n            (InvalidSchema, 'localhost.localdomain:3128/'),\n            (InvalidSchema, '10.122.1.1:3128/'),\n            (InvalidURL, 'http://'),\n        ))\n    def test_invalid_url(self, exception, url):\n        with pytest.raises(exception):\n            requests.get(url)\n\n    def test_basic_building(self):\n        req = requests.Request()\n        req.url = 'http://kennethreitz.org/'\n        req.data = {'life': '42'}\n\n        pr = req.prepare()\n        assert pr.url == req.url\n            'https://',\n            'http://',\n        ]\n        assert order == list(s.adapters)\n        s2 = requests.Session()\n        s2.adapters = {'http://': HTTPAdapter()}\n        s2.mount('https://', HTTPAdapter())\n        assert 'http://' in s2.adapters\n        assert 'https://' in s2.adapters\n\n    def test_session_get_adapter_prefix_matching(self):\n        prefix = 'https://example.com'\n        more_specific_prefix = prefix + '/some/path'\n\n        url_matching_only_prefix = prefix + '/another/path'\n        url_matching_more_specific_prefix = more_specific_prefix + '/longer/path'\n        url_not_matching_prefix = 'https://another.example.com/'\n\n        s = requests.Session()\n        prefix_adapter = HTTPAdapter()\n        more_specific_prefix_adapter = HTTPAdapter()\n        s.mount(prefix, prefix_adapter)\n        s.mount(more_specific_prefix, more_specific_prefix_adapter)\n\n        assert s.get_adapter(url_matching_only_prefix) is prefix_adapter\n        assert s.get_adapter(url_matching_more_specific_prefix) is more_specific_prefix_adapter\n        assert s.get_adapter(url_not_matching_prefix) not in (prefix_adapter, more_specific_prefix_adapter)\n\n    def test_session_get_adapter_prefix_matching_mixed_case(self):\n        mixed_case_prefix = 'hTtPs://eXamPle.CoM/MixEd_CAse_PREfix'\n        url_matching_prefix = mixed_case_prefix + '/full_url'\n\n        s = requests.Session()\n        my_adapter = HTTPAdapter()\n        s.mount(mixed_case_prefix, my_adapter)\n\n        assert s.get_adapter(url_matching_prefix) is my_adapter\n\n    def test_session_get_adapter_prefix_matching_is_case_insensitive(self):\n        mixed_case_prefix = 'hTtPs://eXamPle.CoM/MixEd_CAse_PREfix'\n        url_matching_prefix_with_different_case = 'HtTpS://exaMPLe.cOm/MiXeD_caSE_preFIX/another_url'\n\n        s = requests.Session()\n        my_adapter = HTTPAdapter()\n        s.mount(mixed_case_prefix, my_adapter)\n\n        assert s.get_adapter(url_matching_prefix_with_different_case) is my_adapter\n\n    def test_header_remove_is_case_insensitive(self, httpbin):\n        # From issue #1321\n        s = requests.Session()\n        s.headers['foo'] = 'bar'\n        r = s.get(httpbin('get'), headers={'FOO': None})\n",
+        "exit_code": 0,
+        "status": "completed"
+      }
+    },
+    {
+      "type": "item.completed",
+      "item": {
+        "id": "item_8",
+        "type": "agent_message",
+        "text": "{\"task_id\":\"psf__requests-6017\",\"files_selected_or_read\":[\"requests/exceptions.py\",\"requests/models.py\",\"requests/sessions.py\",\"tests/test_requests.py\"],\"rationale\":\"The relevant typo candidate is now narrowed to `MissingSchema` documentation and the `No schema supplied` message in URL preparation. I am checking tests for any assertion of that exact message before forming the final answer.\"}"
+      }
+    },
+    {
+      "type": "item.started",
+      "item": {
+        "id": "item_9",
+        "type": "command_execution",
+        "command": "/bin/zsh -lc 'rg -n \"No schema supplied|URL schema|valid schemas|InvalidSchema|MissingSchema|No connection adapters\" requests tests'",
+        "aggregated_output": "",
+        "exit_code": null,
+        "status": "in_progress"
+      }
+    },
+    {
+      "type": "item.completed",
+      "item": {
+        "id": "item_9",
+        "type": "command_execution",
+        "command": "/bin/zsh -lc 'rg -n \"No schema supplied|URL schema|valid schemas|InvalidSchema|MissingSchema|No connection adapters\" requests tests'",
+        "aggregated_output": "requests/adapters.py:40:                         ProxyError, RetryError, InvalidSchema, InvalidProxyURL,\nrequests/adapters.py:48:        raise InvalidSchema(\"Missing dependencies for SOCKS support.\")\ntests/test_requests.py:25:    ConnectionError, ConnectTimeout, InvalidSchema, InvalidURL,\ntests/test_requests.py:26:    MissingSchema, ReadTimeout, Timeout, RetryError, TooManyRedirects,\ntests/test_requests.py:79:            (MissingSchema, 'hiwpefhipowhefopw'),\ntests/test_requests.py:80:            (InvalidSchema, 'localhost:3128'),\ntests/test_requests.py:81:            (InvalidSchema, 'localhost.localdomain:3128/'),\ntests/test_requests.py:82:            (InvalidSchema, '10.122.1.1:3128/'),\nrequests/exceptions.py:82:class MissingSchema(RequestException, ValueError):\nrequests/exceptions.py:83:    \"\"\"The URL schema (e.g. http or https) is missing.\"\"\"\nrequests/exceptions.py:86:class InvalidSchema(RequestException, ValueError):\nrequests/exceptions.py:87:    \"\"\"See defaults.py for valid schemas.\"\"\"\nrequests/models.py:31:    HTTPError, MissingSchema, InvalidURL, ChunkedEncodingError,\nrequests/models.py:389:            error = (\"Invalid URL {0!r}: No schema supplied. Perhaps you meant http://{0}?\")\nrequests/models.py:392:            raise MissingSchema(error)\nrequests/sessions.py:25:    TooManyRedirects, InvalidSchema, ChunkedEncodingError, ContentDecodingError)\nrequests/sessions.py:732:        raise InvalidSchema(\"No connection adapters were found for {!r}\".format(url))\n",
+        "exit_code": 0,
+        "status": "completed"
+      }
+    },
+    {
+      "type": "item.completed",
+      "item": {
+        "id": "item_10",
+        "type": "agent_message",
+        "text": "{\"task_id\":\"psf__requests-6017\",\"files_selected_or_read\":[\"requests/exceptions.py\",\"requests/models.py\",\"requests/sessions.py\",\"tests/test_requests.py\"],\"rationale\":\"The erroneous wording is in user-facing URL terminology. `requests/exceptions.py` defines `MissingSchema`/`InvalidSchema` and its docstrings use `schema` where URL terminology should say `scheme`; the exception class names are API and should remain unchanged. `requests/models.py` builds the missing-scheme error message as `No schema supplied`, which is the main runtime typo to change to `No scheme supplied`. `requests/sessions.py` was checked because `InvalidSchema` is raised from adapter lookup, but its message does not contain the typo. `tests/test_requests.py` was checked for invalid URL coverage and for any assertions that would need updating; it currently checks exception types, not the typo text.\"}"
+      }
+    },
+    {
+      "type": "turn.completed",
+      "usage": {
+        "input_tokens": 55560,
+        "cached_input_tokens": 28160,
+        "output_tokens": 1804,
+        "reasoning_output_tokens": 708
+      }
+    }
+  ],
+  "non_json_stdout": [],
+  "stderr": "Reading additional input from stdin...\n2026-06-14T14:13:21.034324Z  WARN codex_rollout::list: state db discrepancy during find_thread_path_by_id_str_in_subdir: falling_back\n2026-06-14T14:13:21.057724Z  WARN codex_rollout::list: state db discrepancy during find_thread_path_by_id_str_in_subdir: falling_back\n2026-06-14T14:13:21.081566Z  WARN codex_rollout::list: state db discrepancy during find_thread_path_by_id_str_in_subdir: falling_back\n2026-06-14T14:13:21.106679Z  WARN codex_rollout::list: state db discrepancy during find_thread_path_by_id_str_in_subdir: falling_back\n2026-06-14T14:13:21.130327Z  WARN codex_rollout::list: state db discrepancy during find_thread_path_by_id_str_in_subdir: falling_back\n2026-06-14T14:13:21.153674Z  WARN codex_rollout::list: state db discrepancy during find_thread_path_by_id_str_in_subdir: falling_back\n2026-06-14T14:13:21.178333Z  WARN codex_rollout::list: state db discrepancy during find_thread_path_by_id_str_in_subdir: falling_back\n"
+}

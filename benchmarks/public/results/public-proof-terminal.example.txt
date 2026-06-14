@@ -1,0 +1,27 @@
+$ cargo run -- public-proof-report benchmarks/public-proof-manifest.example.json
+
+Abridged headline fields:
+
+- command: public-proof-report
+- status: needs_work
+- local expected_file_recall: below 1.0 on the current dirty working tree
+- local first_correct_file_rate_at_k: 1.0
+- retrieval_model_tokens: 0
+- per_query_retrieval_cost_usd: 0.0
+- default_code_upload_required: false
+- default_packet_tokens: currently above the 5000 target on the current dirty working tree
+- broad_read_guardrail status: pass, context_payload_reduction_percent: over 99.5 toward 90.0
+- context_packet_guardrail status: pass, selected_symbols: over 150, related_tests: over 30, blast_radius_hints: over 900, call_graph_hints: over 350
+- mcp_surface status: pass, required_first_mile_tools_covered: 5/5
+- mcp_contract status: pass, structured_content_fields: 7, instruction_expansion_keys: 4, freshness_fields: 6, default_profile: skim
+- agent_native_protocol artifact_matches_live_protocol: pass
+- agent_native_measurement_plan artifacts: 6/6 pass
+- agent_native_search_guardrail status: needs_work
+- agent_native_search measured baselines: 3/3 pass
+- agent_native_search transcript-backed baselines: 3/3 pass
+- agent_native_search repositories: 2/2 pass
+- agent_native_search task languages: 3/3 pass
+- agent_native_search distinct native-agent tools: 1/2 needs_work
+- agent_native_search multi_agent_status: single_agent_only
+- checked Codex context-token ratios versus CallSieve: Requests 303.9x, Rust 1845.6x, TypeScript 935.1x
+- warnings: agent-native proof is currently single-agent only; add another transcript-backed native-agent baseline before claiming multi-agent coverage

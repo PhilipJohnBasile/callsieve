@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "description": "CallSieve public benchmark - TypeScript language slice. Four natural-language tasks target the pinned public VS Code extension sources in CallSieve to verify TypeScript indexing and retrieval coverage. This is a language-smoke slice, not a third-party SWE-bench-style claim.",
+  "mode": "A",
+  "default_k": 5,
+  "source": "https://github.com/PhilipJohnBasile/callsieve",
+  "issues": [
+    {
+      "id": "callsieve-typescript-extension-activation",
+      "repo": "PhilipJohnBasile/callsieve",
+      "base_commit": "11c7ef19bd2250c74f76b5c6409de7b2d2f07394",
+      "task": "activate the VS Code extension and register CallSieve editor commands",
+      "ground_truth_files": [
+        "editors/vscode/src/extension.ts"
+      ]
+    },
+    {
+      "id": "callsieve-typescript-extension-context-output",
+      "repo": "PhilipJohnBasile/callsieve",
+      "base_commit": "11c7ef19bd2250c74f76b5c6409de7b2d2f07394",
+      "task": "show agent context results in VS Code with read first files snippets and status messages",
+      "ground_truth_files": [
+        "editors/vscode/src/extension.ts"
+      ]
+    },
+    {
+      "id": "callsieve-typescript-cli-client",
+      "repo": "PhilipJohnBasile/callsieve",
+      "base_commit": "11c7ef19bd2250c74f76b5c6409de7b2d2f07394",
+      "task": "spawn the CallSieve CLI from TypeScript and handle command failures",
+      "ground_truth_files": [
+        "editors/vscode/src/client.ts"
+      ]
+    },
+    {
+      "id": "callsieve-typescript-client-json",
+      "repo": "PhilipJohnBasile/callsieve",
+      "base_commit": "11c7ef19bd2250c74f76b5c6409de7b2d2f07394",
+      "task": "parse JSON responses for query context and status in the VS Code client",
+      "ground_truth_files": [
+        "editors/vscode/src/client.ts"
+      ]
+    }
+  ]
+}

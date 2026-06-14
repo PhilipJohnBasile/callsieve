@@ -1,6 +1,8 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
-    env, fs,
+    env,
+    ffi::OsStr,
+    fs,
     io::{Read, Write},
     net::TcpStream,
     path::{Path, PathBuf},
@@ -17,7 +19,7 @@ use std::os::unix::fs::PermissionsExt;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
-use crate::{bench_public, indexer, output, query, store};
+use crate::{bench_public, indexer, mcp, output, query, store};
 
 mod daemon;
 use daemon::*;
@@ -68,6 +70,637 @@ const EXTERNAL_BENCHMARK_FIXTURES: &[ExternalBenchmarkFixture] = &[
         trace: "benchmarks/external-httpx-trace.json",
     },
 ];
+
+#[derive(Debug, Clone, Deserialize)]
+struct CompetitiveReportManifest {
+    #[serde(default = "default_competitive_goal")]
+    goal: String,
+    benchmark: query::BenchmarkReportManifest,
+    #[serde(default)]
+    natural_language_benchmark: Option<query::BenchmarkReportManifest>,
+    #[serde(default)]
+    performance: Option<CompetitivePerformanceManifest>,
+    #[serde(default)]
+    targets: CompetitiveReportTargets,
+    #[serde(default)]
+    competitors: Vec<CompetitiveCompetitorInput>,
+}
+
+fn default_competitive_goal() -> String {
+    "Make CallSieve the default local-first context layer an agent uses before it searches, reads, edits, or reviews a repository.".to_string()
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct CompetitiveReportTargets {
+    #[serde(default = "default_competitive_min_first_correct_file_rate")]
+    minimum_first_correct_file_rate_at_k: f64,
+    #[serde(default)]
+    minimum_expected_file_recall: f64,
+    #[serde(default = "default_competitive_min_natural_language_first_correct_file_rate")]
+    minimum_natural_language_first_correct_file_rate_at_k: f64,
+    #[serde(default)]
+    minimum_natural_language_expected_file_recall: f64,
+    #[serde(default)]
+    maximum_first_query_p95_ms: Option<u64>,
+    #[serde(default)]
+    maximum_default_packet_tokens: Option<usize>,
+    #[serde(default)]
+    require_natural_language_benchmark: bool,
+    #[serde(default)]
+    require_trace_or_receipt_proof: bool,
+    #[serde(default = "default_true")]
+    require_zero_retrieval_model_tokens: bool,
+    #[serde(default = "default_true")]
+    require_zero_per_query_retrieval_cost: bool,
+    #[serde(default = "default_true")]
+    require_no_default_code_upload: bool,
+    #[serde(default = "default_competitive_min_agent_coverage")]
+    minimum_agent_coverage: usize,
+    #[serde(default)]
+    required_agents: Vec<String>,
+}
+
+impl Default for CompetitiveReportTargets {
+    fn default() -> Self {
+        Self {
+            minimum_first_correct_file_rate_at_k: default_competitive_min_first_correct_file_rate(),
+            minimum_expected_file_recall: 0.0,
+            minimum_natural_language_first_correct_file_rate_at_k:
+                default_competitive_min_natural_language_first_correct_file_rate(),
+            minimum_natural_language_expected_file_recall: 0.0,
+            maximum_first_query_p95_ms: None,
+            maximum_default_packet_tokens: None,
+            require_natural_language_benchmark: false,
+            require_trace_or_receipt_proof: false,
+            require_zero_retrieval_model_tokens: true,
+            require_zero_per_query_retrieval_cost: true,
+            require_no_default_code_upload: true,
+            minimum_agent_coverage: default_competitive_min_agent_coverage(),
+            required_agents: Vec::new(),
+        }
+    }
+}
+
+fn default_competitive_min_first_correct_file_rate() -> f64 {
+    0.60
+}
+
+fn default_competitive_min_natural_language_first_correct_file_rate() -> f64 {
+    0.45
+}
+
+fn default_competitive_min_agent_coverage() -> usize {
+    12
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct CompetitivePerformanceManifest {
+    path: PathBuf,
+    #[serde(default)]
+    tasks: Option<PathBuf>,
+    #[serde(default = "default_competitive_perf_iterations")]
+    iterations: usize,
+}
+
+fn default_competitive_perf_iterations() -> usize {
+    3
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct CompetitiveCompetitorInput {
+    name: String,
+    #[serde(default, alias = "class")]
+    category: String,
+    #[serde(default)]
+    source: String,
+    #[serde(default)]
+    install_friction: String,
+    #[serde(default)]
+    first_query_time: String,
+    #[serde(default)]
+    code_upload_requirement: String,
+    #[serde(default)]
+    retrieval_model_token_cost: String,
+    #[serde(default)]
+    per_query_retrieval_cost: String,
+    #[serde(default)]
+    packet_compactness: String,
+    #[serde(default)]
+    explainability: String,
+    #[serde(default)]
+    agent_coverage: String,
+    #[serde(default)]
+    trace_or_receipt_proof: String,
+    #[serde(default)]
+    where_callsieve_should_win: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct PublicProofManifest {
+    #[serde(default = "default_public_proof_goal")]
+    goal: String,
+    competitive_report: PathBuf,
+    #[serde(default = "default_public_repos_dir")]
+    public_repos_dir: PathBuf,
+    #[serde(default)]
+    miss_triage: Option<PathBuf>,
+    #[serde(default)]
+    targets: PublicProofTargets,
+    #[serde(default)]
+    public_reports: Vec<PublicBenchmarkReportInput>,
+    #[serde(default)]
+    public_result_catalog: Vec<PathBuf>,
+    #[serde(default)]
+    repo_packer_baselines: Vec<PublicRepoPackerBaselineInput>,
+    #[serde(default)]
+    agent_native_search_baselines: Vec<PublicAgentNativeSearchBaselineInput>,
+    #[serde(default)]
+    evidence_commands: Vec<String>,
+    #[serde(default)]
+    terminal_artifacts: Vec<PublicProofArtifactInput>,
+}
+
+fn default_public_proof_goal() -> String {
+    "Make CallSieve win on external, credible retrieval proof while preserving local-first zero-token retrieval.".to_string()
+}
+
+fn default_public_repos_dir() -> PathBuf {
+    PathBuf::from("benchmarks/public/repos")
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct PublicProofTargets {
+    #[serde(default = "default_true")]
+    require_competitive_report_pass: bool,
+    #[serde(default = "default_true")]
+    require_zero_retrieval_model_tokens: bool,
+    #[serde(default = "default_true")]
+    require_zero_per_query_retrieval_cost: bool,
+    #[serde(default = "default_true")]
+    require_no_default_code_upload: bool,
+    #[serde(default)]
+    maximum_default_packet_tokens: Option<usize>,
+    #[serde(default = "default_true")]
+    require_broad_read_payload_reduction: bool,
+    #[serde(default = "default_true")]
+    require_context_packet_quality: bool,
+    #[serde(default)]
+    require_current_public_report_retrieval_contract: bool,
+    #[serde(default)]
+    minimum_broad_read_context_payload_reduction_percent: f64,
+    #[serde(default = "default_public_proof_min_reports")]
+    minimum_public_reports: usize,
+    #[serde(default)]
+    minimum_total_public_evaluated: Option<usize>,
+    #[serde(default)]
+    minimum_agent_native_measured_baselines: Option<usize>,
+    #[serde(default)]
+    minimum_agent_native_distinct_tools: Option<usize>,
+    #[serde(default)]
+    minimum_agent_native_repositories: Option<usize>,
+    #[serde(default)]
+    minimum_agent_native_task_languages: Option<usize>,
+    #[serde(default = "default_public_proof_swe_bench_style_goal")]
+    target_swe_bench_style_first_correct_file_rate_at_k: f64,
+    #[serde(default = "default_public_proof_natural_language_goal")]
+    target_natural_language_first_correct_file_rate_at_k: f64,
+}
+
+impl Default for PublicProofTargets {
+    fn default() -> Self {
+        Self {
+            require_competitive_report_pass: true,
+            require_zero_retrieval_model_tokens: true,
+            require_zero_per_query_retrieval_cost: true,
+            require_no_default_code_upload: true,
+            maximum_default_packet_tokens: None,
+            require_broad_read_payload_reduction: true,
+            require_context_packet_quality: true,
+            require_current_public_report_retrieval_contract: false,
+            minimum_broad_read_context_payload_reduction_percent: 0.0,
+            minimum_public_reports: default_public_proof_min_reports(),
+            minimum_total_public_evaluated: None,
+            minimum_agent_native_measured_baselines: None,
+            minimum_agent_native_distinct_tools: None,
+            minimum_agent_native_repositories: None,
+            minimum_agent_native_task_languages: None,
+            target_swe_bench_style_first_correct_file_rate_at_k:
+                default_public_proof_swe_bench_style_goal(),
+            target_natural_language_first_correct_file_rate_at_k:
+                default_public_proof_natural_language_goal(),
+        }
+    }
+}
+
+fn default_public_proof_min_reports() -> usize {
+    1
+}
+
+fn default_public_proof_swe_bench_style_goal() -> f64 {
+    0.62
+}
+
+fn default_public_proof_natural_language_goal() -> f64 {
+    0.45
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct PublicBenchmarkReportInput {
+    id: String,
+    path: PathBuf,
+    #[serde(default)]
+    category: String,
+    #[serde(default = "default_public_proof_preferred_arm")]
+    preferred_arm: String,
+    #[serde(default)]
+    minimum_first_correct_file_rate_at_k: Option<f64>,
+    #[serde(default)]
+    minimum_minus_grep: Option<f64>,
+    #[serde(default)]
+    require_grep_baseline: bool,
+    #[serde(default)]
+    minimum_evaluated: Option<usize>,
+    #[serde(default)]
+    require_current_retrieval_contract: Option<bool>,
+}
+
+fn default_public_proof_preferred_arm() -> String {
+    "lexical".to_string()
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct PublicRepoPackerBaselineInput {
+    id: String,
+    #[serde(default)]
+    tool: String,
+    path: PathBuf,
+    #[serde(default)]
+    command: String,
+    #[serde(default)]
+    required: bool,
+    #[serde(default)]
+    token_count_pointer: Option<String>,
+    #[serde(default)]
+    byte_count_pointer: Option<String>,
+    #[serde(default)]
+    file_count_pointer: Option<String>,
+    #[serde(default)]
+    minimum_token_ratio_vs_callsieve_packet: Option<f64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct PublicAgentNativeSearchBaselineInput {
+    id: String,
+    #[serde(default)]
+    tool: String,
+    path: PathBuf,
+    #[serde(default)]
+    command: String,
+    #[serde(default)]
+    required: bool,
+    #[serde(default = "default_agent_native_locally_measured_pointer")]
+    locally_measured_pointer: String,
+    #[serde(default = "default_agent_native_task_count_pointer")]
+    task_count_pointer: String,
+    #[serde(default = "default_agent_native_agent_rate_pointer")]
+    agent_native_first_correct_file_rate_at_k_pointer: String,
+    #[serde(default = "default_agent_native_callsieve_rate_pointer")]
+    callsieve_first_correct_file_rate_at_k_pointer: String,
+    #[serde(default = "default_agent_native_context_tokens_pointer")]
+    agent_native_average_context_tokens_pointer: String,
+    #[serde(default = "default_agent_native_callsieve_packet_pointer")]
+    callsieve_average_packet_tokens_pointer: String,
+    #[serde(default)]
+    minimum_tasks: Option<usize>,
+    #[serde(default)]
+    minimum_callsieve_minus_agent_native_first_correct_file_rate_at_k: Option<f64>,
+    #[serde(default)]
+    minimum_agent_native_context_token_ratio_vs_callsieve: Option<f64>,
+}
+
+fn default_agent_native_locally_measured_pointer() -> String {
+    "/locally_measured".to_string()
+}
+
+fn default_agent_native_task_count_pointer() -> String {
+    "/metrics/task_count".to_string()
+}
+
+fn default_agent_native_agent_rate_pointer() -> String {
+    "/metrics/agent_native_first_correct_file_rate_at_k".to_string()
+}
+
+fn default_agent_native_callsieve_rate_pointer() -> String {
+    "/metrics/callsieve_first_correct_file_rate_at_k".to_string()
+}
+
+fn default_agent_native_context_tokens_pointer() -> String {
+    "/metrics/agent_native_average_context_tokens".to_string()
+}
+
+fn default_agent_native_callsieve_packet_pointer() -> String {
+    "/metrics/callsieve_average_packet_tokens".to_string()
+}
+
+#[derive(Debug, Serialize)]
+struct RepoPackBaselineOutput {
+    command: &'static str,
+    schema_version: u32,
+    id: String,
+    tool: String,
+    generated_at: u64,
+    root: String,
+    inclusion_scope: &'static str,
+    token_estimate: &'static str,
+    locally_measured: bool,
+    measurement_notes: Vec<&'static str>,
+    metrics: RepoPackBaselineMetrics,
+    largest_files: Vec<RepoPackBaselineFile>,
+}
+
+#[derive(Debug, Serialize)]
+struct RepoPackBaselineMetrics {
+    file_count: usize,
+    source_bytes: usize,
+    framing_bytes: usize,
+    total_bytes: usize,
+    total_tokens: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct RepoPackBaselineFile {
+    path: String,
+    bytes: usize,
+    tokens: usize,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum AgentNativeBaselineInput {
+    Tasks(Vec<AgentNativeBaselineTaskInput>),
+    Object {
+        tasks: Vec<AgentNativeBaselineTaskInput>,
+    },
+}
+
+impl AgentNativeBaselineInput {
+    fn into_tasks(self) -> Vec<AgentNativeBaselineTaskInput> {
+        match self {
+            AgentNativeBaselineInput::Tasks(tasks) | AgentNativeBaselineInput::Object { tasks } => {
+                tasks
+            }
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct AgentNativeBaselineTaskInput {
+    id: String,
+    #[serde(default)]
+    repo: Option<String>,
+    #[serde(default)]
+    base_commit: Option<String>,
+    #[serde(default)]
+    task: Option<String>,
+    #[serde(default)]
+    expected_files: Vec<String>,
+    #[serde(default)]
+    agent_native_files: Vec<String>,
+    #[serde(default)]
+    callsieve_files: Vec<String>,
+    #[serde(default)]
+    agent_native_context_tokens: usize,
+    #[serde(default)]
+    callsieve_packet_tokens: usize,
+    #[serde(default)]
+    callsieve_index_fingerprint: Option<String>,
+    #[serde(default)]
+    recording_status: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct AgentNativeBaselineOutput {
+    command: &'static str,
+    schema_version: u32,
+    id: String,
+    tool: String,
+    generated_at: u64,
+    locally_measured: bool,
+    measurement_scope: &'static str,
+    measurement_command: String,
+    source_artifacts: Vec<String>,
+    transcript_provenance_status: &'static str,
+    source_artifact_evidence: Vec<AgentNativeSourceArtifactEvidence>,
+    measurement_notes: Vec<String>,
+    k: usize,
+    metrics: AgentNativeBaselineMetrics,
+    tasks: Vec<AgentNativeBaselineTaskEvidence>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct AgentNativeSourceArtifactEvidence {
+    path: String,
+    role: &'static str,
+    bytes: usize,
+    hash: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ValueEnum)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum AgentNativeCheckMode {
+    Template,
+    Measured,
+}
+
+#[derive(Debug, Serialize)]
+struct AgentNativeCheckOutput {
+    command: &'static str,
+    schema_version: u32,
+    status: String,
+    mode: AgentNativeCheckMode,
+    tasks_path: String,
+    task_count: usize,
+    tasks_with_expected_files: usize,
+    tasks_with_callsieve_files: usize,
+    tasks_with_callsieve_packet_tokens: usize,
+    tasks_with_agent_native_files: usize,
+    tasks_with_agent_native_context_tokens: usize,
+    tasks_ready_for_mode: usize,
+    source_artifact_evidence: Vec<AgentNativeSourceArtifactEvidence>,
+    issues: Vec<AgentNativeCheckIssue>,
+    next_step: String,
+}
+
+#[derive(Debug, Serialize)]
+struct AgentNativeCheckIssue {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    task: Option<String>,
+    field: &'static str,
+    message: String,
+}
+
+#[derive(Debug, Serialize)]
+struct AgentNativeBaselineMetrics {
+    task_count: usize,
+    agent_native_first_correct_file_hits: usize,
+    callsieve_first_correct_file_hits: usize,
+    agent_native_first_correct_file_rate_at_k: f64,
+    callsieve_first_correct_file_rate_at_k: f64,
+    callsieve_minus_agent_native_first_correct_file_rate_at_k: f64,
+    agent_native_total_context_tokens: usize,
+    callsieve_total_packet_tokens: usize,
+    agent_native_average_context_tokens: usize,
+    callsieve_average_packet_tokens: usize,
+    agent_native_context_token_ratio_vs_callsieve: f64,
+}
+
+#[derive(Debug, Serialize)]
+struct AgentNativeBaselineTaskEvidence {
+    id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    repo: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    base_commit: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    task: Option<String>,
+    expected_files: Vec<String>,
+    agent_native_files: Vec<String>,
+    callsieve_files: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    callsieve_index_fingerprint: Option<String>,
+    agent_native_first_correct_file_at_k: bool,
+    callsieve_first_correct_file_at_k: bool,
+    agent_native_context_tokens: usize,
+    callsieve_packet_tokens: usize,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum AgentNativeTemplateInput {
+    Tasks(Vec<AgentNativeTemplateTaskInput>),
+    Object {
+        tasks: Vec<AgentNativeTemplateTaskInput>,
+    },
+    PublicIssues {
+        issues: Vec<AgentNativeTemplateIssueInput>,
+    },
+}
+
+impl AgentNativeTemplateInput {
+    fn into_tasks(self) -> Vec<AgentNativeTemplateTaskInput> {
+        match self {
+            AgentNativeTemplateInput::Tasks(tasks) | AgentNativeTemplateInput::Object { tasks } => {
+                tasks
+            }
+            AgentNativeTemplateInput::PublicIssues { issues } => issues
+                .into_iter()
+                .map(|issue| AgentNativeTemplateTaskInput {
+                    id: issue.id,
+                    repo: issue.repo,
+                    base_commit: issue.base_commit,
+                    task: issue.task,
+                    expected_files: issue.ground_truth_files,
+                    critical_files: Vec::new(),
+                })
+                .collect(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct AgentNativeTemplateTaskInput {
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    repo: Option<String>,
+    #[serde(default)]
+    base_commit: Option<String>,
+    task: String,
+    #[serde(default)]
+    expected_files: Vec<String>,
+    #[serde(default)]
+    critical_files: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AgentNativeTemplateIssueInput {
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    repo: Option<String>,
+    #[serde(default)]
+    base_commit: Option<String>,
+    task: String,
+    #[serde(default)]
+    ground_truth_files: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct AgentNativeTemplateOutput {
+    command: &'static str,
+    schema_version: u32,
+    root: String,
+    pinned_base_commits: bool,
+    index_fingerprint: String,
+    retrieval_contract_fingerprint: String,
+    source_tasks: String,
+    source_tasks_hash: String,
+    locally_measured: bool,
+    status: &'static str,
+    k: usize,
+    limit: usize,
+    snippets_per_file: usize,
+    profile: &'static str,
+    token_budget: usize,
+    instructions: Vec<&'static str>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    warnings: Vec<String>,
+    tasks: Vec<AgentNativeTemplateTaskOutput>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct AgentNativeTemplateOptions {
+    k: usize,
+    limit: usize,
+    snippets_per_file: usize,
+    include_snippets: bool,
+    profile: ContextProfileArg,
+    token_budget: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct AgentNativeTemplateTaskOutput {
+    id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    repo: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    base_commit: Option<String>,
+    task: String,
+    expected_files: Vec<String>,
+    agent_native_files: Vec<String>,
+    callsieve_files: Vec<String>,
+    agent_native_context_tokens: usize,
+    callsieve_packet_tokens: usize,
+    callsieve_index_fingerprint: String,
+    callsieve_first_correct_file_at_k: bool,
+    recording_status: &'static str,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct PublicProofArtifactInput {
+    id: String,
+    path: PathBuf,
+    #[serde(default = "default_public_proof_artifact_kind")]
+    kind: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    required: bool,
+}
+
+fn default_public_proof_artifact_kind() -> String {
+    "terminal_output".to_string()
+}
 
 #[derive(Debug, Parser)]
 #[command(
@@ -454,6 +1087,128 @@ pub enum Command {
 
         #[arg(long)]
         no_snippets: bool,
+    },
+
+    /// Compare local CallSieve proof against competitor classes from a manifest.
+    #[command(name = "competitive-report")]
+    CompetitiveReport {
+        manifest: PathBuf,
+
+        #[arg(long, default_value_t = 8)]
+        limit: usize,
+
+        #[arg(long, default_value_t = 2)]
+        snippets_per_file: usize,
+
+        #[arg(long)]
+        no_snippets: bool,
+    },
+
+    /// Combine competitive, public benchmark, and receipt evidence into a public proof artifact.
+    #[command(name = "public-proof-report")]
+    PublicProofReport {
+        manifest: PathBuf,
+
+        #[arg(long, default_value_t = 8)]
+        limit: usize,
+
+        #[arg(long, default_value_t = 2)]
+        snippets_per_file: usize,
+
+        #[arg(long)]
+        no_snippets: bool,
+    },
+
+    /// Measure a safe local full-repo prompt-pack proxy for public proof baselines.
+    #[command(name = "repo-pack-baseline")]
+    RepoPackBaseline {
+        path: PathBuf,
+
+        #[arg(long, default_value = "full-repo-pack-proxy")]
+        id: String,
+
+        #[arg(long, default_value = "FullRepoPackProxy")]
+        tool: String,
+
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
+
+    /// Build a standard artifact from measured agent-native search task results.
+    #[command(name = "agent-native-baseline")]
+    AgentNativeBaseline {
+        tasks: PathBuf,
+
+        #[arg(long, default_value = "agent-native-search")]
+        id: String,
+
+        #[arg(long, default_value = "AgentNativeSearch")]
+        tool: String,
+
+        #[arg(long, default_value_t = 5)]
+        k: usize,
+
+        #[arg(long, default_value = "")]
+        measurement_command: String,
+
+        #[arg(long = "source-artifact")]
+        source_artifacts: Vec<PathBuf>,
+
+        #[arg(long = "measurement-note")]
+        measurement_notes: Vec<String>,
+
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
+
+    /// Validate an agent-native search task log before external measurement or baseline conversion.
+    #[command(name = "agent-native-check")]
+    AgentNativeCheck {
+        tasks: PathBuf,
+
+        #[arg(long, value_enum, default_value = "measured")]
+        mode: AgentNativeCheckMode,
+
+        #[arg(long = "source-artifact")]
+        source_artifacts: Vec<PathBuf>,
+
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
+
+    /// Print or write the approved agent-native search measurement protocol.
+    #[command(name = "agent-native-protocol")]
+    AgentNativeProtocol {
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
+
+    /// Pre-fill CallSieve's side of an agent-native search measurement task log.
+    #[command(name = "agent-native-template")]
+    AgentNativeTemplate {
+        path: PathBuf,
+        tasks: PathBuf,
+
+        #[arg(long, default_value_t = 5)]
+        k: usize,
+
+        #[arg(long, default_value_t = query::DEFAULT_AGENT_CONTEXT_LIMIT)]
+        limit: usize,
+
+        #[arg(long, default_value_t = 0)]
+        snippets_per_file: usize,
+
+        #[arg(long)]
+        no_snippets: bool,
+
+        #[arg(long, value_enum, default_value_t = ContextProfileArg::Skim)]
+        profile: ContextProfileArg,
+
+        #[arg(long, default_value_t = query::DEFAULT_AGENT_CONTEXT_TOKEN_BUDGET)]
+        token_budget: usize,
+
+        #[arg(long)]
+        out: Option<PathBuf>,
     },
 
     /// Validate a benchmark-report manifest before running evidence collection.
@@ -866,6 +1621,13 @@ pub enum Command {
     /// Print or write a local-first MCP Registry server.json descriptor.
     #[command(name = "mcp-registry-manifest")]
     McpRegistryManifest {
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
+
+    /// Print or write the stable MCP callsieve_context structuredContent contract.
+    #[command(name = "mcp-contract")]
+    McpContract {
         #[arg(long)]
         out: Option<PathBuf>,
     },
@@ -1996,6 +2758,48 @@ struct McpConfigOutput {
 }
 
 #[derive(Debug, Serialize)]
+struct McpContractOutput {
+    command: &'static str,
+    #[serde(flatten)]
+    contract: PublicMcpContractEvidence,
+}
+
+#[derive(Debug, Serialize)]
+struct AgentNativeProtocolOutput {
+    command: &'static str,
+    schema_version: u16,
+    status: &'static str,
+    claim_boundary: &'static str,
+    workflow: Vec<AgentNativeProtocolStep>,
+    required_task_fields: AgentNativeProtocolTaskFields,
+    source_artifact_requirements: AgentNativeProtocolSourceArtifacts,
+    validation_commands: Vec<&'static str>,
+    public_proof_integration: Vec<&'static str>,
+}
+
+#[derive(Debug, Serialize)]
+struct AgentNativeProtocolStep {
+    step: u8,
+    name: &'static str,
+    command: &'static str,
+    evidence: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+struct AgentNativeProtocolTaskFields {
+    template: Vec<&'static str>,
+    measured: Vec<&'static str>,
+    recording_status: Vec<&'static str>,
+}
+
+#[derive(Debug, Serialize)]
+struct AgentNativeProtocolSourceArtifacts {
+    required_roles: Vec<&'static str>,
+    hash_algorithm: &'static str,
+    requirements: Vec<&'static str>,
+}
+
+#[derive(Debug, Serialize)]
 struct DemoOutput {
     command: &'static str,
     root: String,
@@ -2151,6 +2955,551 @@ struct EvidencePackOutput {
     generated_at: u64,
     protocol: String,
     evidence: serde_json::Value,
+}
+
+#[derive(Debug, Serialize)]
+struct CompetitiveReportOutput {
+    command: &'static str,
+    status: String,
+    generated_at: u64,
+    goal: String,
+    targets: CompetitiveReportTargetsOutput,
+    callsieve: CompetitiveCallsieveEvidence,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    natural_language: Option<CompetitiveCallsieveEvidence>,
+    comparison_matrix: Vec<CompetitiveComparisonRow>,
+    benchmark: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    natural_language_benchmark: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    performance: Option<serde_json::Value>,
+    trace_policy: serde_json::Value,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    failures: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    warnings: Vec<String>,
+    next_actions: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct CompetitiveReportTargetsOutput {
+    minimum_first_correct_file_rate_at_k: f64,
+    minimum_expected_file_recall: f64,
+    minimum_natural_language_first_correct_file_rate_at_k: f64,
+    minimum_natural_language_expected_file_recall: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    maximum_first_query_p95_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    maximum_default_packet_tokens: Option<usize>,
+    require_natural_language_benchmark: bool,
+    require_trace_or_receipt_proof: bool,
+    require_zero_retrieval_model_tokens: bool,
+    require_zero_per_query_retrieval_cost: bool,
+    require_no_default_code_upload: bool,
+    minimum_agent_coverage: usize,
+    required_agents: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct CompetitiveCallsieveEvidence {
+    evidence_tier: &'static str,
+    locally_measured: bool,
+    first_correct_file_rate_at_k: f64,
+    expected_file_recall: f64,
+    default_packet_tokens: usize,
+    baseline_context_payload_tokens: usize,
+    callsieve_context_payload_tokens: usize,
+    context_payload_reduction_percent: f64,
+    packet_quality: PublicContextPacketQualityEvidence,
+    avoided_grep_commands: usize,
+    avoided_file_reads: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    first_query_p50_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    first_query_p95_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    first_query_samples: Option<usize>,
+    retrieval_model_tokens: usize,
+    per_query_retrieval_cost_usd: f64,
+    default_code_upload_required: bool,
+    explainability: &'static str,
+    agent_coverage: Vec<&'static str>,
+    agent_coverage_count: usize,
+    missing_required_agents: Vec<String>,
+    strict_trace_policy_sessions: usize,
+    strict_trace_policy_violations: usize,
+    context_first_compliant: bool,
+    trace_or_receipt_proof_available: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+struct PublicContextPacketQualityEvidence {
+    tasks: usize,
+    selected_files: usize,
+    files_with_symbols: usize,
+    selected_symbols: usize,
+    files_with_snippets: usize,
+    snippets: usize,
+    files_with_related_tests: usize,
+    related_tests: usize,
+    files_with_blast_radius: usize,
+    blast_radius_hints: usize,
+    files_with_call_graph_hints: usize,
+    call_graph_hints: usize,
+    files_with_non_unknown_risk: usize,
+    files_with_selection_reasons: usize,
+    selection_reasons: usize,
+    files_with_selection_confidence: usize,
+    selection_signals: usize,
+    next_file_hints: usize,
+    focus_targets: usize,
+    relationship_followup_targets: usize,
+    test_followup_targets: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct CompetitiveComparisonRow {
+    name: String,
+    category: String,
+    evidence_kind: &'static str,
+    source: String,
+    install_friction: String,
+    first_query_time: String,
+    code_upload_requirement: String,
+    retrieval_model_token_cost: String,
+    per_query_retrieval_cost: String,
+    packet_compactness: String,
+    first_correct_file_rate_at_k: String,
+    natural_language_recall: String,
+    explainability: String,
+    agent_coverage: String,
+    trace_or_receipt_proof: String,
+    where_callsieve_should_win: String,
+}
+
+#[derive(Debug, Serialize)]
+struct PublicProofReportOutput {
+    command: &'static str,
+    status: String,
+    generated_at: u64,
+    goal: String,
+    local_gate: PublicProofLocalGate,
+    targets: PublicProofTargetsOutput,
+    public_benchmarks: Vec<PublicBenchmarkEvidence>,
+    public_result_catalog: PublicResultCatalog,
+    public_checkouts: PublicCheckoutEvidence,
+    broad_read_guardrail: PublicBroadReadGuardrail,
+    context_packet_guardrail: PublicContextPacketGuardrail,
+    evidence_pack: PublicEvidencePack,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    miss_triage: Option<PublicMissTriage>,
+    repo_packer_guardrail: PublicRepoPackerGuardrail,
+    agent_native_search_guardrail: PublicAgentNativeSearchGuardrail,
+    mcp_surface: PublicMcpSurfaceEvidence,
+    mcp_contract: PublicMcpContractEvidence,
+    agent_setup: PublicAgentSetupEvidence,
+    evidence_commands: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    failures: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    warnings: Vec<String>,
+    next_actions: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct PublicProofTargetsOutput {
+    require_competitive_report_pass: bool,
+    require_zero_retrieval_model_tokens: bool,
+    require_zero_per_query_retrieval_cost: bool,
+    require_no_default_code_upload: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    maximum_default_packet_tokens: Option<usize>,
+    require_broad_read_payload_reduction: bool,
+    require_context_packet_quality: bool,
+    require_current_public_report_retrieval_contract: bool,
+    minimum_broad_read_context_payload_reduction_percent: f64,
+    minimum_public_reports: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    minimum_total_public_evaluated: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    minimum_agent_native_measured_baselines: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    minimum_agent_native_distinct_tools: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    minimum_agent_native_repositories: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    minimum_agent_native_task_languages: Option<usize>,
+    target_swe_bench_style_first_correct_file_rate_at_k: f64,
+    target_natural_language_first_correct_file_rate_at_k: f64,
+}
+
+#[derive(Debug, Serialize)]
+struct PublicProofLocalGate {
+    manifest: String,
+    status: String,
+    expected_file_recall: f64,
+    first_correct_file_rate_at_k: f64,
+    natural_language_first_correct_file_rate_at_k: Option<f64>,
+    retrieval_model_tokens: usize,
+    per_query_retrieval_cost_usd: f64,
+    default_code_upload_required: bool,
+    default_packet_tokens: usize,
+    first_query_p95_ms: Option<u64>,
+    trace_or_receipt_proof_available: bool,
+    agent_coverage_count: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct PublicBenchmarkEvidence {
+    id: String,
+    category: String,
+    report: String,
+    manifest: String,
+    retrieval_contract_fingerprint: Option<String>,
+    retrieval_contract_status: String,
+    requires_current_retrieval_contract: bool,
+    k: usize,
+    evaluated: usize,
+    skipped: usize,
+    total: usize,
+    preferred_arm: String,
+    first_correct_file_rate_at_k: f64,
+    grep_first_correct_file_rate_at_k: Option<f64>,
+    minus_grep: Option<f64>,
+    average_selected_files: f64,
+    average_grep_matched_files: Option<f64>,
+    misses: Vec<String>,
+    status: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct PublicResultCatalog {
+    reports: Vec<PublicResultCatalogEntry>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    best_swe_bench_style: Option<PublicResultCatalogBest>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    best_natural_language: Option<PublicResultCatalogBest>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct PublicResultCatalogEntry {
+    report: String,
+    manifest: String,
+    category: String,
+    retrieval_contract_fingerprint: Option<String>,
+    retrieval_contract_status: String,
+    k: usize,
+    evaluated: usize,
+    lexical_first_correct_file_rate_at_k: f64,
+    hybrid_first_correct_file_rate_at_k: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    grep_first_correct_file_rate_at_k: Option<f64>,
+    best_arm: String,
+    best_first_correct_file_rate_at_k: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct PublicResultCatalogBest {
+    report: String,
+    category: String,
+    best_arm: String,
+    first_correct_file_rate_at_k: f64,
+    target_first_correct_file_rate_at_k: f64,
+    gap_to_target: f64,
+    status: String,
+}
+
+#[derive(Debug, Serialize)]
+struct PublicRepoPackerGuardrail {
+    status: String,
+    claim_scope: String,
+    default_packet_tokens: usize,
+    maximum_default_packet_tokens: Option<usize>,
+    average_public_selected_files: f64,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    baselines: Vec<PublicRepoPackerBaselineEvidence>,
+    evidence: String,
+    next_baseline: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct PublicBroadReadGuardrail {
+    status: String,
+    claim_scope: String,
+    baseline_context_payload_tokens: usize,
+    callsieve_context_payload_tokens: usize,
+    context_payload_tokens_saved: isize,
+    context_payload_reduction_percent: f64,
+    minimum_context_payload_reduction_percent: f64,
+    avoided_file_reads: usize,
+    avoided_grep_commands: usize,
+    evidence: String,
+    next_baseline: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct PublicContextPacketGuardrail {
+    status: String,
+    claim_scope: String,
+    tasks: usize,
+    selected_files: usize,
+    files_with_symbols: usize,
+    selected_symbols: usize,
+    files_with_snippets: usize,
+    snippets: usize,
+    files_with_related_tests: usize,
+    related_tests: usize,
+    files_with_blast_radius: usize,
+    blast_radius_hints: usize,
+    files_with_call_graph_hints: usize,
+    call_graph_hints: usize,
+    files_with_non_unknown_risk: usize,
+    files_with_selection_reasons: usize,
+    selection_reasons: usize,
+    files_with_selection_confidence: usize,
+    selection_signals: usize,
+    next_file_hints: usize,
+    focus_targets: usize,
+    relationship_followup_targets: usize,
+    test_followup_targets: usize,
+    evidence: String,
+    next_baseline: String,
+}
+
+#[derive(Debug, Serialize)]
+struct PublicAgentNativeSearchGuardrail {
+    status: String,
+    claim_scope: String,
+    summary: PublicAgentNativeSearchSummary,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    baselines: Vec<PublicAgentNativeSearchBaselineEvidence>,
+    evidence: String,
+    next_baseline: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct PublicAgentNativeSearchSummary {
+    baseline_count: usize,
+    required_baseline_count: usize,
+    measured_baseline_count: usize,
+    transcript_backed_baseline_count: usize,
+    total_measured_tasks: usize,
+    distinct_agent_tool_count: usize,
+    agent_tools: Vec<String>,
+    distinct_repository_count: usize,
+    repositories: Vec<String>,
+    distinct_base_commit_count: usize,
+    base_commits: Vec<String>,
+    task_language_count: usize,
+    task_languages: Vec<String>,
+    single_agent_only: bool,
+    multi_agent_status: String,
+    evidence: String,
+    next_baseline: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct PublicMcpSurfaceEvidence {
+    status: String,
+    protocol: &'static str,
+    required_first_mile_tools: Vec<String>,
+    exposed_tools: Vec<String>,
+    missing_required_tools: Vec<String>,
+    context_first_tool: &'static str,
+    local_config_commands: Vec<&'static str>,
+    registry_manifest_command: &'static str,
+    evidence: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct PublicMcpContractEvidence {
+    status: String,
+    contract_version: u16,
+    context_tool: &'static str,
+    structured_content_required: bool,
+    default_profile: &'static str,
+    default_token_budget: usize,
+    required_structured_content_fields: Vec<&'static str>,
+    supported_instruction_expansion_keys: Vec<&'static str>,
+    required_freshness_fields: Vec<&'static str>,
+    evidence: &'static str,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct PublicCheckoutEvidence {
+    status: String,
+    repos_dir: String,
+    manifests: Vec<String>,
+    expected_repos: usize,
+    present_repos: usize,
+    missing_repos: Vec<String>,
+    missing_manifests: Vec<String>,
+    commands: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct PublicRepoPackerBaselineEvidence {
+    id: String,
+    tool: String,
+    path: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    command: String,
+    required: bool,
+    exists: bool,
+    locally_measured: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tokens: Option<usize>,
+    #[serde(skip_serializing_if = "skip_false")]
+    tokens_estimated_from_bytes: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bytes: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    files: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    token_ratio_vs_callsieve_packet: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    minimum_token_ratio_vs_callsieve_packet: Option<f64>,
+    status: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct PublicAgentNativeSearchBaselineEvidence {
+    id: String,
+    tool: String,
+    path: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    command: String,
+    required: bool,
+    exists: bool,
+    locally_measured: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tasks: Option<usize>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    repositories: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    base_commits: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    task_languages: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    agent_native_first_correct_file_rate_at_k: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    callsieve_first_correct_file_rate_at_k: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    callsieve_minus_agent_native_first_correct_file_rate_at_k: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    agent_native_average_context_tokens: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    callsieve_average_packet_tokens: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    agent_native_context_token_ratio_vs_callsieve: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_artifacts: Option<usize>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    source_artifact_hashes: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    transcript_source_artifact_hashes: Vec<String>,
+    transcript_provenance_status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    minimum_tasks: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    minimum_callsieve_minus_agent_native_first_correct_file_rate_at_k: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    minimum_agent_native_context_token_ratio_vs_callsieve: Option<f64>,
+    status: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct PublicAgentSetupEvidence {
+    status: String,
+    claim_scope: &'static str,
+    required_agents: Vec<String>,
+    covered_agents: Vec<String>,
+    missing_required_agents: Vec<String>,
+    agent_coverage_count: usize,
+    minimum_agent_coverage: usize,
+    default_layer_clients: Vec<String>,
+    default_layer_clients_covered: Vec<String>,
+    missing_default_layer_clients: Vec<String>,
+    priority_clients: Vec<&'static str>,
+    priority_clients_covered: Vec<&'static str>,
+    hook_capable_clients: Vec<&'static str>,
+    mcp_template_clients: Vec<&'static str>,
+    commands: Vec<String>,
+    evidence: &'static str,
+    next_step: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+struct PublicEvidencePack {
+    commands: Vec<String>,
+    fixture_manifests: Vec<String>,
+    result_reports: Vec<String>,
+    metrics: Vec<PublicProofMetric>,
+    misses: Vec<PublicProofMissEvidence>,
+    receipt_commands: Vec<String>,
+    terminal_artifacts: Vec<PublicProofArtifactEvidence>,
+    public_checkouts: PublicCheckoutEvidence,
+    broad_read_guardrail: PublicBroadReadGuardrail,
+    context_packet_guardrail: PublicContextPacketGuardrail,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    repo_packer_baselines: Vec<PublicRepoPackerBaselineEvidence>,
+    agent_native_search_summary: PublicAgentNativeSearchSummary,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    agent_native_search_baselines: Vec<PublicAgentNativeSearchBaselineEvidence>,
+    mcp_surface: PublicMcpSurfaceEvidence,
+    mcp_contract: PublicMcpContractEvidence,
+    agent_setup: PublicAgentSetupEvidence,
+}
+
+#[derive(Debug, Serialize)]
+struct PublicProofMetric {
+    name: String,
+    value: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target: Option<serde_json::Value>,
+    status: String,
+}
+
+#[derive(Debug, Serialize)]
+struct PublicProofMissEvidence {
+    report: String,
+    preferred_arm: String,
+    sampled_misses: usize,
+    sample: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct PublicProofArtifactEvidence {
+    id: String,
+    path: String,
+    kind: String,
+    description: String,
+    required: bool,
+    exists: bool,
+    status: String,
+    validation: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    source_artifact_hashes: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct PublicMissTriage {
+    path: String,
+    total: usize,
+    reachable: usize,
+    not_reachable: usize,
+    same_directory_hints: usize,
+    sample: Vec<PublicMissTriageSample>,
+}
+
+#[derive(Debug, Serialize)]
+struct PublicMissTriageSample {
+    id: String,
+    truth: String,
+    reachable: bool,
+    same_dir: Vec<String>,
+    pool_refs_truth: Vec<String>,
+    truth_refs_pool: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -3522,6 +4871,109 @@ pub fn run() -> Result<()> {
             let output = query::benchmark_report(manifest, limit, snippets_per_file, !no_snippets)?;
             output::json::print(&output)?;
         }
+        Command::CompetitiveReport {
+            manifest,
+            limit,
+            snippets_per_file,
+            no_snippets,
+        } => {
+            let output =
+                competitive_report_file(&manifest, limit, snippets_per_file, !no_snippets)?;
+            output::json::print(&output)?;
+        }
+        Command::PublicProofReport {
+            manifest,
+            limit,
+            snippets_per_file,
+            no_snippets,
+        } => {
+            let output =
+                public_proof_report_file(&manifest, limit, snippets_per_file, !no_snippets)?;
+            output::json::print(&output)?;
+        }
+        Command::RepoPackBaseline {
+            path,
+            id,
+            tool,
+            out,
+        } => {
+            let output = repo_pack_baseline(&path, id, tool)?;
+            if let Some(out) = out {
+                write_json_file(&out, &output)?;
+            }
+            output::json::print(&output)?;
+        }
+        Command::AgentNativeBaseline {
+            tasks,
+            id,
+            tool,
+            k,
+            measurement_command,
+            source_artifacts,
+            measurement_notes,
+            out,
+        } => {
+            let output = agent_native_baseline(
+                &tasks,
+                id,
+                tool,
+                k,
+                measurement_command,
+                source_artifacts,
+                measurement_notes,
+            )?;
+            if let Some(out) = out {
+                write_json_file(&out, &output)?;
+            }
+            output::json::print(&output)?;
+        }
+        Command::AgentNativeCheck {
+            tasks,
+            mode,
+            source_artifacts,
+            out,
+        } => {
+            let output = agent_native_check(&tasks, mode, source_artifacts)?;
+            if let Some(out) = out {
+                write_json_file(&out, &output)?;
+            }
+            output::json::print(&output)?;
+        }
+        Command::AgentNativeProtocol { out } => {
+            let output = agent_native_protocol_output();
+            if let Some(out) = out {
+                write_json_file(&out, &output)?;
+            }
+            output::json::print(&output)?;
+        }
+        Command::AgentNativeTemplate {
+            path,
+            tasks,
+            k,
+            limit,
+            snippets_per_file,
+            no_snippets,
+            profile,
+            token_budget,
+            out,
+        } => {
+            let output = agent_native_template(
+                &path,
+                &tasks,
+                AgentNativeTemplateOptions {
+                    k,
+                    limit,
+                    snippets_per_file,
+                    include_snippets: !no_snippets,
+                    profile,
+                    token_budget,
+                },
+            )?;
+            if let Some(out) = out {
+                write_json_file(&out, &output)?;
+            }
+            output::json::print(&output)?;
+        }
         Command::BenchmarkDoctor { manifest } => {
             let manifest_json = fs::read_to_string(&manifest).with_context(|| {
                 format!("failed to read benchmark manifest: {}", manifest.display())
@@ -3973,6 +5425,18 @@ pub fn run() -> Result<()> {
                     .with_context(|| format!("failed to write {}", out.display()))?;
             }
             output::json::print(&manifest)?;
+        }
+        Command::McpContract { out } => {
+            let output = mcp_contract_output();
+            if let Some(out) = out {
+                if let Some(parent) = out.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+                    fs::create_dir_all(parent)
+                        .with_context(|| format!("failed to create {}", parent.display()))?;
+                }
+                fs::write(&out, serde_json::to_string_pretty(&output)?)
+                    .with_context(|| format!("failed to write {}", out.display()))?;
+            }
+            output::json::print(&output)?;
         }
         Command::Status { path } => {
             let index = store::json_store::load_index(&path).ok();
@@ -6060,6 +7524,102 @@ fn mcp_registry_manifest() -> serde_json::Value {
     })
 }
 
+fn mcp_contract_output() -> McpContractOutput {
+    McpContractOutput {
+        command: "mcp-contract",
+        contract: public_mcp_contract_evidence(),
+    }
+}
+
+fn agent_native_protocol_output() -> AgentNativeProtocolOutput {
+    AgentNativeProtocolOutput {
+        command: "agent-native-protocol",
+        schema_version: 1,
+        status: "pass",
+        claim_boundary: "Protocol only: this artifact defines how to collect approved agent-native search measurements. It does not claim a measured win until transcript/export-backed baselines are added to public proof.",
+        workflow: vec![
+            AgentNativeProtocolStep {
+                step: 1,
+                name: "prepare_callsieve_side",
+                command: "callsieve agent-native-template <repo> <tasks-or-public-manifest.json> --k 5 --out <task-log.json>",
+                evidence: "unmeasured task log with expected_files, callsieve_files, callsieve_packet_tokens, source task hash, index fingerprint, and retrieval contract fingerprint",
+            },
+            AgentNativeProtocolStep {
+                step: 2,
+                name: "record_native_search_run",
+                command: "run the approved native agent on the same pinned tasks without using CallSieve for the native side",
+                evidence: "transcript or native-search export showing files selected/read and transcript-backed context-token counts",
+            },
+            AgentNativeProtocolStep {
+                step: 3,
+                name: "preflight_measurement",
+                command: "callsieve agent-native-check <filled-task-log.json> --mode measured --source-artifact <transcript-or-export>...",
+                evidence: "status pass with measured agent_native_files, agent_native_context_tokens, recording_status=measured, and hashed source artifacts",
+            },
+            AgentNativeProtocolStep {
+                step: 4,
+                name: "standardize_baseline",
+                command: "callsieve agent-native-baseline <filled-task-log.json> --source-artifact <transcript-or-export>... --out <baseline.json>",
+                evidence: "locally measured baseline artifact with first-correct rates, context-token ratios, source_artifact_evidence, and transcript_provenance_status pass",
+            },
+            AgentNativeProtocolStep {
+                step: 5,
+                name: "publish_guardrail",
+                command: "add <baseline.json> to public-proof manifest agent_native_search_baselines and rerun callsieve public-proof-report <manifest.json>",
+                evidence: "public proof passes only after source artifacts are reread and byte counts and hashes are recomputed",
+            },
+        ],
+        required_task_fields: AgentNativeProtocolTaskFields {
+            template: vec![
+                "id",
+                "task",
+                "expected_files",
+                "callsieve_files",
+                "callsieve_packet_tokens",
+                "recording_status=needs_agent_native_measurement",
+                "agent_native_files=[]",
+                "agent_native_context_tokens=0",
+            ],
+            measured: vec![
+                "id",
+                "expected_files",
+                "callsieve_files",
+                "callsieve_packet_tokens",
+                "agent_native_files",
+                "agent_native_context_tokens",
+                "recording_status=measured",
+            ],
+            recording_status: vec![
+                "needs_agent_native_measurement before the external run",
+                "measured after agent_native_files and transcript-backed agent_native_context_tokens are filled",
+            ],
+        },
+        source_artifact_requirements: AgentNativeProtocolSourceArtifacts {
+            required_roles: vec!["task_log", "agent_native_transcript_or_export"],
+            hash_algorithm: "fnv1a64 stable_content_hash",
+            requirements: vec![
+                "at least one transcript or native-search export is required for measured baselines",
+                "source artifacts must be readable locally when public proof runs",
+                "public proof recomputes source artifact byte counts and hashes",
+                "artifacts must not require network access, cloud credentials, or proprietary upload",
+            ],
+        },
+        validation_commands: vec![
+            "callsieve agent-native-check <task-log.json> --mode template",
+            "callsieve agent-native-check <filled-task-log.json> --mode measured --source-artifact <transcript-or-export>...",
+            "callsieve agent-native-baseline <filled-task-log.json> --source-artifact <transcript-or-export>... --out <baseline.json>",
+            "callsieve public-proof-report <public-proof-manifest.json>",
+        ],
+        public_proof_integration: vec![
+            "terminal_artifacts id=agent-native-template validates the unmeasured template by recomputing CallSieve files and packet tokens from current source/index/retrieval provenance",
+            "terminal_artifacts id=agent-native-protocol validates this protocol artifact against the live CLI output",
+            "terminal_artifacts id=agent-native-check validates the measured preflight output by recomputing it from the task log and transcript/export source artifacts, and one passing check artifact must contain all source hashes for each measured baseline before it can support public proof",
+            "agent_native_search_baselines entries are optional until real approved external-agent runs exist",
+            "required agent_native_search_baselines fail closed when missing, not locally measured, below thresholds, lacking recomputed transcript/export provenance, missing the checked measured preflight artifact, or not hash-linked to that preflight artifact",
+        ],
+    }
+}
+
 fn retrieval_manifest_root(value: &serde_json::Value) -> PathBuf {
     let raw_path = ["path", "repo", "root"]
         .iter()
@@ -6714,6 +8274,4951 @@ fn benchmark_report_file(
     let manifest: query::BenchmarkReportManifest = serde_json::from_str(&manifest_json)
         .with_context(|| format!("failed to parse benchmark manifest: {}", manifest.display()))?;
     query::benchmark_report(manifest, limit, snippets_per_file, include_snippets)
+}
+
+fn competitive_report_file(
+    manifest_path: &Path,
+    limit: usize,
+    snippets_per_file: usize,
+    include_snippets: bool,
+) -> Result<CompetitiveReportOutput> {
+    let manifest_json = fs::read_to_string(manifest_path).with_context(|| {
+        format!(
+            "failed to read competitive report manifest: {}",
+            manifest_path.display()
+        )
+    })?;
+    let manifest: CompetitiveReportManifest =
+        serde_json::from_str(&manifest_json).with_context(|| {
+            format!(
+                "failed to parse competitive report manifest: {}",
+                manifest_path.display()
+            )
+        })?;
+
+    let trace_policy = query::benchmark_report_trace_policy_check(&manifest.benchmark)?;
+    let trace_policy_value = serde_json::to_value(&trace_policy)?;
+    let benchmark = query::benchmark_report(
+        manifest.benchmark,
+        limit,
+        snippets_per_file,
+        include_snippets,
+    )?;
+    let benchmark_value = serde_json::to_value(&benchmark)?;
+    let mut callsieve = competitive_callsieve_evidence(&benchmark_value, Some(&trace_policy_value));
+
+    let (natural_language, natural_language_benchmark) =
+        if let Some(natural_language_manifest) = manifest.natural_language_benchmark {
+            let output = query::benchmark_report(
+                natural_language_manifest,
+                limit,
+                snippets_per_file,
+                include_snippets,
+            )?;
+            let value = serde_json::to_value(&output)?;
+            (
+                Some(competitive_callsieve_evidence(&value, None)),
+                Some(value),
+            )
+        } else {
+            (None, None)
+        };
+
+    let performance = if let Some(performance_manifest) = manifest.performance {
+        let output = perf_report(
+            &performance_manifest.path,
+            performance_manifest.tasks.as_deref(),
+            performance_manifest.iterations,
+        )?;
+        callsieve.first_query_p50_ms = Some(output.summary.p50_ms);
+        callsieve.first_query_p95_ms = Some(output.summary.p95_ms);
+        callsieve.first_query_samples = Some(output.summary.samples);
+        Some(serde_json::to_value(&output)?)
+    } else {
+        None
+    };
+
+    let missing_required_agents =
+        missing_required_agents(&callsieve.agent_coverage, &manifest.targets.required_agents);
+    callsieve.missing_required_agents = missing_required_agents.clone();
+
+    let mut failures = Vec::new();
+    let mut warnings = Vec::new();
+    if callsieve.first_correct_file_rate_at_k
+        < manifest.targets.minimum_first_correct_file_rate_at_k
+    {
+        failures.push(format!(
+            "first_correct_file_rate_at_k {:.3} is below target {:.3}",
+            callsieve.first_correct_file_rate_at_k,
+            manifest.targets.minimum_first_correct_file_rate_at_k
+        ));
+    }
+    if callsieve.expected_file_recall < manifest.targets.minimum_expected_file_recall {
+        failures.push(format!(
+            "expected_file_recall {:.3} is below target {:.3}",
+            callsieve.expected_file_recall, manifest.targets.minimum_expected_file_recall
+        ));
+    }
+    match &natural_language {
+        Some(natural_language) => {
+            if natural_language.first_correct_file_rate_at_k
+                < manifest
+                    .targets
+                    .minimum_natural_language_first_correct_file_rate_at_k
+            {
+                failures.push(format!(
+                    "natural_language_first_correct_file_rate_at_k {:.3} is below target {:.3}",
+                    natural_language.first_correct_file_rate_at_k,
+                    manifest
+                        .targets
+                        .minimum_natural_language_first_correct_file_rate_at_k
+                ));
+            }
+            if natural_language.expected_file_recall
+                < manifest
+                    .targets
+                    .minimum_natural_language_expected_file_recall
+            {
+                failures.push(format!(
+                    "natural_language_expected_file_recall {:.3} is below target {:.3}",
+                    natural_language.expected_file_recall,
+                    manifest
+                        .targets
+                        .minimum_natural_language_expected_file_recall
+                ));
+            }
+        }
+        None if manifest.targets.require_natural_language_benchmark => {
+            failures.push("natural-language benchmark is required but missing".to_string());
+        }
+        None => warnings.push(
+            "natural-language benchmark not provided; natural-language recall is unmeasured"
+                .to_string(),
+        ),
+    }
+    if manifest.targets.require_trace_or_receipt_proof
+        && !callsieve.trace_or_receipt_proof_available
+    {
+        failures.push("trace or receipt proof is required but missing".to_string());
+    }
+    if let Some(max_packet_tokens) = manifest.targets.maximum_default_packet_tokens
+        && callsieve.default_packet_tokens > max_packet_tokens
+    {
+        failures.push(format!(
+            "default_packet_tokens {} exceeds target {}",
+            callsieve.default_packet_tokens, max_packet_tokens
+        ));
+    }
+    if manifest.targets.require_zero_retrieval_model_tokens && callsieve.retrieval_model_tokens != 0
+    {
+        failures.push(format!(
+            "retrieval_model_tokens {} exceeds required zero-token retrieval target",
+            callsieve.retrieval_model_tokens
+        ));
+    }
+    if manifest.targets.require_zero_per_query_retrieval_cost
+        && callsieve.per_query_retrieval_cost_usd > f64::EPSILON
+    {
+        failures.push(format!(
+            "per_query_retrieval_cost_usd {:.6} exceeds required zero-cost retrieval target",
+            callsieve.per_query_retrieval_cost_usd
+        ));
+    }
+    if manifest.targets.require_no_default_code_upload && callsieve.default_code_upload_required {
+        failures.push("default_code_upload_required must be false".to_string());
+    }
+    if callsieve.agent_coverage_count < manifest.targets.minimum_agent_coverage {
+        failures.push(format!(
+            "agent_coverage_count {} is below target {}",
+            callsieve.agent_coverage_count, manifest.targets.minimum_agent_coverage
+        ));
+    }
+    if !missing_required_agents.is_empty() {
+        failures.push(format!(
+            "required agent coverage is missing: {}",
+            missing_required_agents.join(", ")
+        ));
+    }
+    if let Some(max_p95_ms) = manifest.targets.maximum_first_query_p95_ms {
+        match callsieve.first_query_p95_ms {
+            Some(actual) if actual <= max_p95_ms => {}
+            Some(actual) => failures.push(format!(
+                "first_query_p95_ms {actual} exceeds target {max_p95_ms}"
+            )),
+            None => failures.push(
+                "maximum_first_query_p95_ms target is set but performance benchmark is missing"
+                    .to_string(),
+            ),
+        }
+    } else if callsieve.first_query_p95_ms.is_none() {
+        warnings
+            .push("performance benchmark not provided; first-query time is unmeasured".to_string());
+    }
+    if manifest.competitors.is_empty() {
+        warnings.push("no competitor rows declared in manifest".to_string());
+    }
+
+    let mut comparison_matrix = Vec::new();
+    comparison_matrix.push(callsieve_comparison_row(
+        &callsieve,
+        natural_language.as_ref(),
+    ));
+    comparison_matrix.extend(
+        manifest
+            .competitors
+            .into_iter()
+            .map(competitor_comparison_row),
+    );
+
+    let mut next_actions = Vec::new();
+    match &natural_language {
+        None => next_actions.push(
+            "add a natural-language benchmark manifest when making natural-language recall claims"
+                .to_string(),
+        ),
+        Some(natural_language)
+            if natural_language.first_correct_file_rate_at_k
+                < manifest
+                    .targets
+                    .minimum_natural_language_first_correct_file_rate_at_k =>
+        {
+            next_actions.push(
+                "improve deterministic natural-language retrieval before raising NL claims"
+                    .to_string(),
+            );
+        }
+        Some(_) => {}
+    }
+    if callsieve.first_query_p95_ms.is_some() {
+        next_actions.push(
+            "keep first-query latency in the competitive manifest so speed claims stay measured"
+                .to_string(),
+        );
+    } else {
+        next_actions.push("add performance evidence before making speed claims".to_string());
+    }
+    if !callsieve.trace_or_receipt_proof_available {
+        next_actions.push(
+            "include observed trace or receipt evidence before claiming grep/read-loop avoidance"
+                .to_string(),
+        );
+    }
+    if callsieve.agent_coverage_count < manifest.targets.minimum_agent_coverage
+        || !missing_required_agents.is_empty()
+    {
+        next_actions.push(
+            "keep agent setup coverage broad enough to defend the agent-neutrality claim"
+                .to_string(),
+        );
+    }
+    if callsieve.expected_file_recall < manifest.targets.minimum_expected_file_recall {
+        next_actions.push(
+            "improve expected-file recall before raising broad context-quality claims".to_string(),
+        );
+    }
+    if manifest
+        .targets
+        .maximum_default_packet_tokens
+        .is_some_and(|target| callsieve.default_packet_tokens > target)
+    {
+        next_actions
+            .push("keep the default packet compact enough to beat broad repo packing".to_string());
+    }
+    next_actions.push(
+        "update competitor rows only from cited public sources or local measurements".to_string(),
+    );
+
+    Ok(CompetitiveReportOutput {
+        command: "competitive-report",
+        status: if failures.is_empty() {
+            "pass".to_string()
+        } else {
+            "needs_work".to_string()
+        },
+        generated_at: now_unix_seconds(),
+        goal: manifest.goal,
+        targets: CompetitiveReportTargetsOutput {
+            minimum_first_correct_file_rate_at_k: manifest
+                .targets
+                .minimum_first_correct_file_rate_at_k,
+            minimum_expected_file_recall: manifest.targets.minimum_expected_file_recall,
+            minimum_natural_language_first_correct_file_rate_at_k: manifest
+                .targets
+                .minimum_natural_language_first_correct_file_rate_at_k,
+            minimum_natural_language_expected_file_recall: manifest
+                .targets
+                .minimum_natural_language_expected_file_recall,
+            maximum_first_query_p95_ms: manifest.targets.maximum_first_query_p95_ms,
+            maximum_default_packet_tokens: manifest.targets.maximum_default_packet_tokens,
+            require_natural_language_benchmark: manifest.targets.require_natural_language_benchmark,
+            require_trace_or_receipt_proof: manifest.targets.require_trace_or_receipt_proof,
+            require_zero_retrieval_model_tokens: manifest
+                .targets
+                .require_zero_retrieval_model_tokens,
+            require_zero_per_query_retrieval_cost: manifest
+                .targets
+                .require_zero_per_query_retrieval_cost,
+            require_no_default_code_upload: manifest.targets.require_no_default_code_upload,
+            minimum_agent_coverage: manifest.targets.minimum_agent_coverage,
+            required_agents: manifest.targets.required_agents,
+        },
+        callsieve,
+        natural_language,
+        comparison_matrix,
+        benchmark: benchmark_value,
+        natural_language_benchmark,
+        performance,
+        trace_policy: trace_policy_value,
+        failures,
+        warnings,
+        next_actions,
+    })
+}
+
+fn public_proof_report_file(
+    manifest_path: &Path,
+    limit: usize,
+    snippets_per_file: usize,
+    include_snippets: bool,
+) -> Result<PublicProofReportOutput> {
+    let manifest_json = fs::read_to_string(manifest_path).with_context(|| {
+        format!(
+            "failed to read public proof manifest: {}",
+            manifest_path.display()
+        )
+    })?;
+    let manifest: PublicProofManifest =
+        serde_json::from_str(&manifest_json).with_context(|| {
+            format!(
+                "failed to parse public proof manifest: {}",
+                manifest_path.display()
+            )
+        })?;
+    let targets = manifest.targets.clone();
+    let competitive = competitive_report_file(
+        &manifest.competitive_report,
+        limit,
+        snippets_per_file,
+        include_snippets,
+    )?;
+    let local_gate = public_proof_local_gate(&manifest.competitive_report, &competitive);
+    let agent_setup = public_agent_setup_evidence(&competitive);
+    let broad_read_guardrail = public_broad_read_guardrail(&competitive.callsieve, &targets);
+    let context_packet_guardrail = public_context_packet_guardrail(&competitive.callsieve);
+
+    let mut failures = Vec::new();
+    let mut warnings = Vec::new();
+    if targets.require_competitive_report_pass && competitive.status != "pass" {
+        failures.push(format!(
+            "competitive report status is `{}`; public proof requires `pass`",
+            competitive.status
+        ));
+    }
+    if targets.require_zero_retrieval_model_tokens && local_gate.retrieval_model_tokens != 0 {
+        failures.push(format!(
+            "retrieval_model_tokens {} exceeds required zero-token retrieval target",
+            local_gate.retrieval_model_tokens
+        ));
+    }
+    if targets.require_zero_per_query_retrieval_cost
+        && local_gate.per_query_retrieval_cost_usd > f64::EPSILON
+    {
+        failures.push(format!(
+            "per_query_retrieval_cost_usd {:.6} exceeds required zero-cost retrieval target",
+            local_gate.per_query_retrieval_cost_usd
+        ));
+    }
+    if targets.require_no_default_code_upload && local_gate.default_code_upload_required {
+        failures.push("default_code_upload_required must be false".to_string());
+    }
+    if targets.require_broad_read_payload_reduction && broad_read_guardrail.status != "pass" {
+        failures.push(format!(
+            "broad-read guardrail status is `{}`; baseline payload {} tokens, CallSieve packet {} tokens, reduction {:.1}% below target {:.1}%",
+            broad_read_guardrail.status,
+            broad_read_guardrail.baseline_context_payload_tokens,
+            broad_read_guardrail.callsieve_context_payload_tokens,
+            broad_read_guardrail.context_payload_reduction_percent,
+            broad_read_guardrail.minimum_context_payload_reduction_percent
+        ));
+    }
+    if targets.require_context_packet_quality && context_packet_guardrail.status != "pass" {
+        failures.push(format!(
+            "context-packet guardrail status is `{}`; selected_files {}, selected_symbols {}, related_tests {}, blast_radius_hints {}, call_graph_hints {}, selection_reasons {}, selection_signals {}, focus_targets {}",
+            context_packet_guardrail.status,
+            context_packet_guardrail.selected_files,
+            context_packet_guardrail.selected_symbols,
+            context_packet_guardrail.related_tests,
+            context_packet_guardrail.blast_radius_hints,
+            context_packet_guardrail.call_graph_hints,
+            context_packet_guardrail.selection_reasons,
+            context_packet_guardrail.selection_signals,
+            context_packet_guardrail.focus_targets
+        ));
+    }
+    if agent_setup.status != "pass" {
+        failures.push(format!(
+            "agent setup coverage status is `{}`; public proof requires required setup clients to be covered",
+            agent_setup.status
+        ));
+    }
+    if let Some(max_packet_tokens) = targets.maximum_default_packet_tokens
+        && local_gate.default_packet_tokens > max_packet_tokens
+    {
+        failures.push(format!(
+            "default_packet_tokens {} exceeds public proof target {}",
+            local_gate.default_packet_tokens, max_packet_tokens
+        ));
+    }
+
+    let mut public_benchmarks = Vec::new();
+    for input in &manifest.public_reports {
+        let require_current_retrieval_contract = input
+            .require_current_retrieval_contract
+            .unwrap_or(targets.require_current_public_report_retrieval_contract);
+        let evidence = public_benchmark_evidence(input, require_current_retrieval_contract)?;
+        if evidence.retrieval_contract_status == "stale" {
+            failures.push(format!(
+                "public report `{}` retrieval_contract_fingerprint is stale",
+                evidence.id
+            ));
+        } else if require_current_retrieval_contract
+            && evidence.retrieval_contract_status != "current"
+        {
+            failures.push(format!(
+                "public report `{}` retrieval_contract_fingerprint is `{}` but current is required",
+                evidence.id, evidence.retrieval_contract_status
+            ));
+        }
+        if let Some(minimum) = input.minimum_first_correct_file_rate_at_k
+            && evidence.first_correct_file_rate_at_k < minimum
+        {
+            failures.push(format!(
+                "public report `{}` {} first_correct_file_rate_at_k {:.3} is below target {:.3}",
+                evidence.id, evidence.preferred_arm, evidence.first_correct_file_rate_at_k, minimum
+            ));
+        }
+        if input.require_grep_baseline && evidence.grep_first_correct_file_rate_at_k.is_none() {
+            failures.push(format!(
+                "public report `{}` requires a grep baseline but none was recorded",
+                evidence.id
+            ));
+        }
+        if let Some(minimum) = input.minimum_minus_grep {
+            match evidence.minus_grep {
+                Some(actual) if actual >= minimum => {}
+                Some(actual) => failures.push(format!(
+                    "public report `{}` lift over grep {:.3} is below target {:.3}",
+                    evidence.id, actual, minimum
+                )),
+                None => failures.push(format!(
+                    "public report `{}` cannot prove lift over grep without a grep baseline",
+                    evidence.id
+                )),
+            }
+        }
+        if let Some(minimum) = input.minimum_evaluated
+            && evidence.evaluated < minimum
+        {
+            failures.push(format!(
+                "public report `{}` evaluated {} issues, below target {}",
+                evidence.id, evidence.evaluated, minimum
+            ));
+        }
+        public_benchmarks.push(evidence);
+    }
+
+    let public_result_catalog = public_result_catalog(&manifest.public_result_catalog, &targets)?;
+    for report in &public_result_catalog.reports {
+        if report.retrieval_contract_status == "stale" {
+            failures.push(format!(
+                "public result catalog report `{}` retrieval_contract_fingerprint is stale",
+                report.report
+            ));
+        }
+    }
+    let public_checkouts = public_checkout_evidence(
+        &manifest.public_repos_dir,
+        &public_benchmarks,
+        &public_result_catalog,
+    )?;
+    if public_checkouts.status != "pass" {
+        warnings.push(format!(
+            "public benchmark checkouts are not rerun-ready: {} missing repo(s), {} missing manifest(s)",
+            public_checkouts.missing_repos.len(),
+            public_checkouts.missing_manifests.len()
+        ));
+    }
+    if let Some(best) = best_measured_public_rate(
+        &public_benchmarks,
+        &public_result_catalog,
+        "swe_bench_style",
+    ) && best.0 < targets.target_swe_bench_style_first_correct_file_rate_at_k
+    {
+        warnings.push(format!(
+            "SWE-bench-style public proof is {:.1}% at k={}, below the {:.1}% next target",
+            best.0 * 100.0,
+            best.1,
+            targets.target_swe_bench_style_first_correct_file_rate_at_k * 100.0
+        ));
+    }
+    if let Some(best) = best_measured_public_rate(
+        &public_benchmarks,
+        &public_result_catalog,
+        "natural_language",
+    ) && best.0 < targets.target_natural_language_first_correct_file_rate_at_k
+    {
+        warnings.push(format!(
+            "natural-language public proof is {:.1}% at k={}, below the {:.1}% next target",
+            best.0 * 100.0,
+            best.1,
+            targets.target_natural_language_first_correct_file_rate_at_k * 100.0
+        ));
+    }
+
+    if public_benchmarks.len() < targets.minimum_public_reports {
+        failures.push(format!(
+            "public proof includes {} report(s), below target {}",
+            public_benchmarks.len(),
+            targets.minimum_public_reports
+        ));
+    }
+    let total_public_evaluated: usize = public_benchmarks
+        .iter()
+        .map(|evidence| evidence.evaluated)
+        .sum();
+    if let Some(minimum) = targets.minimum_total_public_evaluated
+        && total_public_evaluated < minimum
+    {
+        failures.push(format!(
+            "public proof evaluated {} issues, below target {}",
+            total_public_evaluated, minimum
+        ));
+    }
+
+    let average_public_selected_files =
+        weighted_average_selected_files(&public_benchmarks).unwrap_or(0.0);
+    let repo_packer_baselines = public_repo_packer_baselines(
+        &manifest.repo_packer_baselines,
+        local_gate.default_packet_tokens,
+    )?;
+    for baseline in &repo_packer_baselines {
+        if baseline.required && !baseline.exists {
+            failures.push(format!(
+                "required repo-packer baseline `{}` is missing at {}",
+                baseline.id, baseline.path
+            ));
+        } else if baseline.required && !baseline.locally_measured {
+            failures.push(format!(
+                "required repo-packer baseline `{}` did not include a parseable token or byte count",
+                baseline.id
+            ));
+        } else if baseline.required && baseline.status != "pass" {
+            failures.push(format!(
+                "required repo-packer baseline `{}` status is `{}`",
+                baseline.id, baseline.status
+            ));
+        } else if !baseline.required && baseline.exists && baseline.status != "pass" {
+            warnings.push(format!(
+                "optional repo-packer baseline `{}` status is `{}`",
+                baseline.id, baseline.status
+            ));
+        }
+    }
+    let packer_guardrail_pass = targets
+        .maximum_default_packet_tokens
+        .is_none_or(|target| local_gate.default_packet_tokens <= target)
+        && average_public_selected_files > 0.0;
+    let packer_baseline_pass = repo_packer_baselines
+        .iter()
+        .filter(|baseline| baseline.required)
+        .all(|baseline| baseline.status == "pass");
+    let measured_packer_baselines = repo_packer_baselines
+        .iter()
+        .filter(|baseline| baseline.locally_measured)
+        .count();
+    let repo_packer_guardrail = PublicRepoPackerGuardrail {
+        status: if packer_guardrail_pass && packer_baseline_pass {
+            "pass".to_string()
+        } else {
+            "needs_work".to_string()
+        },
+        claim_scope: if measured_packer_baselines > 0 {
+            "Measured comparison: compact selected files and packet-token ceilings plus checked-in repo-packer or full-repo pack proxy output-size baselines.".to_string()
+        } else {
+            "Measured guardrail: compact selected files and packet-token ceilings. External repo-packer CLIs are optional baselines, not counted as locally measured unless their output is added to the manifest.".to_string()
+        },
+        default_packet_tokens: local_gate.default_packet_tokens,
+        maximum_default_packet_tokens: targets.maximum_default_packet_tokens,
+        average_public_selected_files,
+        baselines: repo_packer_baselines.clone(),
+        evidence: if measured_packer_baselines > 0 {
+            "CallSieve reports top-k files from public tasks, keeps the local competitive packet under budget, and compares that packet against checked-in full-repo pack output metrics.".to_string()
+        } else {
+            "CallSieve reports top-k files from public tasks and keeps the local competitive packet under the manifest budget.".to_string()
+        },
+        next_baseline: if measured_packer_baselines > 0 {
+            "Refresh checked-in pack baseline artifacts before publishing a release claim, and add external Repomix, Gitingest, or Code2Prompt artifacts when those tools are installed and approved.".to_string()
+        } else {
+            "Add optional local Repomix, Gitingest, or Code2Prompt output-size baselines when those tools are installed.".to_string()
+        },
+    };
+
+    let agent_native_search_baselines =
+        public_agent_native_search_baselines(&manifest.agent_native_search_baselines)?;
+    for baseline in &agent_native_search_baselines {
+        if baseline.required && !baseline.exists {
+            failures.push(format!(
+                "required agent-native search baseline `{}` is missing at {}",
+                baseline.id, baseline.path
+            ));
+        } else if baseline.required && !baseline.locally_measured {
+            failures.push(format!(
+                "required agent-native search baseline `{}` was not marked locally measured",
+                baseline.id
+            ));
+        } else if baseline.required && baseline.transcript_provenance_status != "pass" {
+            failures.push(format!(
+                "required agent-native search baseline `{}` lacks hashed transcript/export provenance",
+                baseline.id
+            ));
+        } else if baseline.required && baseline.status != "pass" {
+            failures.push(format!(
+                "required agent-native search baseline `{}` status is `{}`",
+                baseline.id, baseline.status
+            ));
+        } else if !baseline.required && baseline.exists && baseline.status != "pass" {
+            warnings.push(format!(
+                "optional agent-native search baseline `{}` status is `{}`",
+                baseline.id, baseline.status
+            ));
+        }
+    }
+    let measured_agent_native_baselines = agent_native_search_baselines
+        .iter()
+        .filter(|baseline| baseline.locally_measured)
+        .count();
+    let agent_native_search_summary =
+        public_agent_native_search_summary(&agent_native_search_baselines);
+    let agent_native_target_pass =
+        agent_native_search_summary_satisfies_targets(&agent_native_search_summary, &targets);
+    if let Some(minimum) = targets.minimum_agent_native_measured_baselines
+        && agent_native_search_summary.measured_baseline_count < minimum
+    {
+        failures.push(format!(
+            "agent-native search baselines measured {} tools/runs, below minimum_agent_native_measured_baselines {}",
+            agent_native_search_summary.measured_baseline_count, minimum
+        ));
+    }
+    if let Some(minimum) = targets.minimum_agent_native_distinct_tools
+        && agent_native_search_summary.distinct_agent_tool_count < minimum
+    {
+        failures.push(format!(
+            "agent-native search baselines cover {} distinct agent tools, below minimum_agent_native_distinct_tools {}",
+            agent_native_search_summary.distinct_agent_tool_count, minimum
+        ));
+    }
+    if let Some(minimum) = targets.minimum_agent_native_repositories
+        && agent_native_search_summary.distinct_repository_count < minimum
+    {
+        failures.push(format!(
+            "agent-native search baselines cover {} repositories, below minimum_agent_native_repositories {}",
+            agent_native_search_summary.distinct_repository_count, minimum
+        ));
+    }
+    if let Some(minimum) = targets.minimum_agent_native_task_languages
+        && agent_native_search_summary.task_language_count < minimum
+    {
+        failures.push(format!(
+            "agent-native search baselines cover {} task languages, below minimum_agent_native_task_languages {}",
+            agent_native_search_summary.task_language_count, minimum
+        ));
+    }
+    if measured_agent_native_baselines > 0
+        && agent_native_search_summary.distinct_agent_tool_count < 2
+    {
+        warnings.push(
+            "agent-native proof is currently single-agent only; add another transcript-backed native-agent baseline before claiming multi-agent coverage"
+                .to_string(),
+        );
+    }
+    let agent_native_required_pass = agent_native_search_baselines
+        .iter()
+        .filter(|baseline| baseline.required)
+        .all(|baseline| baseline.status == "pass");
+    let agent_native_optional_pass = agent_native_search_baselines
+        .iter()
+        .filter(|baseline| !baseline.required && baseline.exists)
+        .all(|baseline| baseline.status == "pass");
+    let mut agent_native_search_guardrail = PublicAgentNativeSearchGuardrail {
+        status: if agent_native_search_baselines.is_empty() {
+            "not_measured".to_string()
+        } else if agent_native_required_pass && agent_native_optional_pass && agent_native_target_pass
+        {
+            "pass".to_string()
+        } else {
+            "needs_work".to_string()
+        },
+        claim_scope: if measured_agent_native_baselines > 0 {
+            "Measured comparison: CallSieve public proof includes checked agent-native search baseline artifacts with hashed transcript/export provenance, first-correct metrics, and context-token metrics.".to_string()
+        } else {
+            "Protocol-ready guardrail: no agent-native search baseline is checked in yet, so public proof does not claim a measured win over Cursor, Copilot, Claude Code, Devin, or other native codebase search.".to_string()
+        },
+        summary: agent_native_search_summary.clone(),
+        baselines: agent_native_search_baselines.clone(),
+        evidence: if measured_agent_native_baselines > 0 {
+            "Agent-native baseline artifacts are parsed from local JSON and must include hashed task logs plus source transcripts or native-search exports, the checked agent-native measurement protocol, and a passing measured preflight artifact with matching source hashes before metric thresholds can pass.".to_string()
+        } else {
+            "Add measured artifacts from approved agent-native search runs before claiming head-to-head wins over agent-native codebase search.".to_string()
+        },
+        next_baseline: "Run `callsieve agent-native-protocol --out benchmarks/public/results/agent-native-protocol.json`, generate a template with `callsieve agent-native-template`, fill agent_native_files and transcript-backed agent_native_context_tokens from an approved native-search run, save the preflight with `callsieve agent-native-check --mode measured --out benchmarks/public/results/<tool>-check.json`, convert it with `callsieve agent-native-baseline`, then add the check under terminal_artifacts and the baseline under agent_native_search_baselines.".to_string(),
+    };
+
+    let mcp_surface = public_mcp_surface_evidence();
+    if mcp_surface.status != "pass" {
+        failures.push(format!(
+            "MCP surface is missing required first-mile tools: {}",
+            mcp_surface.missing_required_tools.join(", ")
+        ));
+    }
+    let mcp_contract = public_mcp_contract_evidence();
+    if mcp_contract.status != "pass" {
+        failures.push(format!(
+            "MCP context contract status is `{}`; public proof requires stable structuredContent fields",
+            mcp_contract.status
+        ));
+    }
+
+    let miss_triage = manifest
+        .miss_triage
+        .as_deref()
+        .map(public_miss_triage)
+        .transpose()?;
+    let terminal_artifacts = public_artifact_evidence(&manifest.terminal_artifacts);
+    for artifact in &terminal_artifacts {
+        if artifact.required && !artifact.exists {
+            failures.push(format!(
+                "required public proof artifact `{}` is missing at {}",
+                artifact.id, artifact.path
+            ));
+        } else if artifact.required && artifact.status != "pass" {
+            failures.push(format!(
+                "required public proof artifact `{}` status is `{}`: {}",
+                artifact.id, artifact.status, artifact.validation
+            ));
+        } else if !artifact.required && artifact.exists && artifact.status != "pass" {
+            warnings.push(format!(
+                "optional public proof artifact `{}` status is `{}`: {}",
+                artifact.id, artifact.status, artifact.validation
+            ));
+        }
+    }
+    let agent_native_protocol_artifact_pass = terminal_artifacts
+        .iter()
+        .any(|artifact| artifact.id == "agent-native-protocol" && artifact.status == "pass");
+    let agent_native_check_artifact_pass = terminal_artifacts
+        .iter()
+        .any(|artifact| artifact.id == "agent-native-check" && artifact.status == "pass");
+    let agent_native_check_source_artifact_hash_sets = terminal_artifacts
+        .iter()
+        .filter(|artifact| artifact.id == "agent-native-check" && artifact.status == "pass")
+        .map(|artifact| {
+            artifact
+                .source_artifact_hashes
+                .iter()
+                .cloned()
+                .collect::<BTreeSet<_>>()
+        })
+        .collect::<Vec<_>>();
+    if measured_agent_native_baselines > 0 && !agent_native_protocol_artifact_pass {
+        failures.push(
+            "measured agent-native search baselines require a passing `agent-native-protocol` public proof artifact".to_string(),
+        );
+        agent_native_search_guardrail.status = "needs_work".to_string();
+    }
+    if measured_agent_native_baselines > 0 && !agent_native_check_artifact_pass {
+        failures.push(
+            "measured agent-native search baselines require a passing `agent-native-check` public proof artifact".to_string(),
+        );
+        agent_native_search_guardrail.status = "needs_work".to_string();
+    }
+    if measured_agent_native_baselines > 0 && agent_native_check_artifact_pass {
+        for baseline in agent_native_search_baselines
+            .iter()
+            .filter(|baseline| baseline.locally_measured)
+        {
+            let baseline_hashes = baseline
+                .source_artifact_hashes
+                .iter()
+                .cloned()
+                .collect::<BTreeSet<_>>();
+            let linked_to_single_check = agent_native_check_source_artifact_hash_sets
+                .iter()
+                .any(|check_hashes| baseline_hashes.is_subset(check_hashes));
+            if !linked_to_single_check {
+                failures.push(format!(
+                    "measured agent-native search baseline `{}` is not linked to a passing `agent-native-check` artifact containing all source artifact hashes: {}",
+                    baseline.id,
+                    baseline.source_artifact_hashes.join(", ")
+                ));
+                agent_native_search_guardrail.status = "needs_work".to_string();
+            }
+        }
+    }
+    let evidence_commands = if manifest.evidence_commands.is_empty() {
+        default_public_proof_commands(manifest_path)
+    } else {
+        manifest.evidence_commands.clone()
+    };
+    let evidence_pack = public_evidence_pack(
+        &local_gate,
+        &targets,
+        &public_benchmarks,
+        &public_result_catalog,
+        &evidence_commands,
+        terminal_artifacts,
+        &repo_packer_baselines,
+        &agent_native_search_baselines,
+        &agent_native_search_summary,
+        &broad_read_guardrail,
+        &context_packet_guardrail,
+        &mcp_surface,
+        &mcp_contract,
+        &agent_setup,
+        &public_checkouts,
+    );
+
+    let mut next_actions = Vec::new();
+    if best_measured_public_rate(
+        &public_benchmarks,
+        &public_result_catalog,
+        "swe_bench_style",
+    )
+    .is_none_or(|best| best.0 < targets.target_swe_bench_style_first_correct_file_rate_at_k)
+    {
+        next_actions.push(
+            "raise SWE-bench-style public retrieval beyond the 60% first-correct-file@5 plateau"
+                .to_string(),
+        );
+    }
+    if best_measured_public_rate(
+        &public_benchmarks,
+        &public_result_catalog,
+        "natural_language",
+    )
+    .is_none_or(|best| best.0 < targets.target_natural_language_first_correct_file_rate_at_k)
+    {
+        next_actions.push(
+            "raise natural-language public retrieval toward the 45% first-correct-file@5 target"
+                .to_string(),
+        );
+    }
+    if !failures.is_empty() {
+        next_actions.push(
+            "fix failing public proof gates before using this artifact externally".to_string(),
+        );
+    }
+    if public_checkouts.status != "pass" {
+        next_actions.push(
+            "populate public benchmark checkouts, then rerun bench-run from the reported commands"
+                .to_string(),
+        );
+    }
+    if broad_read_guardrail.status != "pass" {
+        next_actions.push(
+            "refresh the competitive fixture or context packet until public proof beats broad file reads"
+                .to_string(),
+        );
+    }
+    if context_packet_guardrail.status != "pass" {
+        next_actions.push(
+            "restore symbols, tests, blast-radius/call-graph hints, selection signals, and local expansion targets in the default context packet"
+                .to_string(),
+        );
+    }
+    next_actions.push(
+        "rerun public benchmark reports from pinned local checkouts before making a release claim"
+            .to_string(),
+    );
+    if measured_packer_baselines == 0 {
+        next_actions.push(
+            "add external Repomix, Gitingest, or Code2Prompt output-size baselines when those tools are installed and approved"
+                .to_string(),
+        );
+    }
+    if measured_agent_native_baselines == 0 {
+        next_actions.push(
+            "add measured agent-native search baselines from approved Cursor, Copilot, Claude Code, Devin, or similar runs"
+                .to_string(),
+        );
+    } else if agent_native_search_summary.distinct_agent_tool_count < 2 {
+        next_actions.push(
+            "add a second transcript-backed native-agent baseline so public proof moves from Codex-only to real multi-agent coverage"
+                .to_string(),
+        );
+    }
+
+    Ok(PublicProofReportOutput {
+        command: "public-proof-report",
+        status: if failures.is_empty() {
+            "pass".to_string()
+        } else {
+            "needs_work".to_string()
+        },
+        generated_at: now_unix_seconds(),
+        goal: manifest.goal,
+        local_gate,
+        targets: PublicProofTargetsOutput {
+            require_competitive_report_pass: targets.require_competitive_report_pass,
+            require_zero_retrieval_model_tokens: targets.require_zero_retrieval_model_tokens,
+            require_zero_per_query_retrieval_cost: targets.require_zero_per_query_retrieval_cost,
+            require_no_default_code_upload: targets.require_no_default_code_upload,
+            maximum_default_packet_tokens: targets.maximum_default_packet_tokens,
+            require_broad_read_payload_reduction: targets.require_broad_read_payload_reduction,
+            require_context_packet_quality: targets.require_context_packet_quality,
+            require_current_public_report_retrieval_contract: targets
+                .require_current_public_report_retrieval_contract,
+            minimum_broad_read_context_payload_reduction_percent: targets
+                .minimum_broad_read_context_payload_reduction_percent,
+            minimum_public_reports: targets.minimum_public_reports,
+            minimum_total_public_evaluated: targets.minimum_total_public_evaluated,
+            minimum_agent_native_measured_baselines: targets
+                .minimum_agent_native_measured_baselines,
+            minimum_agent_native_distinct_tools: targets.minimum_agent_native_distinct_tools,
+            minimum_agent_native_repositories: targets.minimum_agent_native_repositories,
+            minimum_agent_native_task_languages: targets.minimum_agent_native_task_languages,
+            target_swe_bench_style_first_correct_file_rate_at_k: targets
+                .target_swe_bench_style_first_correct_file_rate_at_k,
+            target_natural_language_first_correct_file_rate_at_k: targets
+                .target_natural_language_first_correct_file_rate_at_k,
+        },
+        public_benchmarks,
+        public_result_catalog,
+        public_checkouts,
+        broad_read_guardrail,
+        context_packet_guardrail,
+        evidence_pack,
+        miss_triage,
+        repo_packer_guardrail,
+        agent_native_search_guardrail,
+        mcp_surface,
+        mcp_contract,
+        agent_setup,
+        evidence_commands,
+        failures,
+        warnings,
+        next_actions,
+    })
+}
+
+fn public_proof_local_gate(
+    manifest_path: &Path,
+    competitive: &CompetitiveReportOutput,
+) -> PublicProofLocalGate {
+    PublicProofLocalGate {
+        manifest: manifest_path.display().to_string(),
+        status: competitive.status.clone(),
+        expected_file_recall: competitive.callsieve.expected_file_recall,
+        first_correct_file_rate_at_k: competitive.callsieve.first_correct_file_rate_at_k,
+        natural_language_first_correct_file_rate_at_k: competitive
+            .natural_language
+            .as_ref()
+            .map(|evidence| evidence.first_correct_file_rate_at_k),
+        retrieval_model_tokens: competitive.callsieve.retrieval_model_tokens,
+        per_query_retrieval_cost_usd: competitive.callsieve.per_query_retrieval_cost_usd,
+        default_code_upload_required: competitive.callsieve.default_code_upload_required,
+        default_packet_tokens: competitive.callsieve.default_packet_tokens,
+        first_query_p95_ms: competitive.callsieve.first_query_p95_ms,
+        trace_or_receipt_proof_available: competitive.callsieve.trace_or_receipt_proof_available,
+        agent_coverage_count: competitive.callsieve.agent_coverage_count,
+    }
+}
+
+fn public_broad_read_guardrail(
+    callsieve: &CompetitiveCallsieveEvidence,
+    targets: &PublicProofTargets,
+) -> PublicBroadReadGuardrail {
+    let context_payload_tokens_saved = callsieve.baseline_context_payload_tokens as isize
+        - callsieve.callsieve_context_payload_tokens as isize;
+    let context_payload_reduction_percent =
+        if callsieve.context_payload_reduction_percent.is_finite() {
+            callsieve.context_payload_reduction_percent
+        } else if callsieve.baseline_context_payload_tokens > 0 {
+            (context_payload_tokens_saved as f64 / callsieve.baseline_context_payload_tokens as f64)
+                * 100.0
+        } else {
+            0.0
+        };
+    let minimum_context_payload_reduction_percent =
+        targets.minimum_broad_read_context_payload_reduction_percent;
+    let pass = callsieve.baseline_context_payload_tokens > 0
+        && callsieve.callsieve_context_payload_tokens > 0
+        && context_payload_tokens_saved > 0
+        && context_payload_reduction_percent >= minimum_context_payload_reduction_percent;
+
+    PublicBroadReadGuardrail {
+        status: metric_status(pass),
+        claim_scope:
+            "Measured comparison: naive broad file-read payload versus the CallSieve context packet from the local competitive benchmark."
+                .to_string(),
+        baseline_context_payload_tokens: callsieve.baseline_context_payload_tokens,
+        callsieve_context_payload_tokens: callsieve.callsieve_context_payload_tokens,
+        context_payload_tokens_saved,
+        context_payload_reduction_percent,
+        minimum_context_payload_reduction_percent,
+        avoided_file_reads: callsieve.avoided_file_reads,
+        avoided_grep_commands: callsieve.avoided_grep_commands,
+        evidence:
+            "Uses competitive-report context_payload_reduction estimates from the same task set as the local public-proof gate."
+                .to_string(),
+        next_baseline:
+            "Keep broad-read payload comparisons in competitive-report, then raise the minimum reduction target as public task coverage grows."
+                .to_string(),
+    }
+}
+
+fn public_context_packet_guardrail(
+    callsieve: &CompetitiveCallsieveEvidence,
+) -> PublicContextPacketGuardrail {
+    let quality = &callsieve.packet_quality;
+    let has_selected_context = quality.tasks > 0 && quality.selected_files > 0;
+    let has_symbol_context = quality.selected_symbols > 0 && quality.files_with_symbols > 0;
+    let has_test_context = quality.related_tests > 0 && quality.files_with_related_tests > 0;
+    let has_impact_context = quality.blast_radius_hints > 0 && quality.files_with_blast_radius > 0;
+    let has_call_graph_context =
+        quality.call_graph_hints > 0 && quality.files_with_call_graph_hints > 0;
+    let has_risk_context = quality.files_with_non_unknown_risk > 0;
+    let has_selection_evidence = quality.selection_reasons > 0
+        && quality.files_with_selection_reasons > 0
+        && quality.selection_signals > 0
+        && quality.files_with_selection_confidence > 0;
+    let has_snippets_or_local_expansion = quality.snippets > 0 || quality.focus_targets > 0;
+    let has_followup_targets = quality.focus_targets > 0
+        && quality.relationship_followup_targets > 0
+        && quality.test_followup_targets > 0;
+    let pass = has_selected_context
+        && has_symbol_context
+        && has_test_context
+        && has_impact_context
+        && has_call_graph_context
+        && has_risk_context
+        && has_selection_evidence
+        && has_snippets_or_local_expansion
+        && has_followup_targets;
+
+    PublicContextPacketGuardrail {
+        status: metric_status(pass),
+        claim_scope:
+            "Measured local packet-quality guardrail: the competitive benchmark context packets must contain selected files, symbols, related tests, blast-radius/risk hints, call-graph hints, ranking evidence, and local expansion targets before public proof can claim better-than-search context."
+                .to_string(),
+        tasks: quality.tasks,
+        selected_files: quality.selected_files,
+        files_with_symbols: quality.files_with_symbols,
+        selected_symbols: quality.selected_symbols,
+        files_with_snippets: quality.files_with_snippets,
+        snippets: quality.snippets,
+        files_with_related_tests: quality.files_with_related_tests,
+        related_tests: quality.related_tests,
+        files_with_blast_radius: quality.files_with_blast_radius,
+        blast_radius_hints: quality.blast_radius_hints,
+        files_with_call_graph_hints: quality.files_with_call_graph_hints,
+        call_graph_hints: quality.call_graph_hints,
+        files_with_non_unknown_risk: quality.files_with_non_unknown_risk,
+        files_with_selection_reasons: quality.files_with_selection_reasons,
+        selection_reasons: quality.selection_reasons,
+        files_with_selection_confidence: quality.files_with_selection_confidence,
+        selection_signals: quality.selection_signals,
+        next_file_hints: quality.next_file_hints,
+        focus_targets: quality.focus_targets,
+        relationship_followup_targets: quality.relationship_followup_targets,
+        test_followup_targets: quality.test_followup_targets,
+        evidence:
+            "Uses benchmark-report packet_quality counters from the same local competitive task set as the broad-read and zero-token gates."
+                .to_string(),
+        next_baseline:
+            "Keep this guardrail passing as default packets get slimmer, and add transcript-backed agent-native comparisons before claiming native-search wins."
+                .to_string(),
+    }
+}
+
+fn public_benchmark_evidence(
+    input: &PublicBenchmarkReportInput,
+    require_current_retrieval_contract: bool,
+) -> Result<PublicBenchmarkEvidence> {
+    let report_json = fs::read_to_string(&input.path).with_context(|| {
+        format!(
+            "failed to read public benchmark report: {}",
+            input.path.display()
+        )
+    })?;
+    let value: serde_json::Value = serde_json::from_str(&report_json).with_context(|| {
+        format!(
+            "failed to parse public benchmark report: {}",
+            input.path.display()
+        )
+    })?;
+    let preferred_arm = input.preferred_arm.to_ascii_lowercase();
+    if !matches!(preferred_arm.as_str(), "lexical" | "hybrid") {
+        bail!(
+            "public report `{}` has unsupported preferred_arm `{}` (expected lexical or hybrid)",
+            input.id,
+            input.preferred_arm
+        );
+    }
+    let category = if input.category.trim().is_empty() {
+        infer_public_report_category(&input.id, &value)
+    } else {
+        input.category.clone()
+    };
+    let (retrieval_contract_fingerprint, retrieval_contract_status) =
+        public_report_retrieval_contract_status(&value);
+    let first_correct_file_rate_at_k = public_report_arm_rate(&value, &preferred_arm);
+    let grep_first_correct_file_rate_at_k =
+        json_pointer_f64(&value, "/aggregate/grep_first_correct_file_rate_at_k");
+    let minus_grep =
+        grep_first_correct_file_rate_at_k.map(|grep| first_correct_file_rate_at_k - grep);
+    let evaluated = json_pointer_usize(&value, "/aggregate/evaluated");
+    let skipped = json_pointer_usize(&value, "/aggregate/skipped");
+    let total = json_pointer_usize(&value, "/aggregate/total");
+    let average_selected_files = average_selected_files_for_arm(&value, &preferred_arm);
+    let average_grep_matched_files = if grep_first_correct_file_rate_at_k.is_some() {
+        Some(average_selected_files_for_arm(&value, "grep"))
+    } else {
+        None
+    };
+    let misses = public_report_misses(&value, &preferred_arm, 8);
+    let status = if input
+        .minimum_first_correct_file_rate_at_k
+        .is_none_or(|minimum| first_correct_file_rate_at_k >= minimum)
+        && input
+            .minimum_minus_grep
+            .is_none_or(|minimum| minus_grep.is_some_and(|actual| actual >= minimum))
+        && input
+            .minimum_evaluated
+            .is_none_or(|minimum| evaluated >= minimum)
+        && (!input.require_grep_baseline || grep_first_correct_file_rate_at_k.is_some())
+        && retrieval_contract_status != "stale"
+        && (!require_current_retrieval_contract || retrieval_contract_status == "current")
+    {
+        "pass"
+    } else {
+        "needs_work"
+    };
+
+    Ok(PublicBenchmarkEvidence {
+        id: input.id.clone(),
+        category,
+        report: input.path.display().to_string(),
+        manifest: public_report_manifest_path(&value).unwrap_or_else(|| "unknown".into()),
+        retrieval_contract_fingerprint,
+        retrieval_contract_status,
+        requires_current_retrieval_contract: require_current_retrieval_contract,
+        k: json_pointer_usize(&value, "/k"),
+        evaluated,
+        skipped,
+        total,
+        preferred_arm,
+        first_correct_file_rate_at_k,
+        grep_first_correct_file_rate_at_k,
+        minus_grep,
+        average_selected_files,
+        average_grep_matched_files,
+        misses,
+        status: status.to_string(),
+    })
+}
+
+fn public_result_catalog(
+    paths: &[PathBuf],
+    targets: &PublicProofTargets,
+) -> Result<PublicResultCatalog> {
+    let mut reports = Vec::new();
+    for path in paths {
+        reports.push(public_result_catalog_entry(path)?);
+    }
+    let best_swe_bench_style = public_result_catalog_best(
+        &reports,
+        "swe_bench_style",
+        targets.target_swe_bench_style_first_correct_file_rate_at_k,
+    );
+    let best_natural_language = public_result_catalog_best(
+        &reports,
+        "natural_language",
+        targets.target_natural_language_first_correct_file_rate_at_k,
+    );
+    Ok(PublicResultCatalog {
+        reports,
+        best_swe_bench_style,
+        best_natural_language,
+    })
+}
+
+fn public_result_catalog_entry(path: &Path) -> Result<PublicResultCatalogEntry> {
+    let report_json = fs::read_to_string(path).with_context(|| {
+        format!(
+            "failed to read public result catalog entry: {}",
+            path.display()
+        )
+    })?;
+    let value: serde_json::Value = serde_json::from_str(&report_json).with_context(|| {
+        format!(
+            "failed to parse public result catalog entry: {}",
+            path.display()
+        )
+    })?;
+    let id = path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("public-result");
+    let lexical_first_correct_file_rate_at_k = public_report_arm_rate(&value, "lexical");
+    let hybrid_first_correct_file_rate_at_k = public_report_arm_rate(&value, "hybrid");
+    let (best_arm, best_first_correct_file_rate_at_k) =
+        if hybrid_first_correct_file_rate_at_k > lexical_first_correct_file_rate_at_k {
+            ("hybrid".to_string(), hybrid_first_correct_file_rate_at_k)
+        } else {
+            ("lexical".to_string(), lexical_first_correct_file_rate_at_k)
+        };
+    let (retrieval_contract_fingerprint, retrieval_contract_status) =
+        public_report_retrieval_contract_status(&value);
+    Ok(PublicResultCatalogEntry {
+        report: path.display().to_string(),
+        manifest: public_report_manifest_path(&value).unwrap_or_else(|| "unknown".into()),
+        category: infer_public_report_category(id, &value),
+        retrieval_contract_fingerprint,
+        retrieval_contract_status,
+        k: json_pointer_usize(&value, "/k"),
+        evaluated: json_pointer_usize(&value, "/aggregate/evaluated"),
+        lexical_first_correct_file_rate_at_k,
+        hybrid_first_correct_file_rate_at_k,
+        grep_first_correct_file_rate_at_k: json_pointer_f64(
+            &value,
+            "/aggregate/grep_first_correct_file_rate_at_k",
+        ),
+        best_arm,
+        best_first_correct_file_rate_at_k,
+    })
+}
+
+fn public_result_catalog_best(
+    reports: &[PublicResultCatalogEntry],
+    category: &str,
+    target: f64,
+) -> Option<PublicResultCatalogBest> {
+    reports
+        .iter()
+        .filter(|entry| entry.category == category)
+        .max_by(|left, right| {
+            left.best_first_correct_file_rate_at_k
+                .partial_cmp(&right.best_first_correct_file_rate_at_k)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(left.evaluated.cmp(&right.evaluated))
+        })
+        .map(|entry| {
+            let gap_to_target = (target - entry.best_first_correct_file_rate_at_k).max(0.0);
+            PublicResultCatalogBest {
+                report: entry.report.clone(),
+                category: entry.category.clone(),
+                best_arm: entry.best_arm.clone(),
+                first_correct_file_rate_at_k: entry.best_first_correct_file_rate_at_k,
+                target_first_correct_file_rate_at_k: target,
+                gap_to_target,
+                status: metric_status(gap_to_target <= f64::EPSILON),
+            }
+        })
+}
+
+fn public_checkout_evidence(
+    repos_dir: &Path,
+    public_benchmarks: &[PublicBenchmarkEvidence],
+    public_result_catalog: &PublicResultCatalog,
+) -> Result<PublicCheckoutEvidence> {
+    let mut manifest_paths = BTreeSet::new();
+    for evidence in public_benchmarks {
+        manifest_paths.insert(evidence.manifest.clone());
+    }
+    for entry in &public_result_catalog.reports {
+        manifest_paths.insert(entry.manifest.clone());
+    }
+
+    let mut repos = BTreeSet::new();
+    let mut missing_manifests = Vec::new();
+    for manifest_path in &manifest_paths {
+        let path = Path::new(manifest_path);
+        if !path.is_file() {
+            missing_manifests.push(manifest_path.clone());
+            continue;
+        }
+        let json = fs::read_to_string(path)
+            .with_context(|| format!("failed to read public benchmark manifest {manifest_path}"))?;
+        let manifest = bench_public::Manifest::from_str(&json).with_context(|| {
+            format!("failed to parse public benchmark manifest {manifest_path}")
+        })?;
+        for issue in manifest.issues {
+            repos.insert(issue.repo);
+        }
+    }
+    missing_manifests.sort();
+
+    let mut missing_repos = Vec::new();
+    let mut present_repos = 0usize;
+    for repo in &repos {
+        if repos_dir.join(repo).is_dir() {
+            present_repos += 1;
+        } else {
+            missing_repos.push(repo.clone());
+        }
+    }
+
+    let status = if missing_repos.is_empty() && missing_manifests.is_empty() {
+        "pass"
+    } else {
+        "needs_work"
+    }
+    .to_string();
+
+    Ok(PublicCheckoutEvidence {
+        status,
+        repos_dir: repos_dir.display().to_string(),
+        manifests: manifest_paths.into_iter().collect(),
+        expected_repos: repos.len(),
+        present_repos,
+        missing_repos,
+        missing_manifests,
+        commands: public_checkout_commands(repos_dir),
+    })
+}
+
+fn public_checkout_commands(repos_dir: &Path) -> Vec<String> {
+    let repos_dir = repos_dir.display();
+    vec![
+        format!(
+            "cargo run --features embed -- bench-run benchmarks/public/manifest-50.json --workdir {repos_dir} --compare --out benchmarks/public/results/compare-50-rerun.json --resume"
+        ),
+        format!(
+            "cargo run --features embed -- bench-run benchmarks/public/manifest-50.json --workdir {repos_dir} --out benchmarks/public/results/mode-a-50-domain-rerun.json --resume"
+        ),
+        format!(
+            "cargo run --features embed -- bench-run benchmarks/public/manifest.json --workdir {repos_dir} --out benchmarks/public/results/mode-a-requests-seed-rerun.json --resume"
+        ),
+        format!(
+            "cargo run --features embed -- bench-run benchmarks/public/manifest-nl.json --workdir {repos_dir} --compare --out benchmarks/public/results/compare-nl-rerun.json --resume"
+        ),
+        format!(
+            "cargo run --features embed -- bench-run benchmarks/public/manifest-nl.json --workdir {repos_dir} --out benchmarks/public/results/mode-a-nl-domain-rerun.json --resume"
+        ),
+        format!(
+            "cargo run --features embed -- bench-run benchmarks/public/manifest-rust.json --workdir {repos_dir} --out benchmarks/public/results/mode-a-rust-callsieve-rerun.json --resume"
+        ),
+        format!(
+            "cargo run --features embed -- bench-run benchmarks/public/manifest-typescript.json --workdir {repos_dir} --out benchmarks/public/results/mode-a-typescript-callsieve-rerun.json --resume"
+        ),
+    ]
+}
+
+fn best_measured_public_rate(
+    public_benchmarks: &[PublicBenchmarkEvidence],
+    public_result_catalog: &PublicResultCatalog,
+    category: &str,
+) -> Option<(f64, usize)> {
+    let benchmark_best = public_benchmarks
+        .iter()
+        .filter(|evidence| evidence.category == category)
+        .map(|evidence| (evidence.first_correct_file_rate_at_k, evidence.k))
+        .max_by(|left, right| {
+            left.0
+                .partial_cmp(&right.0)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+    let catalog_best = public_result_catalog
+        .reports
+        .iter()
+        .filter(|entry| entry.category == category)
+        .map(|entry| (entry.best_first_correct_file_rate_at_k, entry.k))
+        .max_by(|left, right| {
+            left.0
+                .partial_cmp(&right.0)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+    match (benchmark_best, catalog_best) {
+        (Some(left), Some(right)) => {
+            if right.0 > left.0 {
+                Some(right)
+            } else {
+                Some(left)
+            }
+        }
+        (Some(best), None) | (None, Some(best)) => Some(best),
+        (None, None) => None,
+    }
+}
+
+fn public_repo_packer_baselines(
+    inputs: &[PublicRepoPackerBaselineInput],
+    callsieve_packet_tokens: usize,
+) -> Result<Vec<PublicRepoPackerBaselineEvidence>> {
+    inputs
+        .iter()
+        .map(|input| public_repo_packer_baseline(input, callsieve_packet_tokens))
+        .collect()
+}
+
+fn repo_pack_baseline(path: &Path, id: String, tool: String) -> Result<RepoPackBaselineOutput> {
+    let root = path
+        .canonicalize()
+        .with_context(|| format!("failed to resolve repo root {}", path.display()))?;
+    let files = indexer::walker::source_files(&root)
+        .with_context(|| format!("failed to walk repo {}", root.display()))?;
+    let mut source_bytes = 0usize;
+    let mut framing_bytes = 0usize;
+    let mut largest_files = Vec::new();
+
+    for relative in files {
+        let absolute = root.join(&relative);
+        let bytes = fs::read(&absolute)
+            .with_context(|| format!("failed to read source file {}", absolute.display()))?;
+        let relative_display = repo_relative_display(&root, &absolute);
+        let header = format!("\n--- {relative_display} ---\n");
+        source_bytes = source_bytes.saturating_add(bytes.len());
+        framing_bytes = framing_bytes.saturating_add(header.len());
+        largest_files.push(RepoPackBaselineFile {
+            path: relative_display,
+            bytes: bytes.len(),
+            tokens: bytes.len().div_ceil(4),
+        });
+    }
+
+    largest_files.sort_by(|left, right| {
+        right
+            .bytes
+            .cmp(&left.bytes)
+            .then(left.path.cmp(&right.path))
+    });
+    let file_count = largest_files.len();
+    largest_files.truncate(12);
+    let total_bytes = source_bytes.saturating_add(framing_bytes);
+
+    Ok(RepoPackBaselineOutput {
+        command: "repo-pack-baseline",
+        schema_version: 1,
+        id,
+        tool,
+        generated_at: now_unix_seconds(),
+        root: root.display().to_string(),
+        inclusion_scope: "gitignore-respecting source/config/docs files from the local checkout, measured as a full-repo prompt-pack proxy",
+        token_estimate: "ceil(total_bytes / 4)",
+        locally_measured: true,
+        measurement_notes: vec![
+            "No external repo-packer CLI was executed.",
+            "This proxy measures the local prompt payload class that repo packers produce: file headers plus source/config/docs bytes.",
+            "Use external Repomix, Gitingest, or Code2Prompt JSON artifacts when those tools are installed and approved.",
+        ],
+        metrics: RepoPackBaselineMetrics {
+            file_count,
+            source_bytes,
+            framing_bytes,
+            total_bytes,
+            total_tokens: total_bytes.div_ceil(4),
+        },
+        largest_files,
+    })
+}
+
+fn agent_native_baseline(
+    tasks_path: &Path,
+    id: String,
+    tool: String,
+    k: usize,
+    measurement_command: String,
+    source_artifacts: Vec<PathBuf>,
+    measurement_notes: Vec<String>,
+) -> Result<AgentNativeBaselineOutput> {
+    if k == 0 {
+        bail!("agent-native baseline requires --k to be greater than zero");
+    }
+    if source_artifacts.is_empty() {
+        bail!(
+            "agent-native baseline requires at least one --source-artifact transcript or native-search export"
+        );
+    }
+
+    let tasks_json = fs::read_to_string(tasks_path).with_context(|| {
+        format!(
+            "failed to read agent-native baseline tasks: {}",
+            tasks_path.display()
+        )
+    })?;
+    let input: AgentNativeBaselineInput = serde_json::from_str(&tasks_json).with_context(|| {
+        format!(
+            "failed to parse agent-native baseline tasks: {}",
+            tasks_path.display()
+        )
+    })?;
+    let tasks = input.into_tasks();
+    if tasks.is_empty() {
+        bail!("agent-native baseline requires at least one task record");
+    }
+
+    let mut task_evidence = Vec::new();
+    let mut agent_native_hits = 0usize;
+    let mut callsieve_hits = 0usize;
+    let mut agent_native_total_context_tokens = 0usize;
+    let mut callsieve_total_packet_tokens = 0usize;
+
+    for task in tasks {
+        if task.expected_files.is_empty() {
+            bail!(
+                "agent-native baseline task `{}` must include at least one expected file",
+                task.id
+            );
+        }
+        if task.agent_native_context_tokens == 0 {
+            bail!(
+                "agent-native baseline task `{}` must include agent_native_context_tokens > 0",
+                task.id
+            );
+        }
+        if task.callsieve_packet_tokens == 0 {
+            bail!(
+                "agent-native baseline task `{}` must include callsieve_packet_tokens > 0",
+                task.id
+            );
+        }
+        if task.recording_status.as_deref() != Some("measured") {
+            bail!(
+                "agent-native baseline task `{}` must set recording_status to measured",
+                task.id
+            );
+        }
+
+        let agent_native_hit = bench_public::first_correct_file_rate_at_k(
+            &task.agent_native_files,
+            &task.expected_files,
+            k,
+        ) > 0.0;
+        let callsieve_hit = bench_public::first_correct_file_rate_at_k(
+            &task.callsieve_files,
+            &task.expected_files,
+            k,
+        ) > 0.0;
+        agent_native_hits += usize::from(agent_native_hit);
+        callsieve_hits += usize::from(callsieve_hit);
+        agent_native_total_context_tokens =
+            agent_native_total_context_tokens.saturating_add(task.agent_native_context_tokens);
+        callsieve_total_packet_tokens =
+            callsieve_total_packet_tokens.saturating_add(task.callsieve_packet_tokens);
+        task_evidence.push(AgentNativeBaselineTaskEvidence {
+            id: task.id,
+            repo: task.repo,
+            base_commit: task.base_commit,
+            task: task.task,
+            expected_files: task.expected_files,
+            agent_native_files: task.agent_native_files,
+            callsieve_files: task.callsieve_files,
+            callsieve_index_fingerprint: task.callsieve_index_fingerprint,
+            agent_native_first_correct_file_at_k: agent_native_hit,
+            callsieve_first_correct_file_at_k: callsieve_hit,
+            agent_native_context_tokens: task.agent_native_context_tokens,
+            callsieve_packet_tokens: task.callsieve_packet_tokens,
+        });
+    }
+
+    let task_count = task_evidence.len();
+    let agent_native_first_correct_file_rate_at_k = agent_native_hits as f64 / task_count as f64;
+    let callsieve_first_correct_file_rate_at_k = callsieve_hits as f64 / task_count as f64;
+    let agent_native_average_context_tokens =
+        agent_native_total_context_tokens.div_ceil(task_count);
+    let callsieve_average_packet_tokens = callsieve_total_packet_tokens.div_ceil(task_count);
+
+    let mut source_artifact_evidence = Vec::with_capacity(source_artifacts.len() + 1);
+    source_artifact_evidence.push(AgentNativeSourceArtifactEvidence {
+        path: tasks_path.display().to_string(),
+        role: "task_log",
+        bytes: tasks_json.len(),
+        hash: indexer::stable_content_hash(tasks_json.as_bytes()),
+    });
+    for source_artifact in &source_artifacts {
+        source_artifact_evidence.push(agent_native_source_artifact_evidence(
+            source_artifact,
+            "agent_native_transcript_or_export",
+        )?);
+    }
+    let source_artifact_paths = source_artifact_evidence
+        .iter()
+        .map(|artifact| artifact.path.clone())
+        .collect();
+
+    let mut notes = vec![
+        "Generated from local task-level records of approved agent-native search runs.".to_string(),
+        "CallSieve did not execute or simulate the external agent; it only computed metrics from recorded files and token counts.".to_string(),
+        "Transcript provenance is backed by hashed local source artifacts.".to_string(),
+    ];
+    notes.extend(measurement_notes);
+
+    Ok(AgentNativeBaselineOutput {
+        command: "agent-native-baseline",
+        schema_version: 1,
+        id,
+        tool,
+        generated_at: now_unix_seconds(),
+        locally_measured: true,
+        measurement_scope: "operator-recorded agent-native codebase-search files and token counts compared with CallSieve read-first packets",
+        measurement_command,
+        source_artifacts: source_artifact_paths,
+        transcript_provenance_status: "pass",
+        source_artifact_evidence,
+        measurement_notes: notes,
+        k,
+        metrics: AgentNativeBaselineMetrics {
+            task_count,
+            agent_native_first_correct_file_hits: agent_native_hits,
+            callsieve_first_correct_file_hits: callsieve_hits,
+            agent_native_first_correct_file_rate_at_k,
+            callsieve_first_correct_file_rate_at_k,
+            callsieve_minus_agent_native_first_correct_file_rate_at_k:
+                callsieve_first_correct_file_rate_at_k - agent_native_first_correct_file_rate_at_k,
+            agent_native_total_context_tokens,
+            callsieve_total_packet_tokens,
+            agent_native_average_context_tokens,
+            callsieve_average_packet_tokens,
+            agent_native_context_token_ratio_vs_callsieve: agent_native_average_context_tokens
+                as f64
+                / callsieve_average_packet_tokens as f64,
+        },
+        tasks: task_evidence,
+    })
+}
+
+fn agent_native_check(
+    tasks_path: &Path,
+    mode: AgentNativeCheckMode,
+    source_artifacts: Vec<PathBuf>,
+) -> Result<AgentNativeCheckOutput> {
+    let tasks_json = fs::read_to_string(tasks_path).with_context(|| {
+        format!(
+            "failed to read agent-native check tasks: {}",
+            tasks_path.display()
+        )
+    })?;
+    let input: AgentNativeBaselineInput = serde_json::from_str(&tasks_json).with_context(|| {
+        format!(
+            "failed to parse agent-native check tasks: {}",
+            tasks_path.display()
+        )
+    })?;
+    let tasks = input.into_tasks();
+    let mut issues = Vec::new();
+    if tasks.is_empty() {
+        issues.push(AgentNativeCheckIssue {
+            task: None,
+            field: "tasks",
+            message: "task log must contain at least one task".to_string(),
+        });
+    }
+
+    let mut tasks_with_expected_files = 0usize;
+    let mut tasks_with_callsieve_files = 0usize;
+    let mut tasks_with_callsieve_packet_tokens = 0usize;
+    let mut tasks_with_agent_native_files = 0usize;
+    let mut tasks_with_agent_native_context_tokens = 0usize;
+    let mut tasks_ready_for_mode = 0usize;
+
+    for task in &tasks {
+        let task_id = Some(task.id.clone());
+        let has_expected_files = !task.expected_files.is_empty();
+        let has_callsieve_files = !task.callsieve_files.is_empty();
+        let has_callsieve_packet_tokens = task.callsieve_packet_tokens > 0;
+        let has_agent_native_files = !task.agent_native_files.is_empty();
+        let has_agent_native_context_tokens = task.agent_native_context_tokens > 0;
+
+        tasks_with_expected_files += usize::from(has_expected_files);
+        tasks_with_callsieve_files += usize::from(has_callsieve_files);
+        tasks_with_callsieve_packet_tokens += usize::from(has_callsieve_packet_tokens);
+        tasks_with_agent_native_files += usize::from(has_agent_native_files);
+        tasks_with_agent_native_context_tokens += usize::from(has_agent_native_context_tokens);
+
+        if !has_expected_files {
+            issues.push(AgentNativeCheckIssue {
+                task: task_id.clone(),
+                field: "expected_files",
+                message: "task must include at least one expected file".to_string(),
+            });
+        }
+        if !has_callsieve_files {
+            issues.push(AgentNativeCheckIssue {
+                task: task_id.clone(),
+                field: "callsieve_files",
+                message:
+                    "task must include the CallSieve read-first files from agent-native-template"
+                        .to_string(),
+            });
+        }
+        if !has_callsieve_packet_tokens {
+            issues.push(AgentNativeCheckIssue {
+                task: task_id.clone(),
+                field: "callsieve_packet_tokens",
+                message: "task must include CallSieve packet tokens from agent-native-template"
+                    .to_string(),
+            });
+        }
+        if let Some(base_commit) = &task.base_commit
+            && base_commit.trim().is_empty()
+        {
+            issues.push(AgentNativeCheckIssue {
+                task: task_id.clone(),
+                field: "base_commit",
+                message: "base_commit, when present, must not be empty".to_string(),
+            });
+        }
+        if let Some(fingerprint) = &task.callsieve_index_fingerprint
+            && !fingerprint.starts_with("fnv1a64:")
+        {
+            issues.push(AgentNativeCheckIssue {
+                task: task_id.clone(),
+                field: "callsieve_index_fingerprint",
+                message: "callsieve_index_fingerprint must use fnv1a64 when present".to_string(),
+            });
+        }
+
+        let mode_ready = match mode {
+            AgentNativeCheckMode::Template => {
+                if has_agent_native_files {
+                    issues.push(AgentNativeCheckIssue {
+                        task: task_id.clone(),
+                        field: "agent_native_files",
+                        message: "template mode must leave agent_native_files empty".to_string(),
+                    });
+                }
+                if has_agent_native_context_tokens {
+                    issues.push(AgentNativeCheckIssue {
+                        task: task_id.clone(),
+                        field: "agent_native_context_tokens",
+                        message: "template mode must leave agent_native_context_tokens at 0"
+                            .to_string(),
+                    });
+                }
+                if task.recording_status.as_deref() != Some("needs_agent_native_measurement") {
+                    issues.push(AgentNativeCheckIssue {
+                        task: task_id.clone(),
+                        field: "recording_status",
+                        message: "template mode requires recording_status to be needs_agent_native_measurement".to_string(),
+                    });
+                }
+                !has_agent_native_files
+                    && !has_agent_native_context_tokens
+                    && task.recording_status.as_deref() == Some("needs_agent_native_measurement")
+            }
+            AgentNativeCheckMode::Measured => {
+                let measured_status = task.recording_status.as_deref() == Some("measured");
+                if !has_agent_native_files {
+                    issues.push(AgentNativeCheckIssue {
+                        task: task_id.clone(),
+                        field: "agent_native_files",
+                        message:
+                            "measured mode must include the files the native agent selected or read"
+                                .to_string(),
+                    });
+                }
+                if !has_agent_native_context_tokens {
+                    issues.push(AgentNativeCheckIssue {
+                        task: task_id.clone(),
+                        field: "agent_native_context_tokens",
+                        message: "measured mode must include transcript-backed native-agent context tokens".to_string(),
+                    });
+                }
+                if !measured_status {
+                    issues.push(AgentNativeCheckIssue {
+                        task: task_id.clone(),
+                        field: "recording_status",
+                        message: "measured mode requires recording_status to be measured"
+                            .to_string(),
+                    });
+                }
+                has_agent_native_files && has_agent_native_context_tokens && measured_status
+            }
+        };
+        if has_expected_files && has_callsieve_files && has_callsieve_packet_tokens && mode_ready {
+            tasks_ready_for_mode += 1;
+        }
+    }
+
+    let mut source_artifact_evidence = vec![AgentNativeSourceArtifactEvidence {
+        path: tasks_path.display().to_string(),
+        role: "task_log",
+        bytes: tasks_json.len(),
+        hash: indexer::stable_content_hash(tasks_json.as_bytes()),
+    }];
+    if mode == AgentNativeCheckMode::Measured && source_artifacts.is_empty() {
+        issues.push(AgentNativeCheckIssue {
+            task: None,
+            field: "source_artifact",
+            message: "measured mode requires at least one transcript or native-search export source artifact".to_string(),
+        });
+    }
+    for source_artifact in source_artifacts {
+        match agent_native_source_artifact_evidence(
+            &source_artifact,
+            "agent_native_transcript_or_export",
+        ) {
+            Ok(evidence) => source_artifact_evidence.push(evidence),
+            Err(err) => issues.push(AgentNativeCheckIssue {
+                task: None,
+                field: "source_artifact",
+                message: err.to_string(),
+            }),
+        }
+    }
+
+    let status = metric_status(issues.is_empty());
+    let next_step = if status == "pass" {
+        match mode {
+            AgentNativeCheckMode::Template => "Run the approved native-search measurement, fill agent_native_files and transcript-backed agent_native_context_tokens, set recording_status to measured, then run agent-native-check --mode measured.".to_string(),
+            AgentNativeCheckMode::Measured => "Run agent-native-baseline with the same task log and source artifacts, then add the generated artifact to agent_native_search_baselines.".to_string(),
+        }
+    } else {
+        "Fix every issue before using this task log for a public agent-native search claim."
+            .to_string()
+    };
+
+    Ok(AgentNativeCheckOutput {
+        command: "agent-native-check",
+        schema_version: 1,
+        status,
+        mode,
+        tasks_path: tasks_path.display().to_string(),
+        task_count: tasks.len(),
+        tasks_with_expected_files,
+        tasks_with_callsieve_files,
+        tasks_with_callsieve_packet_tokens,
+        tasks_with_agent_native_files,
+        tasks_with_agent_native_context_tokens,
+        tasks_ready_for_mode,
+        source_artifact_evidence,
+        issues,
+        next_step,
+    })
+}
+
+fn agent_native_source_artifact_evidence(
+    source_artifact: &Path,
+    role: &'static str,
+) -> Result<AgentNativeSourceArtifactEvidence> {
+    if !source_artifact.is_file() {
+        bail!(
+            "agent-native source artifact is missing or not a file: {}",
+            source_artifact.display()
+        );
+    }
+    let bytes = fs::read(source_artifact).with_context(|| {
+        format!(
+            "failed to read agent-native source artifact: {}",
+            source_artifact.display()
+        )
+    })?;
+    Ok(AgentNativeSourceArtifactEvidence {
+        path: source_artifact.display().to_string(),
+        role,
+        bytes: bytes.len(),
+        hash: indexer::stable_content_hash(&bytes),
+    })
+}
+
+fn ensure_agent_native_template_checkout_is_clean(path: &Path) -> Result<()> {
+    let output = ProcessCommand::new("git")
+        .arg("-C")
+        .arg(path)
+        .arg("status")
+        .arg("--porcelain")
+        .output()
+        .with_context(|| {
+            format!(
+                "failed to inspect git status before agent-native template checkout: {}",
+                path.display()
+            )
+        })?;
+    if !output.status.success() {
+        bail!(
+            "git status failed before agent-native template checkout in {}: {}",
+            path.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        let file = line.get(3..).unwrap_or(line).trim();
+        if file == ".callsieve" || file == ".callsieve/" || file.starts_with(".callsieve/") {
+            continue;
+        }
+        bail!(
+            "agent-native template pinned checkout requires a clean worktree; dirty path `{file}` in {}",
+            path.display()
+        );
+    }
+    Ok(())
+}
+
+fn ensure_agent_native_template_repo_matches_path(path: &Path, repo: &str) -> Result<()> {
+    let (owner, name) = repo.split_once('/').ok_or_else(|| {
+        anyhow::anyhow!("invalid repo slug `{repo}` in agent-native template task")
+    })?;
+    let mut components = path
+        .components()
+        .rev()
+        .filter_map(|component| component.as_os_str().to_str());
+    let path_name = components.next().unwrap_or_default();
+    let path_owner = components.next().unwrap_or_default();
+    if path_owner != owner || path_name != name {
+        bail!(
+            "agent-native template task repo `{repo}` does not match template root {}",
+            path.display()
+        );
+    }
+    Ok(())
+}
+
+fn checkout_agent_native_template_commit(
+    path: &Path,
+    task_id: &str,
+    base_commit: &str,
+) -> Result<()> {
+    let output = ProcessCommand::new("git")
+        .arg("-C")
+        .arg(path)
+        .arg("checkout")
+        .arg("-f")
+        .arg(base_commit)
+        .output()
+        .with_context(|| {
+            format!(
+                "failed to check out base_commit {base_commit} for agent-native template task {task_id}"
+            )
+        })?;
+    if !output.status.success() {
+        bail!(
+            "git checkout -f {base_commit} failed for agent-native template task {task_id} in {}\nstdout:\n{}\nstderr:\n{}",
+            path.display(),
+            String::from_utf8_lossy(&output.stdout).trim(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(())
+}
+
+fn agent_native_template(
+    path: &Path,
+    tasks_path: &Path,
+    options: AgentNativeTemplateOptions,
+) -> Result<AgentNativeTemplateOutput> {
+    if options.k == 0 {
+        bail!("agent-native template requires --k to be greater than zero");
+    }
+
+    let tasks_json = fs::read_to_string(tasks_path).with_context(|| {
+        format!(
+            "failed to read agent-native template tasks: {}",
+            tasks_path.display()
+        )
+    })?;
+    let input: AgentNativeTemplateInput = serde_json::from_str(&tasks_json).with_context(|| {
+        format!(
+            "failed to parse agent-native template tasks: {}",
+            tasks_path.display()
+        )
+    })?;
+    let tasks = input.into_tasks();
+    if tasks.is_empty() {
+        bail!("agent-native template requires at least one task record");
+    }
+
+    let pinned_base_commits = tasks.iter().any(|task| task.base_commit.is_some());
+    if pinned_base_commits {
+        ensure_agent_native_template_checkout_is_clean(path)?;
+    }
+    let mut shared_index = None;
+    let mut shared_refreshed = false;
+    let mut shared_index_fingerprint = None;
+    if !pinned_base_commits {
+        let (index, _index_load_ms, refreshed) = load_fresh_index_timed(path)?;
+        shared_refreshed = refreshed;
+        shared_index_fingerprint = Some(indexer::index_fingerprint(&index));
+        shared_index = Some(index);
+    }
+    let retrieval_contract_fingerprint = query::retrieval_contract_fingerprint();
+    let source_tasks_hash = indexer::stable_content_hash(tasks_json.as_bytes());
+    let view_options = query::ContextViewOptions {
+        profile: options.profile.into(),
+        token_budget: Some(options.token_budget),
+        include_git: false,
+        include_call_paths: false,
+    };
+    let mut output_tasks = Vec::with_capacity(tasks.len());
+    let mut task_index_fingerprint_material = Vec::new();
+    let mut rebuilt_any_index = false;
+
+    for (index_in_suite, task) in tasks.into_iter().enumerate() {
+        let id = task
+            .id
+            .unwrap_or_else(|| format!("task-{}", index_in_suite + 1));
+        if let Some(repo) = &task.repo {
+            ensure_agent_native_template_repo_matches_path(path, repo)?;
+        }
+        if let Some(base_commit) = &task.base_commit {
+            checkout_agent_native_template_commit(path, &id, base_commit)?;
+        }
+        let expected_files = if task.expected_files.is_empty() {
+            task.critical_files
+        } else {
+            task.expected_files
+        };
+        if expected_files.is_empty() {
+            bail!("agent-native template task `{id}` must include expected_files");
+        }
+
+        let (index, task_index_fingerprint) = if pinned_base_commits {
+            let (index, _index_load_ms, refreshed) = load_fresh_index_timed(path)?;
+            rebuilt_any_index |= refreshed;
+            let fingerprint = indexer::index_fingerprint(&index);
+            (index, fingerprint)
+        } else {
+            (
+                shared_index
+                    .as_ref()
+                    .expect("shared index exists when not pinned")
+                    .clone(),
+                shared_index_fingerprint
+                    .as_ref()
+                    .expect("shared index fingerprint exists when not pinned")
+                    .clone(),
+            )
+        };
+        let context = query::build_context_with_options(
+            path,
+            &index,
+            &task.task,
+            options.limit,
+            options.snippets_per_file,
+            options.include_snippets,
+            false,
+        )?;
+        let context_value = query::context_value(&context, view_options)?;
+        let callsieve_files = context_read_first_files(&context_value);
+        let callsieve_packet_tokens = query::value_estimated_tokens(&context_value)?;
+        let callsieve_first_correct_file_at_k = bench_public::first_correct_file_rate_at_k(
+            &callsieve_files,
+            &expected_files,
+            options.k,
+        ) > 0.0;
+        task_index_fingerprint_material.push(format!(
+            "{id}\0{}\0{task_index_fingerprint}",
+            task.base_commit.as_deref().unwrap_or("")
+        ));
+
+        output_tasks.push(AgentNativeTemplateTaskOutput {
+            id,
+            repo: task.repo,
+            base_commit: task.base_commit,
+            task: task.task,
+            expected_files,
+            agent_native_files: Vec::new(),
+            callsieve_files,
+            agent_native_context_tokens: 0,
+            callsieve_packet_tokens,
+            callsieve_index_fingerprint: task_index_fingerprint,
+            callsieve_first_correct_file_at_k,
+            recording_status: "needs_agent_native_measurement",
+        });
+    }
+    let index_fingerprint = if pinned_base_commits {
+        indexer::stable_content_hash(task_index_fingerprint_material.join("\n").as_bytes())
+    } else {
+        shared_index_fingerprint.expect("shared index fingerprint exists when not pinned")
+    };
+
+    let mut warnings = Vec::new();
+    if shared_refreshed || rebuilt_any_index {
+        warnings.push("rebuilt missing or stale CallSieve index before templating".to_string());
+    }
+    if pinned_base_commits {
+        warnings.push(
+            "checked out pinned base_commit values while generating per-task CallSieve template"
+                .to_string(),
+        );
+    }
+
+    Ok(AgentNativeTemplateOutput {
+        command: "agent-native-template",
+        schema_version: 1,
+        root: root_label(path),
+        pinned_base_commits,
+        index_fingerprint,
+        retrieval_contract_fingerprint,
+        source_tasks: tasks_path.display().to_string(),
+        source_tasks_hash,
+        locally_measured: false,
+        status: "needs_agent_native_measurement",
+        k: options.k,
+        limit: options.limit,
+        snippets_per_file: if options.include_snippets {
+            options.snippets_per_file
+        } else {
+            0
+        },
+        profile: profile_arg_name(options.profile),
+        token_budget: options.token_budget,
+        instructions: vec![
+            "Run the same tasks in the external agent using its native codebase search.",
+            "Record the actual first files or search results the agent used in agent_native_files.",
+            "Record transcript-backed context tokens in agent_native_context_tokens; do not estimate.",
+            "Then pass this filled file to callsieve agent-native-baseline.",
+        ],
+        warnings,
+        tasks: output_tasks,
+    })
+}
+
+fn public_repo_packer_baseline(
+    input: &PublicRepoPackerBaselineInput,
+    callsieve_packet_tokens: usize,
+) -> Result<PublicRepoPackerBaselineEvidence> {
+    let path = input.path.display().to_string();
+    let tool = if input.tool.trim().is_empty() {
+        input.id.clone()
+    } else {
+        input.tool.clone()
+    };
+    if !input.path.is_file() {
+        return Ok(PublicRepoPackerBaselineEvidence {
+            id: input.id.clone(),
+            tool,
+            path,
+            command: input.command.clone(),
+            required: input.required,
+            exists: false,
+            locally_measured: false,
+            tokens: None,
+            tokens_estimated_from_bytes: false,
+            bytes: None,
+            files: None,
+            token_ratio_vs_callsieve_packet: None,
+            minimum_token_ratio_vs_callsieve_packet: input.minimum_token_ratio_vs_callsieve_packet,
+            status: "needs_work".to_string(),
+        });
+    }
+
+    let artifact_json = fs::read_to_string(&input.path).with_context(|| {
+        format!(
+            "failed to read repo-packer baseline artifact: {}",
+            input.path.display()
+        )
+    })?;
+    let value: serde_json::Value = serde_json::from_str(&artifact_json).with_context(|| {
+        format!(
+            "failed to parse repo-packer baseline artifact: {}",
+            input.path.display()
+        )
+    })?;
+    let bytes = json_metric_usize(
+        &value,
+        input.byte_count_pointer.as_deref(),
+        &[
+            "/bytes",
+            "/byte_count",
+            "/total_bytes",
+            "/metrics/bytes",
+            "/metrics/byte_count",
+            "/metrics/total_bytes",
+            "/summary/bytes",
+            "/summary/byte_count",
+            "/summary/total_bytes",
+            "/stats/bytes",
+            "/stats/byte_count",
+            "/stats/total_bytes",
+        ],
+    );
+    let direct_tokens = json_metric_usize(
+        &value,
+        input.token_count_pointer.as_deref(),
+        &[
+            "/tokens",
+            "/token_count",
+            "/total_tokens",
+            "/metrics/tokens",
+            "/metrics/token_count",
+            "/metrics/total_tokens",
+            "/summary/tokens",
+            "/summary/token_count",
+            "/summary/total_tokens",
+            "/stats/tokens",
+            "/stats/token_count",
+            "/stats/total_tokens",
+        ],
+    );
+    let tokens_estimated_from_bytes = direct_tokens.is_none() && bytes.is_some();
+    let tokens = direct_tokens.or_else(|| bytes.map(|byte_count| byte_count.div_ceil(4)));
+    let files = json_metric_usize(
+        &value,
+        input.file_count_pointer.as_deref(),
+        &[
+            "/files",
+            "/file_count",
+            "/total_files",
+            "/metrics/files",
+            "/metrics/file_count",
+            "/metrics/total_files",
+            "/summary/files",
+            "/summary/file_count",
+            "/summary/total_files",
+            "/stats/files",
+            "/stats/file_count",
+            "/stats/total_files",
+        ],
+    );
+    let token_ratio_vs_callsieve_packet = tokens.and_then(|tokens| {
+        if callsieve_packet_tokens == 0 {
+            None
+        } else {
+            Some(tokens as f64 / callsieve_packet_tokens as f64)
+        }
+    });
+    let locally_measured = tokens.is_some() || bytes.is_some();
+    let status = metric_status(
+        locally_measured
+            && input
+                .minimum_token_ratio_vs_callsieve_packet
+                .is_none_or(|minimum| {
+                    token_ratio_vs_callsieve_packet.is_some_and(|ratio| ratio >= minimum)
+                }),
+    );
+
+    Ok(PublicRepoPackerBaselineEvidence {
+        id: input.id.clone(),
+        tool,
+        path,
+        command: input.command.clone(),
+        required: input.required,
+        exists: true,
+        locally_measured,
+        tokens,
+        tokens_estimated_from_bytes,
+        bytes,
+        files,
+        token_ratio_vs_callsieve_packet,
+        minimum_token_ratio_vs_callsieve_packet: input.minimum_token_ratio_vs_callsieve_packet,
+        status,
+    })
+}
+
+fn public_agent_native_search_baselines(
+    inputs: &[PublicAgentNativeSearchBaselineInput],
+) -> Result<Vec<PublicAgentNativeSearchBaselineEvidence>> {
+    inputs
+        .iter()
+        .map(public_agent_native_search_baseline)
+        .collect()
+}
+
+fn public_agent_native_search_baseline(
+    input: &PublicAgentNativeSearchBaselineInput,
+) -> Result<PublicAgentNativeSearchBaselineEvidence> {
+    let path = input.path.display().to_string();
+    let tool = if input.tool.trim().is_empty() {
+        input.id.clone()
+    } else {
+        input.tool.clone()
+    };
+    if !input.path.is_file() {
+        return Ok(PublicAgentNativeSearchBaselineEvidence {
+            id: input.id.clone(),
+            tool,
+            path,
+            command: input.command.clone(),
+            required: input.required,
+            exists: false,
+            locally_measured: false,
+            tasks: None,
+            repositories: Vec::new(),
+            base_commits: Vec::new(),
+            task_languages: Vec::new(),
+            agent_native_first_correct_file_rate_at_k: None,
+            callsieve_first_correct_file_rate_at_k: None,
+            callsieve_minus_agent_native_first_correct_file_rate_at_k: None,
+            agent_native_average_context_tokens: None,
+            callsieve_average_packet_tokens: None,
+            agent_native_context_token_ratio_vs_callsieve: None,
+            source_artifacts: None,
+            source_artifact_hashes: Vec::new(),
+            transcript_source_artifact_hashes: Vec::new(),
+            transcript_provenance_status: "missing".to_string(),
+            minimum_tasks: input.minimum_tasks,
+            minimum_callsieve_minus_agent_native_first_correct_file_rate_at_k: input
+                .minimum_callsieve_minus_agent_native_first_correct_file_rate_at_k,
+            minimum_agent_native_context_token_ratio_vs_callsieve: input
+                .minimum_agent_native_context_token_ratio_vs_callsieve,
+            status: "needs_work".to_string(),
+        });
+    }
+
+    let artifact_json = fs::read_to_string(&input.path).with_context(|| {
+        format!(
+            "failed to read agent-native search baseline artifact: {}",
+            input.path.display()
+        )
+    })?;
+    let value: serde_json::Value = serde_json::from_str(&artifact_json).with_context(|| {
+        format!(
+            "failed to parse agent-native search baseline artifact: {}",
+            input.path.display()
+        )
+    })?;
+    let locally_measured = value
+        .pointer(&input.locally_measured_pointer)
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let tasks = value
+        .pointer(&input.task_count_pointer)
+        .and_then(serde_json::Value::as_u64)
+        .map(|value| value as usize);
+    let agent_native_first_correct_file_rate_at_k = json_pointer_f64(
+        &value,
+        &input.agent_native_first_correct_file_rate_at_k_pointer,
+    );
+    let callsieve_first_correct_file_rate_at_k = json_pointer_f64(
+        &value,
+        &input.callsieve_first_correct_file_rate_at_k_pointer,
+    );
+    let callsieve_minus_agent_native_first_correct_file_rate_at_k = match (
+        callsieve_first_correct_file_rate_at_k,
+        agent_native_first_correct_file_rate_at_k,
+    ) {
+        (Some(callsieve), Some(agent_native)) => Some(callsieve - agent_native),
+        _ => None,
+    };
+    let agent_native_average_context_tokens = value
+        .pointer(&input.agent_native_average_context_tokens_pointer)
+        .and_then(serde_json::Value::as_u64)
+        .map(|value| value as usize);
+    let callsieve_average_packet_tokens = value
+        .pointer(&input.callsieve_average_packet_tokens_pointer)
+        .and_then(serde_json::Value::as_u64)
+        .map(|value| value as usize);
+    let agent_native_context_token_ratio_vs_callsieve = match (
+        agent_native_average_context_tokens,
+        callsieve_average_packet_tokens,
+    ) {
+        (Some(agent_native), Some(callsieve)) if callsieve > 0 => {
+            Some(agent_native as f64 / callsieve as f64)
+        }
+        _ => None,
+    };
+    let (
+        source_artifacts,
+        source_artifact_hashes,
+        transcript_source_artifact_hashes,
+        source_artifact_provenance_pass,
+    ) = agent_native_source_artifact_provenance(&value, &input.path);
+    let (repositories, base_commits, task_languages) = agent_native_task_coverage(&value);
+    let status = metric_status(
+        locally_measured
+            && source_artifact_provenance_pass
+            && input
+                .minimum_tasks
+                .is_none_or(|minimum| tasks.is_some_and(|tasks| tasks >= minimum))
+            && input
+                .minimum_callsieve_minus_agent_native_first_correct_file_rate_at_k
+                .is_none_or(|minimum| {
+                    callsieve_minus_agent_native_first_correct_file_rate_at_k
+                        .is_some_and(|delta| delta >= minimum)
+                })
+            && input
+                .minimum_agent_native_context_token_ratio_vs_callsieve
+                .is_none_or(|minimum| {
+                    agent_native_context_token_ratio_vs_callsieve
+                        .is_some_and(|ratio| ratio >= minimum)
+                }),
+    );
+
+    Ok(PublicAgentNativeSearchBaselineEvidence {
+        id: input.id.clone(),
+        tool,
+        path,
+        command: input.command.clone(),
+        required: input.required,
+        exists: true,
+        locally_measured,
+        tasks,
+        repositories,
+        base_commits,
+        task_languages,
+        agent_native_first_correct_file_rate_at_k,
+        callsieve_first_correct_file_rate_at_k,
+        callsieve_minus_agent_native_first_correct_file_rate_at_k,
+        agent_native_average_context_tokens,
+        callsieve_average_packet_tokens,
+        agent_native_context_token_ratio_vs_callsieve,
+        source_artifacts,
+        source_artifact_hashes,
+        transcript_source_artifact_hashes,
+        transcript_provenance_status: metric_status(source_artifact_provenance_pass),
+        minimum_tasks: input.minimum_tasks,
+        minimum_callsieve_minus_agent_native_first_correct_file_rate_at_k: input
+            .minimum_callsieve_minus_agent_native_first_correct_file_rate_at_k,
+        minimum_agent_native_context_token_ratio_vs_callsieve: input
+            .minimum_agent_native_context_token_ratio_vs_callsieve,
+        status,
+    })
+}
+
+fn public_agent_native_search_summary(
+    baselines: &[PublicAgentNativeSearchBaselineEvidence],
+) -> PublicAgentNativeSearchSummary {
+    let measured_baselines = baselines
+        .iter()
+        .filter(|baseline| baseline.locally_measured)
+        .collect::<Vec<_>>();
+    let agent_tools = sorted_unique(
+        measured_baselines
+            .iter()
+            .map(|baseline| baseline.tool.trim())
+            .filter(|tool| !tool.is_empty()),
+    );
+    let repositories = sorted_unique(
+        measured_baselines
+            .iter()
+            .flat_map(|baseline| baseline.repositories.iter().map(String::as_str)),
+    );
+    let base_commits = sorted_unique(
+        measured_baselines
+            .iter()
+            .flat_map(|baseline| baseline.base_commits.iter().map(String::as_str)),
+    );
+    let task_languages = sorted_unique(
+        measured_baselines
+            .iter()
+            .flat_map(|baseline| baseline.task_languages.iter().map(String::as_str)),
+    );
+    let measured_baseline_count = measured_baselines.len();
+    let distinct_agent_tool_count = agent_tools.len();
+    let single_agent_only = measured_baseline_count > 0 && distinct_agent_tool_count == 1;
+    let multi_agent_status = if measured_baseline_count == 0 {
+        "not_measured"
+    } else if distinct_agent_tool_count > 1 {
+        "pass"
+    } else {
+        "single_agent_only"
+    }
+    .to_string();
+
+    PublicAgentNativeSearchSummary {
+        baseline_count: baselines.len(),
+        required_baseline_count: baselines
+            .iter()
+            .filter(|baseline| baseline.required)
+            .count(),
+        measured_baseline_count,
+        transcript_backed_baseline_count: baselines
+            .iter()
+            .filter(|baseline| {
+                baseline.locally_measured && baseline.transcript_provenance_status == "pass"
+            })
+            .count(),
+        total_measured_tasks: measured_baselines
+            .iter()
+            .filter_map(|baseline| baseline.tasks)
+            .sum(),
+        distinct_agent_tool_count,
+        agent_tools,
+        distinct_repository_count: repositories.len(),
+        repositories,
+        distinct_base_commit_count: base_commits.len(),
+        base_commits,
+        task_language_count: task_languages.len(),
+        task_languages,
+        single_agent_only,
+        multi_agent_status,
+        evidence: if measured_baseline_count == 0 {
+            "No measured agent-native baseline artifacts are checked in yet.".to_string()
+        } else if single_agent_only {
+            "Measured agent-native artifacts are transcript-backed, but they currently cover only one native agent tool.".to_string()
+        } else {
+            "Measured agent-native artifacts cover multiple native agent tools with transcript-backed source provenance.".to_string()
+        },
+        next_baseline: if distinct_agent_tool_count < 2 {
+            "Add a second real native-agent baseline with hashed transcript/export provenance."
+                .to_string()
+        } else {
+            "Keep adding public repos, languages, and native agents while preserving hashed transcript/export provenance.".to_string()
+        },
+    }
+}
+
+fn agent_native_search_summary_satisfies_targets(
+    summary: &PublicAgentNativeSearchSummary,
+    targets: &PublicProofTargets,
+) -> bool {
+    targets
+        .minimum_agent_native_measured_baselines
+        .is_none_or(|minimum| summary.measured_baseline_count >= minimum)
+        && targets
+            .minimum_agent_native_distinct_tools
+            .is_none_or(|minimum| summary.distinct_agent_tool_count >= minimum)
+        && targets
+            .minimum_agent_native_repositories
+            .is_none_or(|minimum| summary.distinct_repository_count >= minimum)
+        && targets
+            .minimum_agent_native_task_languages
+            .is_none_or(|minimum| summary.task_language_count >= minimum)
+}
+
+fn sorted_unique<'a>(values: impl Iterator<Item = &'a str>) -> Vec<String> {
+    values
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn agent_native_task_coverage(
+    value: &serde_json::Value,
+) -> (Vec<String>, Vec<String>, Vec<String>) {
+    let Some(tasks) = value.get("tasks").and_then(serde_json::Value::as_array) else {
+        return (Vec::new(), Vec::new(), Vec::new());
+    };
+
+    let mut repositories = BTreeSet::new();
+    let mut base_commits = BTreeSet::new();
+    let mut task_languages = BTreeSet::new();
+    for task in tasks {
+        if let Some(repo) = task.get("repo").and_then(serde_json::Value::as_str)
+            && !repo.trim().is_empty()
+        {
+            repositories.insert(repo.trim().to_string());
+        }
+        if let Some(base_commit) = task.get("base_commit").and_then(serde_json::Value::as_str)
+            && !base_commit.trim().is_empty()
+        {
+            base_commits.insert(base_commit.trim().to_string());
+        }
+
+        let mut task_paths = json_string_array_key(task, "expected_files");
+        if task_paths.is_empty() {
+            task_paths.extend(json_string_array_key(task, "agent_native_files"));
+            task_paths.extend(json_string_array_key(task, "callsieve_files"));
+        }
+        for path in task_paths {
+            if let Some(language) = public_task_language_from_path(&path) {
+                task_languages.insert(language.to_string());
+            }
+        }
+    }
+
+    (
+        repositories.into_iter().collect(),
+        base_commits.into_iter().collect(),
+        task_languages.into_iter().collect(),
+    )
+}
+
+fn json_string_array_key(value: &serde_json::Value, key: &str) -> Vec<String> {
+    value
+        .get(key)
+        .and_then(serde_json::Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn public_task_language_from_path(path: &str) -> Option<&'static str> {
+    match Path::new(path).extension().and_then(OsStr::to_str) {
+        Some("py" | "pyi") => Some("Python"),
+        Some("rs") => Some("Rust"),
+        Some("ts" | "tsx") => Some("TypeScript"),
+        Some("js" | "jsx" | "mjs" | "cjs") => Some("JavaScript"),
+        _ => None,
+    }
+}
+
+fn agent_native_source_artifact_provenance(
+    value: &serde_json::Value,
+    baseline_artifact_path: &Path,
+) -> (Option<usize>, Vec<String>, Vec<String>, bool) {
+    let Some(artifacts) = value
+        .get("source_artifact_evidence")
+        .and_then(serde_json::Value::as_array)
+    else {
+        return (None, Vec::new(), Vec::new(), false);
+    };
+
+    let mut source_artifact_hashes = Vec::new();
+    let mut transcript_source_artifact_hashes = Vec::new();
+    let mut has_transcript_or_export = false;
+    let mut all_artifacts_valid = !artifacts.is_empty();
+    for artifact in artifacts {
+        let source_path = artifact
+            .get("path")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        let path_valid = !source_path.trim().is_empty();
+        let role = artifact
+            .get("role")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        let declared_bytes = artifact
+            .get("bytes")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+        let declared_bytes_valid = declared_bytes > 0;
+        let hash = artifact
+            .get("hash")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        let hash_valid = hash.starts_with("fnv1a64:") && hash.len() > "fnv1a64:".len();
+        let source_artifact_path =
+            resolve_agent_native_source_artifact_path(baseline_artifact_path, source_path);
+        let source_artifact_bytes = fs::read(&source_artifact_path).ok();
+        let bytes_match = source_artifact_bytes
+            .as_ref()
+            .is_some_and(|bytes| declared_bytes == bytes.len() as u64);
+        let hash_match = source_artifact_bytes
+            .as_ref()
+            .is_some_and(|bytes| indexer::stable_content_hash(bytes) == hash);
+        if hash_valid && hash_match {
+            source_artifact_hashes.push(hash.to_string());
+        }
+        if role == "agent_native_transcript_or_export" {
+            has_transcript_or_export = true;
+            if hash_valid && hash_match {
+                transcript_source_artifact_hashes.push(hash.to_string());
+            }
+        }
+        all_artifacts_valid &= path_valid
+            && !role.trim().is_empty()
+            && declared_bytes_valid
+            && hash_valid
+            && bytes_match
+            && hash_match;
+    }
+
+    let artifact_status_pass = value
+        .get("transcript_provenance_status")
+        .and_then(serde_json::Value::as_str)
+        == Some("pass");
+    (
+        Some(artifacts.len()),
+        source_artifact_hashes,
+        transcript_source_artifact_hashes,
+        all_artifacts_valid && has_transcript_or_export && artifact_status_pass,
+    )
+}
+
+fn resolve_agent_native_source_artifact_path(
+    baseline_artifact_path: &Path,
+    source_path: &str,
+) -> PathBuf {
+    let path = Path::new(source_path);
+    if path.is_absolute() {
+        return path.to_path_buf();
+    }
+    if let Some(parent) = baseline_artifact_path.parent() {
+        let candidate = parent.join(path);
+        if candidate.is_file() {
+            return candidate;
+        }
+    }
+    path.to_path_buf()
+}
+
+fn public_mcp_surface_evidence() -> PublicMcpSurfaceEvidence {
+    let exposed_tools = mcp::listed_tool_names();
+    let exposed: BTreeSet<&str> = exposed_tools.iter().map(String::as_str).collect();
+    let required_first_mile_tools: Vec<String> = mcp::FIRST_MILE_MCP_TOOLS
+        .iter()
+        .map(|tool| (*tool).to_string())
+        .collect();
+    let missing_required_tools: Vec<String> = mcp::FIRST_MILE_MCP_TOOLS
+        .iter()
+        .filter(|tool| !exposed.contains(**tool))
+        .map(|tool| (*tool).to_string())
+        .collect();
+
+    PublicMcpSurfaceEvidence {
+        status: if missing_required_tools.is_empty() {
+            "pass".to_string()
+        } else {
+            "needs_work".to_string()
+        },
+        protocol: "2025-06-18",
+        required_first_mile_tools,
+        exposed_tools,
+        missing_required_tools,
+        context_first_tool: "callsieve_context",
+        local_config_commands: vec![
+            "cargo run -- mcp-config . --format json",
+            "cargo run -- mcp-config . --format toml",
+        ],
+        registry_manifest_command: "cargo run -- mcp-registry-manifest --out server.json",
+        evidence: "The public proof checks the actual MCP tools/list surface for context-first retrieval, targeted focus, related-file expansion, related tests, and freshness status before claiming MCP readiness.".to_string(),
+    }
+}
+
+fn public_mcp_contract_evidence() -> PublicMcpContractEvidence {
+    let exposed_tools = mcp::listed_tool_names();
+    let context_tool_listed = exposed_tools.iter().any(|tool| tool == "callsieve_context");
+    let required_structured_content_fields = mcp::CONTEXT_STRUCTURED_CONTENT_FIELDS.to_vec();
+    let supported_instruction_expansion_keys = mcp::CONTEXT_INSTRUCTION_EXPANSION_KEYS.to_vec();
+    let required_freshness_fields = mcp::CONTEXT_FRESHNESS_FIELDS.to_vec();
+    let status = context_tool_listed
+        && !required_structured_content_fields.is_empty()
+        && !supported_instruction_expansion_keys.is_empty()
+        && !required_freshness_fields.is_empty()
+        && query::DEFAULT_AGENT_CONTEXT_TOKEN_BUDGET > 0
+        && mcp::CONTEXT_DEFAULT_PROFILE == "skim";
+
+    PublicMcpContractEvidence {
+        status: metric_status(status),
+        contract_version: mcp::CONTEXT_STRUCTURED_CONTENT_CONTRACT_VERSION,
+        context_tool: "callsieve_context",
+        structured_content_required: true,
+        default_profile: mcp::CONTEXT_DEFAULT_PROFILE,
+        default_token_budget: query::DEFAULT_AGENT_CONTEXT_TOKEN_BUDGET,
+        required_structured_content_fields,
+        supported_instruction_expansion_keys,
+        required_freshness_fields,
+        evidence: "MCP context proof exposes the stable structuredContent contract agents consume before broad grep or repeated file reads.",
+    }
+}
+
+fn public_agent_setup_evidence(competitive: &CompetitiveReportOutput) -> PublicAgentSetupEvidence {
+    let covered_agents: Vec<String> = competitive
+        .callsieve
+        .agent_coverage
+        .iter()
+        .map(|agent| (*agent).to_string())
+        .collect();
+    let covered: BTreeSet<String> = competitive
+        .callsieve
+        .agent_coverage
+        .iter()
+        .map(|agent| normalized_agent_name(agent))
+        .collect();
+    let priority_clients = public_proof_priority_setup_clients();
+    let priority_clients_covered: Vec<&'static str> = priority_clients
+        .iter()
+        .copied()
+        .filter(|agent| covered.contains(&normalized_agent_name(agent)))
+        .collect();
+    let default_layer_clients = competitive.targets.required_agents.clone();
+    let default_layer_clients_covered: Vec<String> = default_layer_clients
+        .iter()
+        .filter(|agent| covered.contains(&normalized_agent_name(agent)))
+        .cloned()
+        .collect();
+    let missing_default_layer_clients: Vec<String> = default_layer_clients
+        .iter()
+        .filter(|agent| !covered.contains(&normalized_agent_name(agent)))
+        .cloned()
+        .collect();
+    let status = metric_status(
+        competitive.callsieve.agent_coverage_count >= competitive.targets.minimum_agent_coverage
+            && competitive.callsieve.missing_required_agents.is_empty()
+            && missing_default_layer_clients.is_empty()
+            && default_layer_clients_covered.len() == default_layer_clients.len()
+            && priority_clients_covered.len() == priority_clients.len(),
+    );
+
+    PublicAgentSetupEvidence {
+        status,
+        claim_scope: "Agent-agnostic local setup evidence: setup-auto detection, project-local MCP config, registry descriptor, lifecycle hooks where available, and templates where hooks are not available.",
+        required_agents: competitive.targets.required_agents.clone(),
+        covered_agents,
+        missing_required_agents: competitive.callsieve.missing_required_agents.clone(),
+        agent_coverage_count: competitive.callsieve.agent_coverage_count,
+        minimum_agent_coverage: competitive.targets.minimum_agent_coverage,
+        default_layer_clients,
+        default_layer_clients_covered,
+        missing_default_layer_clients,
+        priority_clients,
+        priority_clients_covered,
+        hook_capable_clients: vec![
+            "Codex",
+            "Claude Code",
+            "GitHub Copilot",
+            "OpenCode",
+            "Antigravity",
+            "Cline",
+        ],
+        mcp_template_clients: vec![
+            "Cursor",
+            "VS Code",
+            "Windsurf",
+            "Continue",
+            "Zed",
+            "Junie",
+            "JetBrains",
+            "Amp",
+            "Goose",
+            "Warp",
+            "Zoo",
+            "Roo",
+            "generic MCP",
+        ],
+        commands: public_agent_setup_commands(),
+        evidence: "The competitive gate requires agent coverage, and public proof exposes the exact setup and MCP commands needed to reproduce the local integration surface.",
+        next_step: "Run setup-auto --dry-run first, review detected clients, then run setup-auto or per-client hook/MCP setup in the target repository.",
+    }
+}
+
+fn public_proof_priority_setup_clients() -> Vec<&'static str> {
+    vec![
+        "Codex",
+        "Claude Code",
+        "GitHub Copilot",
+        "Cursor",
+        "OpenCode",
+        "Zed",
+        "generic MCP",
+    ]
+}
+
+fn public_agent_setup_commands() -> Vec<String> {
+    vec![
+        "cargo run -- setup-auto . --dry-run".to_string(),
+        "cargo run -- setup-auto .".to_string(),
+        "cargo run -- mcp-config . --format json".to_string(),
+        "cargo run -- mcp-config . --format toml".to_string(),
+        "cargo run -- mcp-registry-manifest --out server.json".to_string(),
+        "cargo run -- mcp-contract --out benchmarks/public/results/mcp-contract.json".to_string(),
+        "cargo run -- agent-native-protocol --out benchmarks/public/results/agent-native-protocol.json".to_string(),
+        "cargo run -- agent-native-template benchmarks/public/repos/psf/requests benchmarks/public/manifest.json --k 5 --out benchmarks/public/results/agent-native-requests-template.json".to_string(),
+        "cargo run -- codex-hooks doctor . --strict --smoke".to_string(),
+        "cargo run -- claude-hooks doctor . --strict".to_string(),
+        "cargo run -- opencode-hooks doctor . --strict".to_string(),
+    ]
+}
+
+#[allow(clippy::too_many_arguments)]
+fn public_evidence_pack(
+    local_gate: &PublicProofLocalGate,
+    targets: &PublicProofTargets,
+    public_benchmarks: &[PublicBenchmarkEvidence],
+    public_result_catalog: &PublicResultCatalog,
+    commands: &[String],
+    terminal_artifacts: Vec<PublicProofArtifactEvidence>,
+    repo_packer_baselines: &[PublicRepoPackerBaselineEvidence],
+    agent_native_search_baselines: &[PublicAgentNativeSearchBaselineEvidence],
+    agent_native_search_summary: &PublicAgentNativeSearchSummary,
+    broad_read_guardrail: &PublicBroadReadGuardrail,
+    context_packet_guardrail: &PublicContextPacketGuardrail,
+    mcp_surface: &PublicMcpSurfaceEvidence,
+    mcp_contract: &PublicMcpContractEvidence,
+    agent_setup: &PublicAgentSetupEvidence,
+    public_checkouts: &PublicCheckoutEvidence,
+) -> PublicEvidencePack {
+    let mut fixture_manifests: Vec<String> = public_benchmarks
+        .iter()
+        .map(|evidence| evidence.manifest.clone())
+        .collect();
+    fixture_manifests.push(local_gate.manifest.clone());
+    fixture_manifests.sort();
+    fixture_manifests.dedup();
+
+    let mut result_reports: Vec<String> = public_benchmarks
+        .iter()
+        .map(|evidence| evidence.report.clone())
+        .collect();
+    result_reports.extend(
+        public_result_catalog
+            .reports
+            .iter()
+            .map(|entry| entry.report.clone()),
+    );
+    result_reports.extend(
+        repo_packer_baselines
+            .iter()
+            .map(|baseline| baseline.path.clone()),
+    );
+    result_reports.extend(
+        agent_native_search_baselines
+            .iter()
+            .map(|baseline| baseline.path.clone()),
+    );
+    result_reports.sort();
+    result_reports.dedup();
+
+    let total_public_evaluated: usize = public_benchmarks
+        .iter()
+        .map(|evidence| evidence.evaluated)
+        .sum();
+    let mut metrics = vec![
+        PublicProofMetric {
+            name: "local.expected_file_recall".to_string(),
+            value: serde_json::json!(local_gate.expected_file_recall),
+            target: Some(serde_json::json!(1.0)),
+            status: metric_status(local_gate.expected_file_recall >= 1.0),
+        },
+        PublicProofMetric {
+            name: "local.retrieval_model_tokens".to_string(),
+            value: serde_json::json!(local_gate.retrieval_model_tokens),
+            target: Some(serde_json::json!(0)),
+            status: metric_status(local_gate.retrieval_model_tokens == 0),
+        },
+        PublicProofMetric {
+            name: "local.per_query_retrieval_cost_usd".to_string(),
+            value: serde_json::json!(local_gate.per_query_retrieval_cost_usd),
+            target: Some(serde_json::json!(0.0)),
+            status: metric_status(local_gate.per_query_retrieval_cost_usd <= f64::EPSILON),
+        },
+        PublicProofMetric {
+            name: "local.default_code_upload_required".to_string(),
+            value: serde_json::json!(local_gate.default_code_upload_required),
+            target: Some(serde_json::json!(false)),
+            status: metric_status(!local_gate.default_code_upload_required),
+        },
+        PublicProofMetric {
+            name: "public.total_evaluated".to_string(),
+            value: serde_json::json!(total_public_evaluated),
+            target: targets
+                .minimum_total_public_evaluated
+                .map(|target| serde_json::json!(target)),
+            status: metric_status(
+                targets
+                    .minimum_total_public_evaluated
+                    .is_none_or(|target| total_public_evaluated >= target),
+            ),
+        },
+        PublicProofMetric {
+            name: "mcp_surface.exposed_tools".to_string(),
+            value: serde_json::json!(mcp_surface.exposed_tools.len()),
+            target: Some(serde_json::json!(
+                mcp_surface.required_first_mile_tools.len()
+            )),
+            status: metric_status(
+                mcp_surface.exposed_tools.len() >= mcp_surface.required_first_mile_tools.len(),
+            ),
+        },
+        PublicProofMetric {
+            name: "mcp_surface.required_first_mile_tools_covered".to_string(),
+            value: serde_json::json!(
+                mcp_surface.required_first_mile_tools.len()
+                    - mcp_surface.missing_required_tools.len()
+            ),
+            target: Some(serde_json::json!(
+                mcp_surface.required_first_mile_tools.len()
+            )),
+            status: metric_status(mcp_surface.missing_required_tools.is_empty()),
+        },
+        PublicProofMetric {
+            name: "mcp_contract.required_structured_content_fields".to_string(),
+            value: serde_json::json!(mcp_contract.required_structured_content_fields.len()),
+            target: Some(serde_json::json!(
+                mcp::CONTEXT_STRUCTURED_CONTENT_FIELDS.len()
+            )),
+            status: mcp_contract.status.clone(),
+        },
+        PublicProofMetric {
+            name: "mcp_contract.supported_instruction_expansion_keys".to_string(),
+            value: serde_json::json!(mcp_contract.supported_instruction_expansion_keys.len()),
+            target: Some(serde_json::json!(
+                mcp::CONTEXT_INSTRUCTION_EXPANSION_KEYS.len()
+            )),
+            status: mcp_contract.status.clone(),
+        },
+        PublicProofMetric {
+            name: "mcp_contract.required_freshness_fields".to_string(),
+            value: serde_json::json!(mcp_contract.required_freshness_fields.len()),
+            target: Some(serde_json::json!(mcp::CONTEXT_FRESHNESS_FIELDS.len())),
+            status: mcp_contract.status.clone(),
+        },
+        PublicProofMetric {
+            name: "mcp_contract.default_token_budget".to_string(),
+            value: serde_json::json!(mcp_contract.default_token_budget),
+            target: Some(serde_json::json!(query::DEFAULT_AGENT_CONTEXT_TOKEN_BUDGET)),
+            status: mcp_contract.status.clone(),
+        },
+        PublicProofMetric {
+            name: "agent_setup.agent_coverage_count".to_string(),
+            value: serde_json::json!(agent_setup.agent_coverage_count),
+            target: Some(serde_json::json!(agent_setup.minimum_agent_coverage)),
+            status: metric_status(
+                agent_setup.agent_coverage_count >= agent_setup.minimum_agent_coverage,
+            ),
+        },
+        PublicProofMetric {
+            name: "agent_setup.priority_clients_covered".to_string(),
+            value: serde_json::json!(agent_setup.priority_clients_covered.len()),
+            target: Some(serde_json::json!(agent_setup.priority_clients.len())),
+            status: metric_status(
+                agent_setup.priority_clients_covered.len() == agent_setup.priority_clients.len(),
+            ),
+        },
+        PublicProofMetric {
+            name: "agent_setup.default_layer_clients_covered".to_string(),
+            value: serde_json::json!(agent_setup.default_layer_clients_covered.len()),
+            target: Some(serde_json::json!(agent_setup.default_layer_clients.len())),
+            status: metric_status(
+                agent_setup.default_layer_clients_covered.len()
+                    == agent_setup.default_layer_clients.len()
+                    && agent_setup.missing_default_layer_clients.is_empty(),
+            ),
+        },
+        PublicProofMetric {
+            name: "agent_setup.missing_required_agents".to_string(),
+            value: serde_json::json!(agent_setup.missing_required_agents.len()),
+            target: Some(serde_json::json!(0)),
+            status: metric_status(agent_setup.missing_required_agents.is_empty()),
+        },
+        PublicProofMetric {
+            name: "public_checkouts.missing_repos".to_string(),
+            value: serde_json::json!(public_checkouts.missing_repos.len()),
+            target: Some(serde_json::json!(0)),
+            status: metric_status(public_checkouts.missing_repos.is_empty()),
+        },
+        PublicProofMetric {
+            name: "public_checkouts.missing_manifests".to_string(),
+            value: serde_json::json!(public_checkouts.missing_manifests.len()),
+            target: Some(serde_json::json!(0)),
+            status: metric_status(public_checkouts.missing_manifests.is_empty()),
+        },
+        PublicProofMetric {
+            name: "broad_read.baseline_context_payload_tokens".to_string(),
+            value: serde_json::json!(broad_read_guardrail.baseline_context_payload_tokens),
+            target: Some(serde_json::json!(1)),
+            status: metric_status(broad_read_guardrail.baseline_context_payload_tokens > 0),
+        },
+        PublicProofMetric {
+            name: "broad_read.callsieve_context_payload_tokens".to_string(),
+            value: serde_json::json!(broad_read_guardrail.callsieve_context_payload_tokens),
+            target: Some(serde_json::json!(1)),
+            status: metric_status(broad_read_guardrail.callsieve_context_payload_tokens > 0),
+        },
+        PublicProofMetric {
+            name: "broad_read.context_payload_tokens_saved".to_string(),
+            value: serde_json::json!(broad_read_guardrail.context_payload_tokens_saved),
+            target: Some(serde_json::json!(1)),
+            status: metric_status(broad_read_guardrail.context_payload_tokens_saved > 0),
+        },
+        PublicProofMetric {
+            name: "broad_read.context_payload_reduction_percent".to_string(),
+            value: serde_json::json!(broad_read_guardrail.context_payload_reduction_percent),
+            target: Some(serde_json::json!(
+                broad_read_guardrail.minimum_context_payload_reduction_percent
+            )),
+            status: broad_read_guardrail.status.clone(),
+        },
+        PublicProofMetric {
+            name: "broad_read.avoided_file_reads".to_string(),
+            value: serde_json::json!(broad_read_guardrail.avoided_file_reads),
+            target: None,
+            status: broad_read_guardrail.status.clone(),
+        },
+        PublicProofMetric {
+            name: "broad_read.avoided_grep_commands".to_string(),
+            value: serde_json::json!(broad_read_guardrail.avoided_grep_commands),
+            target: None,
+            status: broad_read_guardrail.status.clone(),
+        },
+        PublicProofMetric {
+            name: "context_packet.selected_files".to_string(),
+            value: serde_json::json!(context_packet_guardrail.selected_files),
+            target: Some(serde_json::json!(1)),
+            status: metric_status(context_packet_guardrail.selected_files > 0),
+        },
+        PublicProofMetric {
+            name: "context_packet.selected_symbols".to_string(),
+            value: serde_json::json!(context_packet_guardrail.selected_symbols),
+            target: Some(serde_json::json!(1)),
+            status: metric_status(context_packet_guardrail.selected_symbols > 0),
+        },
+        PublicProofMetric {
+            name: "context_packet.related_tests".to_string(),
+            value: serde_json::json!(context_packet_guardrail.related_tests),
+            target: Some(serde_json::json!(1)),
+            status: metric_status(context_packet_guardrail.related_tests > 0),
+        },
+        PublicProofMetric {
+            name: "context_packet.blast_radius_hints".to_string(),
+            value: serde_json::json!(context_packet_guardrail.blast_radius_hints),
+            target: Some(serde_json::json!(1)),
+            status: metric_status(context_packet_guardrail.blast_radius_hints > 0),
+        },
+        PublicProofMetric {
+            name: "context_packet.call_graph_hints".to_string(),
+            value: serde_json::json!(context_packet_guardrail.call_graph_hints),
+            target: Some(serde_json::json!(1)),
+            status: metric_status(context_packet_guardrail.call_graph_hints > 0),
+        },
+        PublicProofMetric {
+            name: "context_packet.selection_evidence".to_string(),
+            value: serde_json::json!({
+                "selection_reasons": context_packet_guardrail.selection_reasons,
+                "selection_signals": context_packet_guardrail.selection_signals,
+                "files_with_selection_confidence": context_packet_guardrail.files_with_selection_confidence
+            }),
+            target: Some(serde_json::json!({
+                "selection_reasons": 1,
+                "selection_signals": 1,
+                "files_with_selection_confidence": 1
+            })),
+            status: metric_status(
+                context_packet_guardrail.selection_reasons > 0
+                    && context_packet_guardrail.selection_signals > 0
+                    && context_packet_guardrail.files_with_selection_confidence > 0,
+            ),
+        },
+        PublicProofMetric {
+            name: "context_packet.local_expansion_targets".to_string(),
+            value: serde_json::json!({
+                "focus_targets": context_packet_guardrail.focus_targets,
+                "relationship_followup_targets": context_packet_guardrail.relationship_followup_targets,
+                "test_followup_targets": context_packet_guardrail.test_followup_targets
+            }),
+            target: Some(serde_json::json!({
+                "focus_targets": 1,
+                "relationship_followup_targets": 1,
+                "test_followup_targets": 1
+            })),
+            status: metric_status(
+                context_packet_guardrail.focus_targets > 0
+                    && context_packet_guardrail.relationship_followup_targets > 0
+                    && context_packet_guardrail.test_followup_targets > 0,
+            ),
+        },
+    ];
+    if let Some(artifact) = terminal_artifacts
+        .iter()
+        .find(|artifact| artifact.id == "mcp-contract")
+    {
+        metrics.push(PublicProofMetric {
+            name: "mcp_contract.artifact_matches_live_contract".to_string(),
+            value: serde_json::json!(artifact.status == "pass"),
+            target: Some(serde_json::json!(true)),
+            status: artifact.status.clone(),
+        });
+    }
+    if let Some(artifact) = terminal_artifacts
+        .iter()
+        .find(|artifact| artifact.id == "agent-native-template")
+    {
+        metrics.push(PublicProofMetric {
+            name: "agent_native_template.ready_for_measurement".to_string(),
+            value: serde_json::json!(artifact.status == "pass"),
+            target: Some(serde_json::json!(true)),
+            status: artifact.status.clone(),
+        });
+    }
+    if let Some(artifact) = terminal_artifacts
+        .iter()
+        .find(|artifact| artifact.id == "agent-native-protocol")
+    {
+        metrics.push(PublicProofMetric {
+            name: "agent_native_protocol.artifact_matches_live_protocol".to_string(),
+            value: serde_json::json!(artifact.status == "pass"),
+            target: Some(serde_json::json!(true)),
+            status: artifact.status.clone(),
+        });
+    }
+    if let Some(artifact) = terminal_artifacts
+        .iter()
+        .find(|artifact| artifact.id == "agent-native-check")
+    {
+        metrics.push(PublicProofMetric {
+            name: "agent_native_check.measured_preflight_passed".to_string(),
+            value: serde_json::json!(artifact.status == "pass"),
+            target: Some(serde_json::json!(true)),
+            status: artifact.status.clone(),
+        });
+    }
+    metrics.push(PublicProofMetric {
+        name: "local.default_packet_tokens".to_string(),
+        value: serde_json::json!(local_gate.default_packet_tokens),
+        target: targets
+            .maximum_default_packet_tokens
+            .map(|target| serde_json::json!(target)),
+        status: metric_status(
+            targets
+                .maximum_default_packet_tokens
+                .is_none_or(|target| local_gate.default_packet_tokens <= target),
+        ),
+    });
+    for evidence in public_benchmarks {
+        metrics.push(PublicProofMetric {
+            name: format!("public.{}.first_correct_file_rate_at_k", evidence.id),
+            value: serde_json::json!(evidence.first_correct_file_rate_at_k),
+            target: None,
+            status: evidence.status.clone(),
+        });
+        if let Some(minus_grep) = evidence.minus_grep {
+            metrics.push(PublicProofMetric {
+                name: format!("public.{}.minus_grep", evidence.id),
+                value: serde_json::json!(minus_grep),
+                target: None,
+                status: metric_status(minus_grep >= 0.0),
+            });
+        }
+    }
+    if let Some(best) = &public_result_catalog.best_swe_bench_style {
+        metrics.push(PublicProofMetric {
+            name: "public_catalog.best_swe_bench_style_first_correct_file_rate_at_k".to_string(),
+            value: serde_json::json!(best.first_correct_file_rate_at_k),
+            target: Some(serde_json::json!(best.target_first_correct_file_rate_at_k)),
+            status: best.status.clone(),
+        });
+    }
+    if let Some(best) = &public_result_catalog.best_natural_language {
+        metrics.push(PublicProofMetric {
+            name: "public_catalog.best_natural_language_first_correct_file_rate_at_k".to_string(),
+            value: serde_json::json!(best.first_correct_file_rate_at_k),
+            target: Some(serde_json::json!(best.target_first_correct_file_rate_at_k)),
+            status: best.status.clone(),
+        });
+    }
+    for baseline in repo_packer_baselines {
+        if let Some(tokens) = baseline.tokens {
+            metrics.push(PublicProofMetric {
+                name: format!("repo_packer.{}.tokens", baseline.id),
+                value: serde_json::json!(tokens),
+                target: None,
+                status: baseline.status.clone(),
+            });
+        }
+        if let Some(ratio) = baseline.token_ratio_vs_callsieve_packet {
+            metrics.push(PublicProofMetric {
+                name: format!(
+                    "repo_packer.{}.token_ratio_vs_callsieve_packet",
+                    baseline.id
+                ),
+                value: serde_json::json!(ratio),
+                target: baseline
+                    .minimum_token_ratio_vs_callsieve_packet
+                    .map(|target| serde_json::json!(target)),
+                status: baseline.status.clone(),
+            });
+        }
+    }
+    metrics.push(PublicProofMetric {
+        name: "agent_native_search.measured_baseline_count".to_string(),
+        value: serde_json::json!(agent_native_search_summary.measured_baseline_count),
+        target: Some(serde_json::json!(
+            targets
+                .minimum_agent_native_measured_baselines
+                .unwrap_or(agent_native_search_summary.required_baseline_count)
+        )),
+        status: metric_status(
+            agent_native_search_summary.measured_baseline_count
+                >= targets
+                    .minimum_agent_native_measured_baselines
+                    .unwrap_or(agent_native_search_summary.required_baseline_count),
+        ),
+    });
+    metrics.push(PublicProofMetric {
+        name: "agent_native_search.transcript_backed_baseline_count".to_string(),
+        value: serde_json::json!(agent_native_search_summary.transcript_backed_baseline_count),
+        target: Some(serde_json::json!(
+            targets
+                .minimum_agent_native_measured_baselines
+                .unwrap_or(agent_native_search_summary.required_baseline_count)
+        )),
+        status: metric_status(
+            agent_native_search_summary.transcript_backed_baseline_count
+                >= targets
+                    .minimum_agent_native_measured_baselines
+                    .unwrap_or(agent_native_search_summary.required_baseline_count),
+        ),
+    });
+    metrics.push(PublicProofMetric {
+        name: "agent_native_search.distinct_agent_tool_count".to_string(),
+        value: serde_json::json!(agent_native_search_summary.distinct_agent_tool_count),
+        target: targets
+            .minimum_agent_native_distinct_tools
+            .map(|target| serde_json::json!(target)),
+        status: metric_status(
+            targets
+                .minimum_agent_native_distinct_tools
+                .is_none_or(|minimum| {
+                    agent_native_search_summary.distinct_agent_tool_count >= minimum
+                }),
+        ),
+    });
+    metrics.push(PublicProofMetric {
+        name: "agent_native_search.distinct_repository_count".to_string(),
+        value: serde_json::json!(agent_native_search_summary.distinct_repository_count),
+        target: targets
+            .minimum_agent_native_repositories
+            .map(|target| serde_json::json!(target)),
+        status: metric_status(
+            targets
+                .minimum_agent_native_repositories
+                .is_none_or(|minimum| {
+                    agent_native_search_summary.distinct_repository_count >= minimum
+                }),
+        ),
+    });
+    metrics.push(PublicProofMetric {
+        name: "agent_native_search.task_language_count".to_string(),
+        value: serde_json::json!(agent_native_search_summary.task_language_count),
+        target: targets
+            .minimum_agent_native_task_languages
+            .map(|target| serde_json::json!(target)),
+        status: metric_status(
+            targets
+                .minimum_agent_native_task_languages
+                .is_none_or(|minimum| agent_native_search_summary.task_language_count >= minimum),
+        ),
+    });
+    for baseline in agent_native_search_baselines {
+        metrics.push(PublicProofMetric {
+            name: format!("agent_native_search.{}.transcript_provenance", baseline.id),
+            value: serde_json::json!(baseline.transcript_provenance_status == "pass"),
+            target: Some(serde_json::json!(true)),
+            status: baseline.transcript_provenance_status.clone(),
+        });
+        if let Some(tasks) = baseline.tasks {
+            metrics.push(PublicProofMetric {
+                name: format!("agent_native_search.{}.tasks", baseline.id),
+                value: serde_json::json!(tasks),
+                target: baseline
+                    .minimum_tasks
+                    .map(|target| serde_json::json!(target)),
+                status: baseline.status.clone(),
+            });
+        }
+        if let Some(delta) = baseline.callsieve_minus_agent_native_first_correct_file_rate_at_k {
+            metrics.push(PublicProofMetric {
+                name: format!(
+                    "agent_native_search.{}.callsieve_minus_agent_native_first_correct_file_rate_at_k",
+                    baseline.id
+                ),
+                value: serde_json::json!(delta),
+                target: baseline
+                    .minimum_callsieve_minus_agent_native_first_correct_file_rate_at_k
+                    .map(|target| serde_json::json!(target)),
+                status: baseline.status.clone(),
+            });
+        }
+        if let Some(ratio) = baseline.agent_native_context_token_ratio_vs_callsieve {
+            metrics.push(PublicProofMetric {
+                name: format!(
+                    "agent_native_search.{}.context_token_ratio_vs_callsieve",
+                    baseline.id
+                ),
+                value: serde_json::json!(ratio),
+                target: baseline
+                    .minimum_agent_native_context_token_ratio_vs_callsieve
+                    .map(|target| serde_json::json!(target)),
+                status: baseline.status.clone(),
+            });
+        }
+    }
+
+    let misses = public_benchmarks
+        .iter()
+        .map(|evidence| PublicProofMissEvidence {
+            report: evidence.id.clone(),
+            preferred_arm: evidence.preferred_arm.clone(),
+            sampled_misses: evidence.misses.len(),
+            sample: evidence.misses.clone(),
+        })
+        .collect();
+
+    PublicEvidencePack {
+        commands: commands.to_vec(),
+        fixture_manifests,
+        result_reports,
+        metrics,
+        misses,
+        receipt_commands: vec![
+            "cargo run -- receipt . --latest --format markdown".to_string(),
+            "cargo run -- receipts .".to_string(),
+        ],
+        terminal_artifacts,
+        public_checkouts: public_checkouts.clone(),
+        broad_read_guardrail: broad_read_guardrail.clone(),
+        context_packet_guardrail: context_packet_guardrail.clone(),
+        repo_packer_baselines: repo_packer_baselines.to_vec(),
+        agent_native_search_summary: agent_native_search_summary.clone(),
+        agent_native_search_baselines: agent_native_search_baselines.to_vec(),
+        mcp_surface: mcp_surface.clone(),
+        mcp_contract: mcp_contract.clone(),
+        agent_setup: agent_setup.clone(),
+    }
+}
+
+fn metric_status(pass: bool) -> String {
+    if pass { "pass" } else { "needs_work" }.to_string()
+}
+
+fn public_artifact_evidence(
+    inputs: &[PublicProofArtifactInput],
+) -> Vec<PublicProofArtifactEvidence> {
+    inputs
+        .iter()
+        .map(|input| {
+            let exists = input.path.is_file();
+            let (status, validation, source_artifact_hashes) =
+                public_artifact_status(input, exists);
+            PublicProofArtifactEvidence {
+                id: input.id.clone(),
+                path: input.path.display().to_string(),
+                kind: input.kind.clone(),
+                description: input.description.clone(),
+                required: input.required,
+                exists,
+                status,
+                validation,
+                source_artifact_hashes,
+            }
+        })
+        .collect()
+}
+
+fn public_artifact_status(
+    input: &PublicProofArtifactInput,
+    exists: bool,
+) -> (String, String, Vec<String>) {
+    if input.id == "mcp-contract" {
+        let (status, validation) = public_mcp_contract_artifact_status(input, exists);
+        return (status, validation, Vec::new());
+    }
+    if input.id == "agent-native-template" {
+        let (status, validation) = public_agent_native_template_artifact_status(input, exists);
+        return (status, validation, Vec::new());
+    }
+    if input.id == "agent-native-measurement-plan" {
+        let (status, validation) =
+            public_agent_native_measurement_plan_artifact_status(input, exists);
+        return (status, validation, Vec::new());
+    }
+    if input.id == "agent-native-protocol" {
+        let (status, validation) = public_agent_native_protocol_artifact_status(input, exists);
+        return (status, validation, Vec::new());
+    }
+    if input.id == "agent-native-check" {
+        return public_agent_native_check_artifact_status(input, exists);
+    }
+    if exists {
+        (
+            "pass".to_string(),
+            "artifact exists; content validation is not required for this artifact kind"
+                .to_string(),
+            Vec::new(),
+        )
+    } else if input.required {
+        (
+            "needs_work".to_string(),
+            "required artifact is missing".to_string(),
+            Vec::new(),
+        )
+    } else {
+        (
+            "not_provided".to_string(),
+            "optional artifact is not present".to_string(),
+            Vec::new(),
+        )
+    }
+}
+
+fn public_agent_native_measurement_plan_artifact_status(
+    input: &PublicProofArtifactInput,
+    exists: bool,
+) -> (String, String) {
+    if !exists {
+        return if input.required {
+            (
+                "needs_work".to_string(),
+                "required agent-native measurement plan artifact is missing".to_string(),
+            )
+        } else {
+            (
+                "not_provided".to_string(),
+                "optional agent-native measurement plan artifact is not present".to_string(),
+            )
+        };
+    }
+
+    let raw = match fs::read_to_string(&input.path) {
+        Ok(raw) => raw,
+        Err(err) => {
+            return (
+                "needs_work".to_string(),
+                format!("failed to read agent-native measurement plan artifact: {err}"),
+            );
+        }
+    };
+    let value: serde_json::Value = match serde_json::from_str(&raw) {
+        Ok(value) => value,
+        Err(err) => {
+            return (
+                "needs_work".to_string(),
+                format!("failed to parse agent-native measurement plan artifact JSON: {err}"),
+            );
+        }
+    };
+
+    let tool = value
+        .get("tool")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .trim();
+    if tool.is_empty() {
+        return (
+            "needs_work".to_string(),
+            "measurement plan must include tool".to_string(),
+        );
+    }
+    let suite = value
+        .get("suite")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .trim();
+    if suite.is_empty() {
+        return (
+            "needs_work".to_string(),
+            "measurement plan must include suite".to_string(),
+        );
+    }
+    let task_count = value
+        .get("task_count")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0) as usize;
+    let Some(tasks) = value.get("tasks").and_then(serde_json::Value::as_array) else {
+        return (
+            "needs_work".to_string(),
+            "measurement plan must include tasks".to_string(),
+        );
+    };
+    if task_count == 0 || tasks.len() != task_count {
+        return (
+            "needs_work".to_string(),
+            "measurement plan task_count must match a non-empty tasks array".to_string(),
+        );
+    }
+    let constraints = value
+        .get("constraints")
+        .and_then(serde_json::Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+    if constraints == 0 {
+        return (
+            "needs_work".to_string(),
+            "measurement plan must include constraints".to_string(),
+        );
+    }
+    let Some(post_run_artifacts) = value
+        .get("post_run_artifacts")
+        .and_then(serde_json::Value::as_object)
+    else {
+        return (
+            "needs_work".to_string(),
+            "measurement plan must include post_run_artifacts".to_string(),
+        );
+    };
+    for key in [
+        "protocol",
+        "task_log",
+        "transcript",
+        "check",
+        "baseline",
+        "overlay_manifest",
+        "proof",
+    ] {
+        if post_run_artifacts
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .trim()
+            .is_empty()
+        {
+            return (
+                "needs_work".to_string(),
+                format!("measurement plan post_run_artifacts must include {key}"),
+            );
+        }
+    }
+    let token_accounting = value
+        .get("token_accounting")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .trim();
+    if token_accounting.is_empty() {
+        return (
+            "needs_work".to_string(),
+            "measurement plan must include token_accounting".to_string(),
+        );
+    }
+
+    for task in tasks {
+        let task_id = task
+            .get("task_id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .trim();
+        let prompt = task
+            .get("prompt")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .trim();
+        let command = task.get("command").and_then(serde_json::Value::as_array);
+        let raw_transcript = task
+            .get("raw_transcript")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .trim();
+        if task_id.is_empty()
+            || prompt.is_empty()
+            || command.is_none_or(Vec::is_empty)
+            || raw_transcript.is_empty()
+        {
+            return (
+                "needs_work".to_string(),
+                "measurement plan tasks must include task_id, prompt, command, and raw_transcript"
+                    .to_string(),
+            );
+        }
+    }
+
+    (
+        "pass".to_string(),
+        format!("valid {tool} measurement plan for {task_count} {suite} tasks"),
+    )
+}
+
+fn public_agent_native_template_artifact_status(
+    input: &PublicProofArtifactInput,
+    exists: bool,
+) -> (String, String) {
+    if !exists {
+        return if input.required {
+            (
+                "needs_work".to_string(),
+                "required agent-native template artifact is missing".to_string(),
+            )
+        } else {
+            (
+                "not_provided".to_string(),
+                "optional agent-native template artifact is not present".to_string(),
+            )
+        };
+    }
+
+    let raw = match fs::read_to_string(&input.path) {
+        Ok(raw) => raw,
+        Err(err) => {
+            return (
+                "needs_work".to_string(),
+                format!("failed to read agent-native template artifact: {err}"),
+            );
+        }
+    };
+    let value: serde_json::Value = match serde_json::from_str(&raw) {
+        Ok(value) => value,
+        Err(err) => {
+            return (
+                "needs_work".to_string(),
+                format!("failed to parse agent-native template artifact JSON: {err}"),
+            );
+        }
+    };
+
+    if value.get("command").and_then(serde_json::Value::as_str) != Some("agent-native-template") {
+        return (
+            "needs_work".to_string(),
+            "command is not agent-native-template".to_string(),
+        );
+    }
+    if value
+        .get("schema_version")
+        .and_then(serde_json::Value::as_u64)
+        != Some(1)
+    {
+        return (
+            "needs_work".to_string(),
+            "schema_version must be 1".to_string(),
+        );
+    }
+    if value.get("status").and_then(serde_json::Value::as_str)
+        != Some("needs_agent_native_measurement")
+    {
+        return (
+            "needs_work".to_string(),
+            "status must remain needs_agent_native_measurement until a real native-search run is recorded".to_string(),
+        );
+    }
+    if value
+        .get("locally_measured")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(true)
+    {
+        return (
+            "needs_work".to_string(),
+            "template must not be marked locally measured".to_string(),
+        );
+    }
+
+    let Some(source_tasks) = value
+        .get("source_tasks")
+        .and_then(serde_json::Value::as_str)
+        .filter(|path| !path.trim().is_empty())
+    else {
+        return (
+            "needs_work".to_string(),
+            "template must include source_tasks".to_string(),
+        );
+    };
+    let Some(source_tasks_hash) = value
+        .get("source_tasks_hash")
+        .and_then(serde_json::Value::as_str)
+        .filter(|hash| !hash.trim().is_empty())
+    else {
+        return (
+            "needs_work".to_string(),
+            "template must include source_tasks_hash".to_string(),
+        );
+    };
+    let source_bytes = match fs::read(source_tasks) {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            return (
+                "needs_work".to_string(),
+                format!("failed to read template source_tasks `{source_tasks}`: {err}"),
+            );
+        }
+    };
+    let current_source_hash = indexer::stable_content_hash(&source_bytes);
+    if current_source_hash != source_tasks_hash {
+        return (
+            "needs_work".to_string(),
+            "source_tasks_hash does not match the current source task file".to_string(),
+        );
+    }
+
+    let Some(root) = value
+        .get("root")
+        .and_then(serde_json::Value::as_str)
+        .filter(|root| !root.trim().is_empty())
+    else {
+        return (
+            "needs_work".to_string(),
+            "template must include root".to_string(),
+        );
+    };
+    let Some(index_fingerprint) = value
+        .get("index_fingerprint")
+        .and_then(serde_json::Value::as_str)
+        .filter(|fingerprint| !fingerprint.trim().is_empty())
+    else {
+        return (
+            "needs_work".to_string(),
+            "template must include index_fingerprint".to_string(),
+        );
+    };
+    let pinned_base_commits = value
+        .get("pinned_base_commits")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    if !pinned_base_commits {
+        let current_index = match store::json_store::load_index(Path::new(root)) {
+            Ok(index) => index,
+            Err(err) => {
+                return (
+                    "needs_work".to_string(),
+                    format!("failed to load template root index `{root}`: {err}"),
+                );
+            }
+        };
+        let current_index_fingerprint = indexer::index_fingerprint(&current_index);
+        if current_index_fingerprint != index_fingerprint {
+            return (
+                "needs_work".to_string(),
+                "index_fingerprint does not match the current local index".to_string(),
+            );
+        }
+    }
+    let Some(retrieval_contract_fingerprint) = value
+        .get("retrieval_contract_fingerprint")
+        .and_then(serde_json::Value::as_str)
+        .filter(|fingerprint| !fingerprint.trim().is_empty())
+    else {
+        return (
+            "needs_work".to_string(),
+            "template must include retrieval_contract_fingerprint".to_string(),
+        );
+    };
+    let current_retrieval_contract_fingerprint = query::retrieval_contract_fingerprint();
+    if current_retrieval_contract_fingerprint != retrieval_contract_fingerprint {
+        return (
+            "needs_work".to_string(),
+            "retrieval_contract_fingerprint does not match the current retrieval contract"
+                .to_string(),
+        );
+    }
+
+    let Some(k) = value.get("k").and_then(serde_json::Value::as_u64) else {
+        return (
+            "needs_work".to_string(),
+            "template must include k".to_string(),
+        );
+    };
+    if k == 0 {
+        return (
+            "needs_work".to_string(),
+            "template k must be greater than zero".to_string(),
+        );
+    }
+    let Some(limit) = value.get("limit").and_then(serde_json::Value::as_u64) else {
+        return (
+            "needs_work".to_string(),
+            "template must include limit".to_string(),
+        );
+    };
+    let Some(snippets_per_file) = value
+        .get("snippets_per_file")
+        .and_then(serde_json::Value::as_u64)
+    else {
+        return (
+            "needs_work".to_string(),
+            "template must include snippets_per_file".to_string(),
+        );
+    };
+    let profile = match value
+        .get("profile")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+    {
+        "skim" => ContextProfileArg::Skim,
+        "normal" => ContextProfileArg::Normal,
+        "full" => ContextProfileArg::Full,
+        _ => {
+            return (
+                "needs_work".to_string(),
+                "template profile must be skim, normal, or full".to_string(),
+            );
+        }
+    };
+    let Some(token_budget) = value
+        .get("token_budget")
+        .and_then(serde_json::Value::as_u64)
+    else {
+        return (
+            "needs_work".to_string(),
+            "template must include token_budget".to_string(),
+        );
+    };
+
+    let Some(tasks) = value.get("tasks").and_then(serde_json::Value::as_array) else {
+        return (
+            "needs_work".to_string(),
+            "template must include a non-empty tasks array".to_string(),
+        );
+    };
+    if tasks.is_empty() {
+        return (
+            "needs_work".to_string(),
+            "template must include at least one task".to_string(),
+        );
+    }
+    for task in tasks {
+        let id = task
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown");
+        let expected_files = task
+            .get("expected_files")
+            .and_then(serde_json::Value::as_array)
+            .map(Vec::len)
+            .unwrap_or(0);
+        let agent_native_files = task
+            .get("agent_native_files")
+            .and_then(serde_json::Value::as_array)
+            .map(Vec::len)
+            .unwrap_or(usize::MAX);
+        let callsieve_files = task
+            .get("callsieve_files")
+            .and_then(serde_json::Value::as_array)
+            .map(Vec::len)
+            .unwrap_or(0);
+        let agent_native_context_tokens = task
+            .get("agent_native_context_tokens")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(u64::MAX);
+        let callsieve_packet_tokens = task
+            .get("callsieve_packet_tokens")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+        let recording_status = task
+            .get("recording_status")
+            .and_then(serde_json::Value::as_str);
+        if expected_files == 0 {
+            return (
+                "needs_work".to_string(),
+                format!("task `{id}` is missing expected_files"),
+            );
+        }
+        if agent_native_files != 0 || agent_native_context_tokens != 0 {
+            return (
+                "needs_work".to_string(),
+                format!("task `{id}` already contains native-search measurements"),
+            );
+        }
+        if callsieve_files == 0 || callsieve_packet_tokens == 0 {
+            return (
+                "needs_work".to_string(),
+                format!("task `{id}` is missing CallSieve files or packet tokens"),
+            );
+        }
+        if recording_status != Some("needs_agent_native_measurement") {
+            return (
+                "needs_work".to_string(),
+                format!("task `{id}` recording_status must be needs_agent_native_measurement"),
+            );
+        }
+    }
+    let recomputed_template = match agent_native_template(
+        Path::new(root),
+        Path::new(source_tasks),
+        AgentNativeTemplateOptions {
+            k: k as usize,
+            limit: limit as usize,
+            snippets_per_file: snippets_per_file as usize,
+            include_snippets: snippets_per_file > 0,
+            profile,
+            token_budget: token_budget as usize,
+        },
+    ) {
+        Ok(output) => output,
+        Err(err) => {
+            return (
+                "needs_work".to_string(),
+                format!("failed to recompute agent-native template: {err}"),
+            );
+        }
+    };
+    if recomputed_template.index_fingerprint != index_fingerprint {
+        return (
+            "needs_work".to_string(),
+            "index_fingerprint does not match recomputed agent-native template".to_string(),
+        );
+    }
+    let recomputed_tasks = match serde_json::to_value(&recomputed_template.tasks) {
+        Ok(tasks) => tasks,
+        Err(err) => {
+            return (
+                "needs_work".to_string(),
+                format!("failed to serialize recomputed agent-native template tasks: {err}"),
+            );
+        }
+    };
+    if value.get("tasks") != Some(&recomputed_tasks) {
+        return (
+            "needs_work".to_string(),
+            "template task payload does not match recomputed CallSieve template".to_string(),
+        );
+    }
+
+    (
+        "pass".to_string(),
+        format!(
+            "agent-native template is ready for {} measured tasks and matches recomputed source/index/retrieval provenance",
+            tasks.len()
+        ),
+    )
+}
+
+fn public_mcp_contract_artifact_status(
+    input: &PublicProofArtifactInput,
+    exists: bool,
+) -> (String, String) {
+    if !exists {
+        return if input.required {
+            (
+                "needs_work".to_string(),
+                "required MCP contract artifact is missing".to_string(),
+            )
+        } else {
+            (
+                "not_provided".to_string(),
+                "optional MCP contract artifact is not present".to_string(),
+            )
+        };
+    }
+
+    let raw = match fs::read_to_string(&input.path) {
+        Ok(raw) => raw,
+        Err(err) => {
+            return (
+                "needs_work".to_string(),
+                format!("failed to read MCP contract artifact: {err}"),
+            );
+        }
+    };
+    let actual: serde_json::Value = match serde_json::from_str(&raw) {
+        Ok(actual) => actual,
+        Err(err) => {
+            return (
+                "needs_work".to_string(),
+                format!("failed to parse MCP contract artifact JSON: {err}"),
+            );
+        }
+    };
+    let expected = match serde_json::to_value(mcp_contract_output()) {
+        Ok(expected) => expected,
+        Err(err) => {
+            return (
+                "needs_work".to_string(),
+                format!("failed to build live MCP contract JSON: {err}"),
+            );
+        }
+    };
+    if actual == expected {
+        (
+            "pass".to_string(),
+            "matches live callsieve mcp-contract output".to_string(),
+        )
+    } else {
+        (
+            "needs_work".to_string(),
+            "does not match live callsieve mcp-contract output".to_string(),
+        )
+    }
+}
+
+fn public_agent_native_protocol_artifact_status(
+    input: &PublicProofArtifactInput,
+    exists: bool,
+) -> (String, String) {
+    if !exists {
+        return if input.required {
+            (
+                "needs_work".to_string(),
+                "required agent-native protocol artifact is missing".to_string(),
+            )
+        } else {
+            (
+                "not_provided".to_string(),
+                "optional agent-native protocol artifact is not present".to_string(),
+            )
+        };
+    }
+
+    let raw = match fs::read_to_string(&input.path) {
+        Ok(raw) => raw,
+        Err(err) => {
+            return (
+                "needs_work".to_string(),
+                format!("failed to read agent-native protocol artifact: {err}"),
+            );
+        }
+    };
+    let actual: serde_json::Value = match serde_json::from_str(&raw) {
+        Ok(actual) => actual,
+        Err(err) => {
+            return (
+                "needs_work".to_string(),
+                format!("failed to parse agent-native protocol artifact JSON: {err}"),
+            );
+        }
+    };
+    let expected = match serde_json::to_value(agent_native_protocol_output()) {
+        Ok(expected) => expected,
+        Err(err) => {
+            return (
+                "needs_work".to_string(),
+                format!("failed to build live agent-native protocol JSON: {err}"),
+            );
+        }
+    };
+    if actual == expected {
+        (
+            "pass".to_string(),
+            "matches live callsieve agent-native-protocol output".to_string(),
+        )
+    } else {
+        (
+            "needs_work".to_string(),
+            "does not match live callsieve agent-native-protocol output".to_string(),
+        )
+    }
+}
+
+fn public_agent_native_check_artifact_status(
+    input: &PublicProofArtifactInput,
+    exists: bool,
+) -> (String, String, Vec<String>) {
+    if !exists {
+        return if input.required {
+            (
+                "needs_work".to_string(),
+                "required agent-native check artifact is missing".to_string(),
+                Vec::new(),
+            )
+        } else {
+            (
+                "not_provided".to_string(),
+                "optional agent-native check artifact is not present".to_string(),
+                Vec::new(),
+            )
+        };
+    }
+
+    let raw = match fs::read_to_string(&input.path) {
+        Ok(raw) => raw,
+        Err(err) => {
+            return (
+                "needs_work".to_string(),
+                format!("failed to read agent-native check artifact: {err}"),
+                Vec::new(),
+            );
+        }
+    };
+    let value: serde_json::Value = match serde_json::from_str(&raw) {
+        Ok(value) => value,
+        Err(err) => {
+            return (
+                "needs_work".to_string(),
+                format!("failed to parse agent-native check artifact JSON: {err}"),
+                Vec::new(),
+            );
+        }
+    };
+
+    if value.get("command").and_then(serde_json::Value::as_str) != Some("agent-native-check") {
+        return (
+            "needs_work".to_string(),
+            "command is not agent-native-check".to_string(),
+            Vec::new(),
+        );
+    }
+    if value
+        .get("schema_version")
+        .and_then(serde_json::Value::as_u64)
+        != Some(1)
+    {
+        return (
+            "needs_work".to_string(),
+            "schema_version must be 1".to_string(),
+            Vec::new(),
+        );
+    }
+    if value.get("status").and_then(serde_json::Value::as_str) != Some("pass") {
+        return (
+            "needs_work".to_string(),
+            "agent-native check status must be pass".to_string(),
+            Vec::new(),
+        );
+    }
+    if value.get("mode").and_then(serde_json::Value::as_str) != Some("measured") {
+        return (
+            "needs_work".to_string(),
+            "agent-native check mode must be measured".to_string(),
+            Vec::new(),
+        );
+    }
+
+    let task_count = value
+        .get("task_count")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    if task_count == 0 {
+        return (
+            "needs_work".to_string(),
+            "agent-native check must cover at least one task".to_string(),
+            Vec::new(),
+        );
+    }
+    for field in [
+        "tasks_ready_for_mode",
+        "tasks_with_expected_files",
+        "tasks_with_callsieve_files",
+        "tasks_with_callsieve_packet_tokens",
+        "tasks_with_agent_native_files",
+        "tasks_with_agent_native_context_tokens",
+    ] {
+        if value.get(field).and_then(serde_json::Value::as_u64) != Some(task_count) {
+            return (
+                "needs_work".to_string(),
+                format!("{field} must equal task_count for measured preflight proof"),
+                Vec::new(),
+            );
+        }
+    }
+    let issues_empty = value
+        .get("issues")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(Vec::is_empty);
+    if !issues_empty {
+        return (
+            "needs_work".to_string(),
+            "agent-native check artifact must have no issues".to_string(),
+            Vec::new(),
+        );
+    }
+
+    let Some(source_artifacts) = value
+        .get("source_artifact_evidence")
+        .and_then(serde_json::Value::as_array)
+    else {
+        return (
+            "needs_work".to_string(),
+            "agent-native check must include source_artifact_evidence".to_string(),
+            Vec::new(),
+        );
+    };
+    if source_artifacts.is_empty() {
+        return (
+            "needs_work".to_string(),
+            "agent-native measured check must include at least one transcript or export source artifact".to_string(),
+            Vec::new(),
+        );
+    }
+
+    let mut task_log_artifacts = 0usize;
+    let mut task_log_artifact_path = None;
+    let mut transcript_or_export_artifacts = 0usize;
+    let mut transcript_or_export_artifact_paths = Vec::new();
+    let mut source_artifact_hashes = Vec::new();
+    for artifact in source_artifacts {
+        let source_path = artifact
+            .get("path")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        if source_path.trim().is_empty() {
+            return (
+                "needs_work".to_string(),
+                "agent-native check source artifact is missing path".to_string(),
+                Vec::new(),
+            );
+        }
+        let role = artifact
+            .get("role")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        if role != "task_log" && role != "agent_native_transcript_or_export" {
+            return (
+                "needs_work".to_string(),
+                "agent-native check source artifact role must be task_log or agent_native_transcript_or_export".to_string(),
+                Vec::new(),
+            );
+        }
+        let declared_bytes = artifact
+            .get("bytes")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+        if declared_bytes == 0 {
+            return (
+                "needs_work".to_string(),
+                "agent-native check source artifact bytes must be greater than 0".to_string(),
+                Vec::new(),
+            );
+        }
+        let hash = artifact
+            .get("hash")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        if !hash.starts_with("fnv1a64:") || hash.len() == "fnv1a64:".len() {
+            return (
+                "needs_work".to_string(),
+                "agent-native check source artifact hash must use fnv1a64".to_string(),
+                Vec::new(),
+            );
+        }
+
+        let source_artifact_path =
+            resolve_agent_native_source_artifact_path(&input.path, source_path);
+        let bytes = match fs::read(&source_artifact_path) {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                return (
+                    "needs_work".to_string(),
+                    format!(
+                        "failed to read agent-native check source artifact `{source_path}`: {err}"
+                    ),
+                    Vec::new(),
+                );
+            }
+        };
+        if declared_bytes != bytes.len() as u64 {
+            return (
+                "needs_work".to_string(),
+                format!(
+                    "agent-native check source artifact `{source_path}` byte count does not match"
+                ),
+                Vec::new(),
+            );
+        }
+        if indexer::stable_content_hash(&bytes) != hash {
+            return (
+                "needs_work".to_string(),
+                format!("agent-native check source artifact `{source_path}` hash does not match"),
+                Vec::new(),
+            );
+        }
+        if role == "task_log" {
+            task_log_artifacts += 1;
+            task_log_artifact_path = Some(source_artifact_path);
+        } else {
+            transcript_or_export_artifacts += 1;
+            transcript_or_export_artifact_paths.push(source_artifact_path);
+        }
+        source_artifact_hashes.push(hash.to_string());
+    }
+    if task_log_artifacts != 1 {
+        return (
+            "needs_work".to_string(),
+            "agent-native check must include exactly one task_log source artifact".to_string(),
+            Vec::new(),
+        );
+    }
+    if transcript_or_export_artifacts == 0 {
+        return (
+            "needs_work".to_string(),
+            "agent-native check must include at least one transcript/export source artifact"
+                .to_string(),
+            Vec::new(),
+        );
+    }
+    let Some(task_log_artifact_path) = task_log_artifact_path else {
+        return (
+            "needs_work".to_string(),
+            "agent-native check must include exactly one task_log source artifact".to_string(),
+            Vec::new(),
+        );
+    };
+    let recomputed = match agent_native_check(
+        &task_log_artifact_path,
+        AgentNativeCheckMode::Measured,
+        transcript_or_export_artifact_paths,
+    ) {
+        Ok(output) => output,
+        Err(err) => {
+            return (
+                "needs_work".to_string(),
+                format!("failed to recompute agent-native measured preflight: {err}"),
+                Vec::new(),
+            );
+        }
+    };
+    if recomputed.status != "pass" {
+        let issue = recomputed
+            .issues
+            .first()
+            .map(|issue| format!("{}: {}", issue.field, issue.message))
+            .unwrap_or_else(|| recomputed.status.clone());
+        return (
+            "needs_work".to_string(),
+            format!(
+                "agent-native check source artifacts do not recompute to a passing measured preflight ({issue})"
+            ),
+            Vec::new(),
+        );
+    }
+    for (field, recomputed_count) in [
+        ("task_count", recomputed.task_count),
+        ("tasks_ready_for_mode", recomputed.tasks_ready_for_mode),
+        (
+            "tasks_with_expected_files",
+            recomputed.tasks_with_expected_files,
+        ),
+        (
+            "tasks_with_callsieve_files",
+            recomputed.tasks_with_callsieve_files,
+        ),
+        (
+            "tasks_with_callsieve_packet_tokens",
+            recomputed.tasks_with_callsieve_packet_tokens,
+        ),
+        (
+            "tasks_with_agent_native_files",
+            recomputed.tasks_with_agent_native_files,
+        ),
+        (
+            "tasks_with_agent_native_context_tokens",
+            recomputed.tasks_with_agent_native_context_tokens,
+        ),
+    ] {
+        if value.get(field).and_then(serde_json::Value::as_u64) != Some(recomputed_count as u64) {
+            return (
+                "needs_work".to_string(),
+                format!("{field} does not match recomputed measured preflight"),
+                Vec::new(),
+            );
+        }
+    }
+
+    (
+        "pass".to_string(),
+        format!(
+            "agent-native measured preflight passed for {task_count} tasks with readable source artifacts"
+        ),
+        source_artifact_hashes,
+    )
+}
+
+fn public_miss_triage(path: &Path) -> Result<PublicMissTriage> {
+    let json = fs::read_to_string(path)
+        .with_context(|| format!("failed to read public miss triage: {}", path.display()))?;
+    let value: serde_json::Value = serde_json::from_str(&json)
+        .with_context(|| format!("failed to parse public miss triage: {}", path.display()))?;
+    let entries = value
+        .as_array()
+        .context("public miss triage must be a JSON array")?;
+    let mut sample = Vec::new();
+    let mut reachable = 0usize;
+    let mut same_directory_hints = 0usize;
+    for entry in entries {
+        let entry_reachable = entry
+            .get("reachable")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        if entry_reachable {
+            reachable += 1;
+        }
+        let same_dir = json_string_array(entry.get("same_dir"));
+        if !same_dir.is_empty() {
+            same_directory_hints += 1;
+        }
+        if sample.len() < 8 {
+            sample.push(PublicMissTriageSample {
+                id: entry
+                    .get("id")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("unknown")
+                    .to_string(),
+                truth: entry
+                    .get("truth")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("unknown")
+                    .to_string(),
+                reachable: entry_reachable,
+                same_dir,
+                pool_refs_truth: json_string_array(entry.get("pool_refs_truth")),
+                truth_refs_pool: json_string_array(entry.get("truth_refs_pool")),
+            });
+        }
+    }
+    Ok(PublicMissTriage {
+        path: path.display().to_string(),
+        total: entries.len(),
+        reachable,
+        not_reachable: entries.len().saturating_sub(reachable),
+        same_directory_hints,
+        sample,
+    })
+}
+
+fn public_report_arm_rate(value: &serde_json::Value, arm: &str) -> f64 {
+    let pointer = match arm {
+        "hybrid" => "/aggregate/hybrid_first_correct_file_rate_at_k",
+        _ => "/aggregate/lexical_first_correct_file_rate_at_k",
+    };
+    json_pointer_f64(value, pointer)
+        .or_else(|| {
+            (arm == "lexical")
+                .then(|| json_pointer_f64(value, "/aggregate/first_correct_file_rate_at_k"))
+                .flatten()
+        })
+        .unwrap_or(0.0)
+}
+
+fn public_report_manifest_path(value: &serde_json::Value) -> Option<String> {
+    json_pointer_string(value, "/manifest/path").or_else(|| json_pointer_string(value, "/manifest"))
+}
+
+fn public_report_retrieval_contract_status(value: &serde_json::Value) -> (Option<String>, String) {
+    let fingerprint = json_pointer_string(value, "/retrieval_contract_fingerprint");
+    let status = match fingerprint.as_deref() {
+        Some(actual) if actual == query::retrieval_contract_fingerprint() => "current",
+        Some(_) => "stale",
+        None => "missing",
+    };
+    (fingerprint, status.to_string())
+}
+
+fn infer_public_report_category(id: &str, value: &serde_json::Value) -> String {
+    let id = id.to_ascii_lowercase();
+    let manifest_path = public_report_manifest_path(value)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let description = json_pointer_string(value, "/manifest/description")
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if id.contains("natural")
+        || id.contains("-nl")
+        || manifest_path.contains("-nl")
+        || description.contains("natural-language")
+    {
+        "natural_language".to_string()
+    } else {
+        "swe_bench_style".to_string()
+    }
+}
+
+fn average_selected_files_for_arm(value: &serde_json::Value, arm: &str) -> f64 {
+    let Some(issues) = value.get("issues").and_then(serde_json::Value::as_array) else {
+        return 0.0;
+    };
+    let mut count = 0usize;
+    let mut total = 0usize;
+    for issue in issues {
+        let selected = issue
+            .get(arm)
+            .and_then(|arm| arm.get("selected_files_count"))
+            .and_then(serde_json::Value::as_u64)
+            .or_else(|| {
+                (arm == "lexical")
+                    .then(|| {
+                        issue
+                            .get("selected_files_count")
+                            .and_then(serde_json::Value::as_u64)
+                    })
+                    .flatten()
+            });
+        let Some(selected) = selected else {
+            continue;
+        };
+        count += 1;
+        total += selected as usize;
+    }
+    if count == 0 {
+        0.0
+    } else {
+        total as f64 / count as f64
+    }
+}
+
+fn public_report_misses(value: &serde_json::Value, arm: &str, limit: usize) -> Vec<String> {
+    let Some(issues) = value.get("issues").and_then(serde_json::Value::as_array) else {
+        return Vec::new();
+    };
+    issues
+        .iter()
+        .filter(|issue| {
+            let rate = issue
+                .get(arm)
+                .and_then(|arm| arm.get("first_correct_file_rate_at_k"))
+                .and_then(serde_json::Value::as_f64)
+                .or_else(|| {
+                    (arm == "lexical")
+                        .then(|| {
+                            issue
+                                .get("first_correct_file_rate_at_k")
+                                .and_then(serde_json::Value::as_f64)
+                        })
+                        .flatten()
+                })
+                .unwrap_or(0.0);
+            rate <= f64::EPSILON
+        })
+        .filter_map(|issue| issue.get("id").and_then(serde_json::Value::as_str))
+        .take(limit)
+        .map(str::to_string)
+        .collect()
+}
+
+fn weighted_average_selected_files(public_benchmarks: &[PublicBenchmarkEvidence]) -> Option<f64> {
+    let total_evaluated: usize = public_benchmarks
+        .iter()
+        .map(|evidence| evidence.evaluated)
+        .sum();
+    if total_evaluated == 0 {
+        return None;
+    }
+    let weighted_sum: f64 = public_benchmarks
+        .iter()
+        .map(|evidence| evidence.average_selected_files * evidence.evaluated as f64)
+        .sum();
+    Some(weighted_sum / total_evaluated as f64)
+}
+
+fn json_pointer_usize(value: &serde_json::Value, pointer: &str) -> usize {
+    value
+        .pointer(pointer)
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0) as usize
+}
+
+fn json_pointer_f64(value: &serde_json::Value, pointer: &str) -> Option<f64> {
+    value.pointer(pointer).and_then(serde_json::Value::as_f64)
+}
+
+fn json_pointer_string(value: &serde_json::Value, pointer: &str) -> Option<String> {
+    value
+        .pointer(pointer)
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+}
+
+fn write_json_file<T: Serialize>(path: &Path, value: &T) -> Result<()> {
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create output directory {}", parent.display()))?;
+    }
+    fs::write(path, serde_json::to_string_pretty(value)?)
+        .with_context(|| format!("failed to write JSON artifact {}", path.display()))
+}
+
+fn json_metric_usize(
+    value: &serde_json::Value,
+    explicit_pointer: Option<&str>,
+    fallback_pointers: &[&str],
+) -> Option<usize> {
+    explicit_pointer
+        .and_then(|pointer| {
+            let pointer = pointer.trim();
+            if pointer.is_empty() {
+                None
+            } else {
+                json_metric_value_usize(value.pointer(pointer))
+            }
+        })
+        .or_else(|| {
+            fallback_pointers
+                .iter()
+                .find_map(|pointer| json_metric_value_usize(value.pointer(pointer)))
+        })
+}
+
+fn json_metric_value_usize(value: Option<&serde_json::Value>) -> Option<usize> {
+    match value? {
+        serde_json::Value::Number(number) => number
+            .as_u64()
+            .map(|value| value as usize)
+            .or_else(|| number.as_f64().map(|value| value.max(0.0).round() as usize)),
+        serde_json::Value::String(value) => parse_metric_usize(value),
+        _ => None,
+    }
+}
+
+fn parse_metric_usize(value: &str) -> Option<usize> {
+    let mut seen_digit = false;
+    let mut normalized = String::new();
+    for ch in value.trim().chars() {
+        if ch.is_ascii_digit() {
+            seen_digit = true;
+            normalized.push(ch);
+        } else if seen_digit && matches!(ch, ',' | '_' | ' ') {
+            continue;
+        } else if seen_digit {
+            break;
+        }
+    }
+    if normalized.is_empty() {
+        None
+    } else {
+        normalized.parse().ok()
+    }
+}
+
+fn default_public_proof_commands(manifest_path: &Path) -> Vec<String> {
+    let mut commands = vec![
+        "cargo run -- index .".to_string(),
+        "cargo run -- competitive-report benchmarks/competitive-response-manifest.example.json"
+            .to_string(),
+        format!(
+            "cargo run -- public-proof-report {}",
+            manifest_path.display()
+        ),
+        "cargo run -- mcp-contract --out benchmarks/public/results/mcp-contract.json".to_string(),
+        "cargo run -- agent-native-protocol --out benchmarks/public/results/agent-native-protocol.json".to_string(),
+        "cargo run -- agent-native-template benchmarks/public/repos/psf/requests benchmarks/public/manifest.json --k 5 --out benchmarks/public/results/agent-native-requests-template.json".to_string(),
+    ];
+    commands.extend(public_checkout_commands(&default_public_repos_dir()));
+    commands
+}
+
+fn competitive_callsieve_evidence(
+    value: &serde_json::Value,
+    trace_policy: Option<&serde_json::Value>,
+) -> CompetitiveCallsieveEvidence {
+    let tasks = json_summary_usize(value, "tasks");
+    let callsieve_tokens = json_summary_usize(value, "callsieve_context_payload_tokens_estimate");
+    let default_packet_tokens = if tasks == 0 {
+        0
+    } else {
+        callsieve_tokens.div_ceil(tasks)
+    };
+    let strict_trace_policy_sessions =
+        trace_policy.map_or(0, |value| json_value_usize(value, "sessions"));
+    let strict_trace_policy_violations =
+        trace_policy.map_or(0, |value| json_value_usize(value, "violations"));
+    let context_first_compliant = strict_trace_policy_sessions > 0
+        && strict_trace_policy_violations == 0
+        && trace_policy
+            .and_then(|value| value.get("context_first_compliant"))
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+    let trace_summary_proof_available = competitive_trace_summary_proof_available(value);
+    let agent_coverage = competitive_agent_coverage();
+    let agent_coverage_count = agent_coverage.len();
+    CompetitiveCallsieveEvidence {
+        evidence_tier: "local_benchmark_report",
+        locally_measured: true,
+        first_correct_file_rate_at_k: json_summary_f64(value, "first_correct_file_rate_at_k"),
+        expected_file_recall: json_summary_f64(value, "expected_file_recall"),
+        default_packet_tokens,
+        baseline_context_payload_tokens: json_summary_usize(
+            value,
+            "baseline_context_payload_tokens_estimate",
+        ),
+        callsieve_context_payload_tokens: callsieve_tokens,
+        context_payload_reduction_percent: value
+            .pointer("/summary/context_payload_reduction/context_payload_reduction_percent")
+            .and_then(serde_json::Value::as_f64)
+            .unwrap_or(0.0),
+        packet_quality: public_context_packet_quality_evidence(value),
+        avoided_grep_commands: json_summary_usize(value, "total_avoided_grep_commands"),
+        avoided_file_reads: json_summary_usize(value, "total_avoided_file_reads"),
+        first_query_p50_ms: None,
+        first_query_p95_ms: None,
+        first_query_samples: None,
+        retrieval_model_tokens: 0,
+        per_query_retrieval_cost_usd: 0.0,
+        default_code_upload_required: false,
+        explainability: "deterministic ranking reasons plus compact context.sel evidence",
+        agent_coverage,
+        agent_coverage_count,
+        missing_required_agents: Vec::new(),
+        strict_trace_policy_sessions,
+        strict_trace_policy_violations,
+        context_first_compliant,
+        trace_or_receipt_proof_available: trace_summary_proof_available && context_first_compliant,
+    }
+}
+
+fn public_context_packet_quality_evidence(
+    value: &serde_json::Value,
+) -> PublicContextPacketQualityEvidence {
+    PublicContextPacketQualityEvidence {
+        tasks: json_pointer_usize(value, "/summary/packet_quality/tasks"),
+        selected_files: json_pointer_usize(value, "/summary/packet_quality/selected_files"),
+        files_with_symbols: json_pointer_usize(value, "/summary/packet_quality/files_with_symbols"),
+        selected_symbols: json_pointer_usize(value, "/summary/packet_quality/selected_symbols"),
+        files_with_snippets: json_pointer_usize(
+            value,
+            "/summary/packet_quality/files_with_snippets",
+        ),
+        snippets: json_pointer_usize(value, "/summary/packet_quality/snippets"),
+        files_with_related_tests: json_pointer_usize(
+            value,
+            "/summary/packet_quality/files_with_related_tests",
+        ),
+        related_tests: json_pointer_usize(value, "/summary/packet_quality/related_tests"),
+        files_with_blast_radius: json_pointer_usize(
+            value,
+            "/summary/packet_quality/files_with_blast_radius",
+        ),
+        blast_radius_hints: json_pointer_usize(value, "/summary/packet_quality/blast_radius_hints"),
+        files_with_call_graph_hints: json_pointer_usize(
+            value,
+            "/summary/packet_quality/files_with_call_graph_hints",
+        ),
+        call_graph_hints: json_pointer_usize(value, "/summary/packet_quality/call_graph_hints"),
+        files_with_non_unknown_risk: json_pointer_usize(
+            value,
+            "/summary/packet_quality/files_with_non_unknown_risk",
+        ),
+        files_with_selection_reasons: json_pointer_usize(
+            value,
+            "/summary/packet_quality/files_with_selection_reasons",
+        ),
+        selection_reasons: json_pointer_usize(value, "/summary/packet_quality/selection_reasons"),
+        files_with_selection_confidence: json_pointer_usize(
+            value,
+            "/summary/packet_quality/files_with_selection_confidence",
+        ),
+        selection_signals: json_pointer_usize(value, "/summary/packet_quality/selection_signals"),
+        next_file_hints: json_pointer_usize(value, "/summary/packet_quality/next_file_hints"),
+        focus_targets: json_pointer_usize(value, "/summary/packet_quality/focus_targets"),
+        relationship_followup_targets: json_pointer_usize(
+            value,
+            "/summary/packet_quality/relationship_followup_targets",
+        ),
+        test_followup_targets: json_pointer_usize(
+            value,
+            "/summary/packet_quality/test_followup_targets",
+        ),
+    }
+}
+
+fn competitive_trace_summary_proof_available(value: &serde_json::Value) -> bool {
+    let trace = value
+        .pointer("/summary/observed_session")
+        .filter(|value| !value.is_null())
+        .or_else(|| {
+            value
+                .pointer("/summary/session_trace")
+                .filter(|value| !value.is_null())
+        });
+    let Some(trace) = trace else {
+        return false;
+    };
+
+    json_value_usize(trace, "sessions") > 0
+        && json_value_isize(trace, "token_savings") > 0
+        && (json_value_usize(trace, "avoided_grep_commands") > 0
+            || json_value_usize(trace, "avoided_file_reads") > 0)
+        && json_value_usize(trace, "files_still_missed") == 0
+        && json_value_usize(trace, "critical_files_still_missed") == 0
+}
+
+fn json_summary_f64(value: &serde_json::Value, key: &str) -> f64 {
+    value
+        .get("summary")
+        .and_then(|summary| summary.get(key))
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(0.0)
+}
+
+fn json_summary_usize(value: &serde_json::Value, key: &str) -> usize {
+    value
+        .get("summary")
+        .and_then(|summary| summary.get(key))
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0) as usize
+}
+
+fn json_value_usize(value: &serde_json::Value, key: &str) -> usize {
+    value
+        .get(key)
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0) as usize
+}
+
+fn json_value_isize(value: &serde_json::Value, key: &str) -> isize {
+    value
+        .get(key)
+        .and_then(serde_json::Value::as_i64)
+        .unwrap_or(0) as isize
+}
+
+fn callsieve_comparison_row(
+    callsieve: &CompetitiveCallsieveEvidence,
+    natural_language: Option<&CompetitiveCallsieveEvidence>,
+) -> CompetitiveComparisonRow {
+    CompetitiveComparisonRow {
+        name: "CallSieve".to_string(),
+        category: "local-first agent context layer".to_string(),
+        evidence_kind: "locally_measured",
+        source: "competitive-report benchmark manifest".to_string(),
+        install_friction: "local CLI, local index, optional MCP setup".to_string(),
+        first_query_time: match (
+            callsieve.first_query_p50_ms,
+            callsieve.first_query_p95_ms,
+            callsieve.first_query_samples,
+        ) {
+            (Some(p50), Some(p95), Some(samples)) => {
+                format!("measured local load+context p50 {p50}ms, p95 {p95}ms over {samples} samples")
+            }
+            _ => "not measured".to_string(),
+        },
+        code_upload_requirement: "none by default".to_string(),
+        retrieval_model_token_cost: callsieve.retrieval_model_tokens.to_string(),
+        per_query_retrieval_cost: "$0.00 local retrieval".to_string(),
+        packet_compactness: format!(
+            "{} average packet tokens, {} total packet tokens",
+            callsieve.default_packet_tokens, callsieve.callsieve_context_payload_tokens
+        ),
+        first_correct_file_rate_at_k: format_rate(callsieve.first_correct_file_rate_at_k),
+        natural_language_recall: natural_language
+            .map(|evidence| format_rate(evidence.first_correct_file_rate_at_k))
+            .unwrap_or_else(|| "not measured".to_string()),
+        explainability: callsieve.explainability.to_string(),
+        agent_coverage: competitive_agent_coverage().join(", "),
+        trace_or_receipt_proof: if callsieve.trace_or_receipt_proof_available {
+            format!(
+                "strict trace policy pass over {} session(s), with savings evidence",
+                callsieve.strict_trace_policy_sessions
+            )
+        } else if callsieve.strict_trace_policy_sessions > 0 {
+            format!(
+                "strict trace policy has {} violation(s); proof gate not satisfied",
+                callsieve.strict_trace_policy_violations
+            )
+        } else {
+            "not provided in this report".to_string()
+        },
+        where_callsieve_should_win:
+            "first-mile local selection before grep/read loops, with receipts and agent-neutral setup"
+                .to_string(),
+    }
+}
+
+fn competitor_comparison_row(input: CompetitiveCompetitorInput) -> CompetitiveComparisonRow {
+    CompetitiveComparisonRow {
+        name: input.name,
+        category: input.category,
+        evidence_kind: "source_claim",
+        source: input.source,
+        install_friction: input.install_friction,
+        first_query_time: input.first_query_time,
+        code_upload_requirement: input.code_upload_requirement,
+        retrieval_model_token_cost: input.retrieval_model_token_cost,
+        per_query_retrieval_cost: input.per_query_retrieval_cost,
+        packet_compactness: input.packet_compactness,
+        first_correct_file_rate_at_k: "not locally measured".to_string(),
+        natural_language_recall: "not locally measured".to_string(),
+        explainability: input.explainability,
+        agent_coverage: input.agent_coverage,
+        trace_or_receipt_proof: input.trace_or_receipt_proof,
+        where_callsieve_should_win: input.where_callsieve_should_win,
+    }
+}
+
+fn competitive_agent_coverage() -> Vec<&'static str> {
+    vec![
+        "Codex",
+        "Claude Code",
+        "GitHub Copilot",
+        "OpenCode",
+        "Antigravity",
+        "Cursor",
+        "VS Code",
+        "Windsurf",
+        "Continue",
+        "Zed",
+        "Junie",
+        "JetBrains",
+        "Amp",
+        "Goose",
+        "Warp",
+        "Cline",
+        "Zoo",
+        "Roo",
+        "generic MCP",
+    ]
+}
+
+fn missing_required_agents(
+    covered_agents: &[&'static str],
+    required_agents: &[String],
+) -> Vec<String> {
+    let covered: BTreeSet<String> = covered_agents
+        .iter()
+        .map(|agent| normalized_agent_name(agent))
+        .collect();
+    required_agents
+        .iter()
+        .filter(|agent| !covered.contains(&normalized_agent_name(agent)))
+        .cloned()
+        .collect()
+}
+
+fn normalized_agent_name(agent: &str) -> String {
+    agent
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+fn format_rate(value: f64) -> String {
+    format!("{:.1}%", value * 100.0)
 }
 
 fn proof_rehearsal_context_payload_reduction() -> Result<serde_json::Value> {
@@ -18199,6 +24704,270 @@ mod tests {
     }
 
     #[test]
+    fn competitive_report_evidence_requires_savings_and_strict_trace_policy() {
+        let mut value = serde_json::json!({
+            "summary": {
+                "tasks": 2,
+                "first_correct_file_rate_at_k": 0.5,
+                "expected_file_recall": 0.25,
+                "baseline_context_payload_tokens_estimate": 100,
+                "callsieve_context_payload_tokens_estimate": 21,
+                "context_payload_reduction": {
+                    "context_payload_reduction_percent": 79.0
+                },
+                "total_avoided_grep_commands": 3,
+                "total_avoided_file_reads": 4,
+                "session_trace": null
+            }
+        });
+        let passing_policy = serde_json::json!({
+            "sessions": 1,
+            "violations": 0,
+            "context_first_compliant": true
+        });
+
+        let evidence = competitive_callsieve_evidence(&value, Some(&passing_policy));
+        assert_eq!(evidence.default_packet_tokens, 11);
+        assert!(!evidence.trace_or_receipt_proof_available);
+
+        value["summary"]["observed_session"] = serde_json::json!({
+            "sessions": 1,
+            "token_savings": 1000,
+            "avoided_grep_commands": 3,
+            "avoided_file_reads": 4,
+            "files_still_missed": 0,
+            "critical_files_still_missed": 0
+        });
+
+        let failing_policy = serde_json::json!({
+            "sessions": 1,
+            "violations": 1,
+            "context_first_compliant": false
+        });
+        let evidence = competitive_callsieve_evidence(&value, Some(&failing_policy));
+        assert!(!evidence.trace_or_receipt_proof_available);
+        assert_eq!(evidence.strict_trace_policy_violations, 1);
+        assert!(!evidence.context_first_compliant);
+
+        let evidence = competitive_callsieve_evidence(&value, Some(&passing_policy));
+        assert!(evidence.trace_or_receipt_proof_available);
+        assert_eq!(evidence.strict_trace_policy_sessions, 1);
+        assert_eq!(evidence.strict_trace_policy_violations, 0);
+        assert!(evidence.context_first_compliant);
+    }
+
+    #[test]
+    fn public_broad_read_guardrail_requires_smaller_context_packet() {
+        let targets = PublicProofTargets {
+            minimum_broad_read_context_payload_reduction_percent: 10.0,
+            ..PublicProofTargets::default()
+        };
+        let passing_value = serde_json::json!({
+            "summary": {
+                "tasks": 1,
+                "first_correct_file_rate_at_k": 1.0,
+                "expected_file_recall": 1.0,
+                "baseline_context_payload_tokens_estimate": 1000,
+                "callsieve_context_payload_tokens_estimate": 250,
+                "context_payload_reduction": {
+                    "context_payload_reduction_percent": 75.0
+                },
+                "total_avoided_grep_commands": 0,
+                "total_avoided_file_reads": 4
+            }
+        });
+        let passing_evidence = competitive_callsieve_evidence(&passing_value, None);
+        let guardrail = public_broad_read_guardrail(&passing_evidence, &targets);
+        assert_eq!(guardrail.status, "pass");
+        assert_eq!(guardrail.context_payload_tokens_saved, 750);
+
+        let failing_value = serde_json::json!({
+            "summary": {
+                "tasks": 1,
+                "first_correct_file_rate_at_k": 1.0,
+                "expected_file_recall": 1.0,
+                "baseline_context_payload_tokens_estimate": 1000,
+                "callsieve_context_payload_tokens_estimate": 950,
+                "context_payload_reduction": {
+                    "context_payload_reduction_percent": 5.0
+                },
+                "total_avoided_grep_commands": 0,
+                "total_avoided_file_reads": 0
+            }
+        });
+        let failing_evidence = competitive_callsieve_evidence(&failing_value, None);
+        let guardrail = public_broad_read_guardrail(&failing_evidence, &targets);
+        assert_eq!(guardrail.status, "needs_work");
+    }
+
+    #[test]
+    fn public_context_packet_guardrail_requires_agent_useful_packet_fields() {
+        let passing_value = serde_json::json!({
+            "summary": {
+                "tasks": 2,
+                "first_correct_file_rate_at_k": 1.0,
+                "expected_file_recall": 1.0,
+                "baseline_context_payload_tokens_estimate": 1000,
+                "callsieve_context_payload_tokens_estimate": 250,
+                "context_payload_reduction": {
+                    "context_payload_reduction_percent": 75.0
+                },
+                "packet_quality": {
+                    "tasks": 2,
+                    "selected_files": 5,
+                    "files_with_symbols": 4,
+                    "selected_symbols": 7,
+                    "files_with_snippets": 2,
+                    "snippets": 2,
+                    "files_with_related_tests": 2,
+                    "related_tests": 3,
+                    "files_with_blast_radius": 3,
+                    "blast_radius_hints": 6,
+                    "files_with_call_graph_hints": 2,
+                    "call_graph_hints": 4,
+                    "files_with_non_unknown_risk": 5,
+                    "files_with_selection_reasons": 5,
+                    "selection_reasons": 8,
+                    "files_with_selection_confidence": 5,
+                    "selection_signals": 4,
+                    "next_file_hints": 2,
+                    "focus_targets": 5,
+                    "relationship_followup_targets": 1,
+                    "test_followup_targets": 1
+                }
+            }
+        });
+        let passing_evidence = competitive_callsieve_evidence(&passing_value, None);
+        let guardrail = public_context_packet_guardrail(&passing_evidence);
+        assert_eq!(guardrail.status, "pass");
+        assert_eq!(guardrail.selected_symbols, 7);
+        assert_eq!(guardrail.call_graph_hints, 4);
+        assert_eq!(guardrail.relationship_followup_targets, 1);
+
+        let missing_call_graph_value = serde_json::json!({
+            "summary": {
+                "tasks": 1,
+                "first_correct_file_rate_at_k": 1.0,
+                "expected_file_recall": 1.0,
+                "baseline_context_payload_tokens_estimate": 1000,
+                "callsieve_context_payload_tokens_estimate": 250,
+                "context_payload_reduction": {
+                    "context_payload_reduction_percent": 75.0
+                },
+                "packet_quality": {
+                    "tasks": 1,
+                    "selected_files": 2,
+                    "files_with_symbols": 2,
+                    "selected_symbols": 2,
+                    "files_with_snippets": 0,
+                    "snippets": 0,
+                    "files_with_related_tests": 1,
+                    "related_tests": 1,
+                    "files_with_blast_radius": 2,
+                    "blast_radius_hints": 2,
+                    "files_with_call_graph_hints": 0,
+                    "call_graph_hints": 0,
+                    "files_with_non_unknown_risk": 2,
+                    "files_with_selection_reasons": 2,
+                    "selection_reasons": 2,
+                    "files_with_selection_confidence": 2,
+                    "selection_signals": 2,
+                    "next_file_hints": 1,
+                    "focus_targets": 2,
+                    "relationship_followup_targets": 1,
+                    "test_followup_targets": 1
+                }
+            }
+        });
+        let failing_evidence = competitive_callsieve_evidence(&missing_call_graph_value, None);
+        let guardrail = public_context_packet_guardrail(&failing_evidence);
+        assert_eq!(guardrail.status, "needs_work");
+    }
+
+    #[test]
+    fn public_agent_native_check_artifact_recomputes_measured_preflight() {
+        let temp = tempfile::tempdir().unwrap();
+        let task_log = temp.path().join("agent-native-task-log.json");
+        let transcript = temp.path().join("agent-native-transcript.json");
+        let check_artifact = temp.path().join("agent-native-check.json");
+        fs::write(
+            &task_log,
+            r#"{
+  "tasks": [
+    {
+      "id": "native-hit",
+      "task": "find createSession token behavior",
+      "expected_files": ["src/auth/session.ts"],
+      "agent_native_files": ["src/auth/session.ts"],
+      "callsieve_files": ["src/auth/session.ts"],
+      "agent_native_context_tokens": 20000,
+      "callsieve_packet_tokens": 1000
+    }
+  ]
+}"#,
+        )
+        .unwrap();
+        fs::write(
+            &transcript,
+            r#"{"tool":"fixture-native-search","task_ids":["native-hit"]}"#,
+        )
+        .unwrap();
+
+        let task_log_bytes = fs::read(&task_log).unwrap();
+        let transcript_bytes = fs::read(&transcript).unwrap();
+        let forged_check = serde_json::json!({
+            "command": "agent-native-check",
+            "schema_version": 1,
+            "status": "pass",
+            "mode": "measured",
+            "tasks_path": "agent-native-task-log.json",
+            "task_count": 1,
+            "tasks_with_expected_files": 1,
+            "tasks_with_callsieve_files": 1,
+            "tasks_with_callsieve_packet_tokens": 1,
+            "tasks_with_agent_native_files": 1,
+            "tasks_with_agent_native_context_tokens": 1,
+            "tasks_ready_for_mode": 1,
+            "source_artifact_evidence": [
+                {
+                    "path": "agent-native-task-log.json",
+                    "role": "task_log",
+                    "bytes": task_log_bytes.len(),
+                    "hash": indexer::stable_content_hash(&task_log_bytes)
+                },
+                {
+                    "path": "agent-native-transcript.json",
+                    "role": "agent_native_transcript_or_export",
+                    "bytes": transcript_bytes.len(),
+                    "hash": indexer::stable_content_hash(&transcript_bytes)
+                }
+            ],
+            "issues": [],
+            "next_step": "Run agent-native-baseline with the same task log and source artifacts."
+        });
+        fs::write(
+            &check_artifact,
+            serde_json::to_vec_pretty(&forged_check).unwrap(),
+        )
+        .unwrap();
+        let input = PublicProofArtifactInput {
+            id: "agent-native-check".to_string(),
+            path: check_artifact,
+            kind: "json_artifact".to_string(),
+            description: "forged measured preflight".to_string(),
+            required: true,
+        };
+
+        let (status, validation, source_hashes) =
+            public_agent_native_check_artifact_status(&input, true);
+
+        assert_eq!(status, "needs_work");
+        assert!(source_hashes.is_empty());
+        assert!(validation.contains("do not recompute"));
+        assert!(validation.contains("recording_status"));
+    }
+
+    #[test]
     fn claude_collector_command_summary_uses_stdin_prompt() {
         let command = claude_observed_command_summary(
             Path::new("benchmarks/github-axum"),
@@ -18477,6 +25246,72 @@ mod tests {
         ])
         .unwrap();
         Cli::try_parse_from(["callsieve", "benchmark-report", "benchmarks/manifest.json"]).unwrap();
+        Cli::try_parse_from([
+            "callsieve",
+            "competitive-report",
+            "benchmarks/competitive.json",
+        ])
+        .unwrap();
+        Cli::try_parse_from([
+            "callsieve",
+            "repo-pack-baseline",
+            ".",
+            "--id",
+            "full-repo-pack-proxy",
+            "--out",
+            "benchmarks/public/results/full-repo-pack-proxy.json",
+        ])
+        .unwrap();
+        Cli::try_parse_from([
+            "callsieve",
+            "agent-native-baseline",
+            "benchmarks/public/results/cursor-public-requests-tasks.json",
+            "--id",
+            "cursor-public-requests",
+            "--tool",
+            "Cursor native codebase search",
+            "--k",
+            "5",
+            "--measurement-command",
+            "manual approved Cursor run",
+            "--source-artifact",
+            "benchmarks/public/results/cursor-public-requests-transcript.json",
+            "--measurement-note",
+            "pinned public Requests tasks",
+            "--out",
+            "benchmarks/public/results/cursor-public-requests.json",
+        ])
+        .unwrap();
+        Cli::try_parse_from([
+            "callsieve",
+            "agent-native-check",
+            "benchmarks/public/results/cursor-public-requests-tasks.json",
+            "--mode",
+            "measured",
+            "--source-artifact",
+            "benchmarks/public/results/cursor-public-requests-transcript.json",
+            "--out",
+            "benchmarks/public/results/cursor-public-requests-check.json",
+        ])
+        .unwrap();
+        Cli::try_parse_from([
+            "callsieve",
+            "agent-native-protocol",
+            "--out",
+            "benchmarks/public/results/agent-native-protocol.json",
+        ])
+        .unwrap();
+        Cli::try_parse_from([
+            "callsieve",
+            "agent-native-template",
+            ".",
+            "benchmarks/public/results/cursor-public-requests-tasks.json",
+            "--k",
+            "5",
+            "--out",
+            "benchmarks/public/results/cursor-public-requests-tasks.template.json",
+        ])
+        .unwrap();
         Cli::try_parse_from(["callsieve", "benchmark-doctor", "benchmarks/manifest.json"]).unwrap();
         Cli::try_parse_from([
             "callsieve",
@@ -18751,6 +25586,8 @@ mod tests {
         Cli::try_parse_from(["callsieve", "mcp-registry-manifest"]).unwrap();
         Cli::try_parse_from(["callsieve", "mcp-registry-manifest", "--out", "server.json"])
             .unwrap();
+        Cli::try_parse_from(["callsieve", "mcp-contract"]).unwrap();
+        Cli::try_parse_from(["callsieve", "mcp-contract", "--out", "mcp-contract.json"]).unwrap();
         Cli::try_parse_from(["callsieve", "status", "."]).unwrap();
         Cli::try_parse_from(["callsieve", "daemon", ".", "--once"]).unwrap();
         Cli::try_parse_from(["callsieve", "daemon", ".", "--background", "--lsp"]).unwrap();
@@ -19266,6 +26103,41 @@ mod hook_path_tests {
                 .iter()
                 .any(|matcher| matcher.contains("Edit") && matcher.contains("Write")),
             "PostToolUse matcher must include edit tools, got {matchers:?}"
+        );
+    }
+
+    #[test]
+    fn public_proof_reads_single_arm_mode_a_reports_as_lexical() {
+        let value = serde_json::json!({
+            "manifest": "benchmarks/public/manifest-50.json",
+            "aggregate": {
+                "evaluated": 50,
+                "first_correct_file_rate_at_k": 0.64
+            },
+            "issues": [
+                {
+                    "id": "hit",
+                    "selected_files_count": 8,
+                    "first_correct_file_rate_at_k": 1.0
+                },
+                {
+                    "id": "miss",
+                    "selected_files_count": 6,
+                    "first_correct_file_rate_at_k": 0.0
+                }
+            ]
+        });
+
+        assert_eq!(
+            public_report_manifest_path(&value).as_deref(),
+            Some("benchmarks/public/manifest-50.json")
+        );
+        assert_eq!(public_report_arm_rate(&value, "lexical"), 0.64);
+        assert_eq!(public_report_arm_rate(&value, "hybrid"), 0.0);
+        assert_eq!(average_selected_files_for_arm(&value, "lexical"), 7.0);
+        assert_eq!(
+            public_report_misses(&value, "lexical", 8),
+            vec!["miss".to_string()]
         );
     }
 }

@@ -1,0 +1,33 @@
+{
+  "command": "mcp-contract",
+  "status": "pass",
+  "contract_version": 1,
+  "context_tool": "callsieve_context",
+  "structured_content_required": true,
+  "default_profile": "skim",
+  "default_token_budget": 1200,
+  "required_structured_content_fields": [
+    "read_first",
+    "sel",
+    "instruction",
+    "freshness",
+    "retrieval_cost",
+    "stats",
+    "trace_event"
+  ],
+  "supported_instruction_expansion_keys": [
+    "o",
+    "next",
+    "rel",
+    "tests"
+  ],
+  "required_freshness_fields": [
+    "initial_fresh",
+    "refreshed",
+    "final_fresh",
+    "index_generation",
+    "stale_files",
+    "fix_command"
+  ],
+  "evidence": "MCP context proof exposes the stable structuredContent contract agents consume before broad grep or repeated file reads."
+}

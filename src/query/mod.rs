@@ -48,6 +48,19 @@ const MAX_TASK_MEMORY_RECOMMENDED_SYMBOLS: usize = 12;
 pub const DEFAULT_AGENT_CONTEXT_TOKEN_BUDGET: usize = 1200;
 pub const DEFAULT_AGENT_CONTEXT_LIMIT: usize = 5;
 
+pub fn retrieval_contract_fingerprint() -> String {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"callsieve-retrieval-contract-v1\n");
+    bytes.extend_from_slice(include_bytes!("mod.rs"));
+    bytes.extend_from_slice(b"\n--ranker--\n");
+    bytes.extend_from_slice(include_bytes!("ranker.rs"));
+    bytes.extend_from_slice(b"\n--formatter--\n");
+    bytes.extend_from_slice(include_bytes!("formatter.rs"));
+    bytes.extend_from_slice(b"\n--classifier--\n");
+    bytes.extend_from_slice(include_bytes!("classify.rs"));
+    crate::indexer::stable_content_hash(&bytes)
+}
+
 #[cfg(feature = "embed")]
 type SemanticScoreMap = BTreeMap<String, SemanticScore>;
 
@@ -338,6 +351,7 @@ struct SelectionScoreComponent {
 struct ContextFile {
     rank: usize,
     score: i32,
+    selection_confidence: String,
     file: String,
     language: Language,
     symbols: Vec<QuerySymbol>,
@@ -538,7 +552,59 @@ struct CallsieveBenchmark {
     related_tests: usize,
     packet_bytes: usize,
     estimated_packet_tokens: usize,
+    packet_quality: ContextPacketQuality,
     top_files: Vec<BenchmarkContextFile>,
+}
+
+#[derive(Debug, Default, Clone, Serialize)]
+struct ContextPacketQuality {
+    tasks: usize,
+    selected_files: usize,
+    files_with_symbols: usize,
+    selected_symbols: usize,
+    files_with_snippets: usize,
+    snippets: usize,
+    files_with_related_tests: usize,
+    related_tests: usize,
+    files_with_blast_radius: usize,
+    blast_radius_hints: usize,
+    files_with_call_graph_hints: usize,
+    call_graph_hints: usize,
+    files_with_non_unknown_risk: usize,
+    files_with_selection_reasons: usize,
+    selection_reasons: usize,
+    files_with_selection_confidence: usize,
+    selection_signals: usize,
+    next_file_hints: usize,
+    focus_targets: usize,
+    relationship_followup_targets: usize,
+    test_followup_targets: usize,
+}
+
+impl ContextPacketQuality {
+    fn add(&mut self, other: &Self) {
+        self.tasks += other.tasks;
+        self.selected_files += other.selected_files;
+        self.files_with_symbols += other.files_with_symbols;
+        self.selected_symbols += other.selected_symbols;
+        self.files_with_snippets += other.files_with_snippets;
+        self.snippets += other.snippets;
+        self.files_with_related_tests += other.files_with_related_tests;
+        self.related_tests += other.related_tests;
+        self.files_with_blast_radius += other.files_with_blast_radius;
+        self.blast_radius_hints += other.blast_radius_hints;
+        self.files_with_call_graph_hints += other.files_with_call_graph_hints;
+        self.call_graph_hints += other.call_graph_hints;
+        self.files_with_non_unknown_risk += other.files_with_non_unknown_risk;
+        self.files_with_selection_reasons += other.files_with_selection_reasons;
+        self.selection_reasons += other.selection_reasons;
+        self.files_with_selection_confidence += other.files_with_selection_confidence;
+        self.selection_signals += other.selection_signals;
+        self.next_file_hints += other.next_file_hints;
+        self.focus_targets += other.focus_targets;
+        self.relationship_followup_targets += other.relationship_followup_targets;
+        self.test_followup_targets += other.test_followup_targets;
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -658,6 +724,7 @@ struct BenchmarkSuiteSummary {
     baseline_context_payload_tokens_estimate: usize,
     callsieve_context_payload_tokens_estimate: usize,
     context_payload_reduction: ContextPayloadReduction,
+    packet_quality: ContextPacketQuality,
     total_estimated_token_savings: isize,
     average_estimated_token_reduction_percent: f64,
     total_estimated_avoided_grep_commands: usize,
@@ -1085,6 +1152,7 @@ struct BenchmarkReportRepoOutput {
     baseline_context_payload_tokens_estimate: usize,
     callsieve_context_payload_tokens_estimate: usize,
     context_payload_reduction: ContextPayloadReduction,
+    packet_quality: ContextPacketQuality,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     misses: Vec<BenchmarkSuiteMiss>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1109,6 +1177,7 @@ struct BenchmarkReportSummary {
     baseline_context_payload_tokens_estimate: usize,
     callsieve_context_payload_tokens_estimate: usize,
     context_payload_reduction: ContextPayloadReduction,
+    packet_quality: ContextPacketQuality,
     total_estimated_token_savings: isize,
     average_estimated_token_reduction_percent: f64,
     total_avoided_grep_commands: usize,
@@ -1466,6 +1535,24 @@ impl ContextCandidate {
         if self.seen_debug.insert(key) {
             self.why_debug.insert(0, component);
         }
+    }
+}
+
+fn selection_confidence_for_score(score: i32, top_score: i32) -> &'static str {
+    if score <= 0 {
+        return "low";
+    }
+    if top_score <= 0 {
+        return "medium";
+    }
+
+    let ratio = score as f64 / top_score as f64;
+    if ratio >= 0.8 {
+        "high"
+    } else if ratio >= 0.45 {
+        "medium"
+    } else {
+        "low"
     }
 }
 
@@ -2178,14 +2265,19 @@ pub fn build_context_with(
             &ranked_match.score_debug,
         );
     }
+    let query_tokens = ranker::query_tokens(task);
+    let query_kind = classify::query_kind(task, &query_tokens);
+
     let graph_start = Instant::now();
     add_graph_context(&lookup, &ranked, &mut grouped);
     add_reference_context(&lookup, &ranked, &mut grouped);
+    if query_kind == classify::QueryKind::NaturalLanguage {
+        add_natural_language_module_neighbors(&lookup, &ranked, &mut grouped, &query_tokens);
+    }
     let graph_expansion_ms = elapsed_ms(graph_start.elapsed());
 
     let mut candidates: Vec<ContextCandidate> = grouped.into_values().collect();
 
-    let query_tokens = ranker::query_tokens(task);
     // Semantic-recall union: when embeddings are enabled, let the embedding
     // nearest-neighbors inject files that lexical ranking never surfaced. This
     // runs before the test-offtopic marking below so injected test files get the
@@ -2235,7 +2327,7 @@ pub fn build_context_with(
     // issue text matches the consumer layer around the buggy file and the
     // graph closes the hop. Identifier queries carry explicit lexical
     // anchors and keep their proven ordering untouched.
-    if classify::query_kind(task, &query_tokens) == classify::QueryKind::NaturalLanguage {
+    if query_kind == classify::QueryKind::NaturalLanguage {
         add_graph_consensus_boost(&lookup, &mut candidates);
     }
     sort_candidates_lexical(&mut candidates, &lookup, &query_tokens);
@@ -2257,6 +2349,10 @@ pub fn build_context_with(
     let mut selected_related_tests = 0;
     let mut snippet_elapsed = Duration::ZERO;
     let mut selection_summary = empty_context_selection_summary();
+    let top_score = candidates
+        .first()
+        .map(ContextCandidate::score)
+        .unwrap_or_default();
     let read_first: Vec<ContextFile> = candidates
         .into_iter()
         .take(options.limit)
@@ -2342,6 +2438,7 @@ pub fn build_context_with(
             Some(ContextFile {
                 rank: rank_index + 1,
                 score,
+                selection_confidence: selection_confidence_for_score(score, top_score).to_string(),
                 file: file.path.clone(),
                 language: file.language,
                 symbols,
@@ -3267,9 +3364,13 @@ fn compact_selection_signal_for_value(name: &str) -> &str {
         "config_file" => "cfg",
         "config_dependency_intent" => "cfgdep",
         "dependency_manifest_intent" => "dep",
+        "workflow_file_intent" => "wf",
+        "index_freshness_surface" => "fresh",
         "benchmark_evidence_file_intent" => "bench",
+        "benchmark_evidence_doc_intent" => "bdoc",
         "readme_evidence_file_intent" => "readme",
         "competitive_positioning_doc" => "comp",
+        "ownership_context_attachment" => "own",
         "docs_intent" => "doc",
         "docs_path_intent" => "docp",
         "command_surface_intent" => "cmd",
@@ -3423,8 +3524,7 @@ fn compact_impact_for_value(file: &ContextFile, path_indexes: &BTreeMap<&str, us
             test_refs.push(json!(test));
         }
     }
-    let upstream_count = file.imports.len() + file.calls.len();
-    let downstream_count = file.referenced_by.len() + file.called_by.len();
+    let (upstream_count, downstream_count) = compact_impact_edge_counts_for_value(file);
 
     let mut impact = vec![json!(compact_risk_for_value(&file.blast_radius.risk))];
     if !test_refs.is_empty() {
@@ -3440,7 +3540,64 @@ fn compact_impact_for_value(file: &ContextFile, path_indexes: &BTreeMap<&str, us
     if downstream_count > 0 {
         impact.push(json!(downstream_count));
     }
+    if let Some(edge_flags) = compact_impact_edge_flags_for_value(file) {
+        impact.push(json!(edge_flags));
+    }
     Value::Array(impact)
+}
+
+fn compact_impact_edge_flags_for_value(file: &ContextFile) -> Option<String> {
+    let mut flags = Vec::new();
+    let has_tests = !file.blast_radius.tests.is_empty() || !file.related_tests.is_empty();
+    if has_tests {
+        flags.push("test");
+    }
+    if !file.blast_radius.imports.is_empty() || !file.imports.is_empty() {
+        flags.push("im");
+    }
+    if !file.blast_radius.calls.is_empty() || !file.calls.is_empty() {
+        flags.push("call");
+    }
+    if !file.blast_radius.referenced_by.is_empty() || !file.referenced_by.is_empty() {
+        flags.push("ref");
+    }
+    if !file.blast_radius.called_by.is_empty() || !file.called_by.is_empty() {
+        flags.push("by");
+    }
+    if flags.is_empty() {
+        None
+    } else {
+        Some(flags.join(","))
+    }
+}
+
+fn compact_impact_edge_counts_for_value(file: &ContextFile) -> (usize, usize) {
+    let mut imports = BTreeSet::new();
+    imports.extend(file.imports.iter().map(String::as_str));
+    imports.extend(file.blast_radius.imports.iter().map(String::as_str));
+
+    let mut call_targets = BTreeSet::new();
+    call_targets.extend(file.blast_radius.calls.iter().map(String::as_str));
+    for edge in &file.calls {
+        if let Some(target_file) = edge.target_file.as_deref() {
+            call_targets.insert(target_file);
+        } else {
+            call_targets.insert(edge.target.as_str());
+        }
+    }
+
+    let mut referenced_by = BTreeSet::new();
+    referenced_by.extend(file.referenced_by.iter().map(String::as_str));
+    referenced_by.extend(file.blast_radius.referenced_by.iter().map(String::as_str));
+
+    let mut called_by = BTreeSet::new();
+    called_by.extend(file.blast_radius.called_by.iter().map(String::as_str));
+    called_by.extend(file.called_by.iter().map(|edge| edge.file.as_str()));
+
+    (
+        imports.len() + call_targets.len(),
+        referenced_by.len() + called_by.len(),
+    )
 }
 
 fn compact_risk_for_value(risk: &str) -> &str {
@@ -4037,13 +4194,22 @@ fn selected_non_test_keep_priority(
         }) as i32
             * 15;
     let direct_surface_bonus = candidate_has_direct_surface_signal(candidate) as i32 * 25;
+    let domain_module_bonus = candidate
+        .why
+        .iter()
+        .any(|reason| reason == "domain module alias intent") as i32
+        * 50;
     let agent_facing_doc_bonus = is_agent_facing_doc_path(&file.path) as i32 * 25;
+    let benchmark_evidence_artifact_bonus =
+        is_benchmark_evidence_artifact_path(&file.path) as i32 * 25;
     let code_bonus = file.language.is_code() as i32 * 10;
     let graph_only_penalty = candidate_is_graph_only(candidate) as i32 * -20;
     test_candidate_specificity(file, candidate, query_tokens)
         + exact_match_bonus
         + direct_surface_bonus
+        + domain_module_bonus
         + agent_facing_doc_bonus
+        + benchmark_evidence_artifact_bonus
         + code_bonus
         + graph_only_penalty
 }
@@ -4056,6 +4222,7 @@ fn candidate_has_direct_surface_signal(candidate: &ContextCandidate) -> bool {
             || reason.starts_with("path keyword overlap")
             || reason.starts_with("filename keyword cluster")
             || reason.starts_with("path intent keyword cluster")
+            || reason.starts_with("symbol name keyword cluster")
             || reason.starts_with("content keyword overlap")
             || reason == "docs intent"
             || reason == "docs path intent"
@@ -4075,6 +4242,11 @@ fn is_agent_facing_doc_path(path: &str) -> bool {
             path.as_str(),
             "readme.md" | "agents.md" | "claude.md" | "product_brief.md"
         )
+}
+
+fn is_benchmark_evidence_artifact_path(path: &str) -> bool {
+    let path = path.to_ascii_lowercase();
+    path.starts_with("benchmarks/evidence/") && path.ends_with(".json")
 }
 
 fn is_test_init_file(path: &str) -> bool {
@@ -4551,6 +4723,7 @@ pub fn benchmark_context_with_options(
     let packet_value = context_value(&context, view_options)?;
     let packet = serde_json::to_string(&packet_value)?;
     let packet_tokens = estimate_tokens(&packet);
+    let packet_quality = context_packet_quality(&context);
     let top_files = context
         .read_first
         .iter()
@@ -4568,6 +4741,7 @@ pub fn benchmark_context_with_options(
         related_tests: context.stats.related_tests,
         packet_bytes: packet.len(),
         estimated_packet_tokens: packet_tokens,
+        packet_quality,
         top_files,
     };
 
@@ -4606,6 +4780,76 @@ pub fn benchmark_context_with_options(
         savings,
         warnings: context.warnings,
     })
+}
+
+fn context_packet_quality(context: &ContextOutput) -> ContextPacketQuality {
+    let mut quality = ContextPacketQuality {
+        tasks: 1,
+        selected_files: context.read_first.len(),
+        selected_symbols: context.stats.selected_symbols,
+        related_tests: context.stats.related_tests,
+        selection_signals: context.selection_summary.top_signals.len(),
+        next_file_hints: context.selection_summary.next_files.len(),
+        ..ContextPacketQuality::default()
+    };
+
+    for file in &context.read_first {
+        if !file.symbols.is_empty() {
+            quality.files_with_symbols += 1;
+        }
+        if !file.snippets.is_empty() {
+            quality.files_with_snippets += 1;
+            quality.snippets += file.snippets.len();
+        }
+        if !file.related_tests.is_empty() {
+            quality.files_with_related_tests += 1;
+        }
+        if file.blast_radius.risk != "unknown" {
+            quality.files_with_non_unknown_risk += 1;
+        }
+        if !file.why.is_empty() {
+            quality.files_with_selection_reasons += 1;
+            quality.selection_reasons += file.why.len();
+        }
+        if !file.selection_confidence.is_empty() {
+            quality.files_with_selection_confidence += 1;
+        }
+        if file.language.is_code() {
+            quality.focus_targets += 1;
+        }
+        let blast_radius_hints = file.imports.len()
+            + file.referenced_by.len()
+            + file.calls.len()
+            + file.called_by.len()
+            + file.blast_radius.imports.len()
+            + file.blast_radius.referenced_by.len()
+            + file.blast_radius.tests.len()
+            + file.blast_radius.calls.len()
+            + file.blast_radius.called_by.len();
+        if blast_radius_hints > 0 {
+            quality.files_with_blast_radius += 1;
+            quality.blast_radius_hints += blast_radius_hints;
+        }
+        let call_graph_hints = file.calls.len()
+            + file.called_by.len()
+            + file.blast_radius.calls.len()
+            + file.blast_radius.called_by.len();
+        if call_graph_hints > 0 {
+            quality.files_with_call_graph_hints += 1;
+            quality.call_graph_hints += call_graph_hints;
+        }
+    }
+
+    if context
+        .read_first
+        .first()
+        .is_some_and(|file| file.language.is_code())
+    {
+        quality.relationship_followup_targets = 1;
+        quality.test_followup_targets = 1;
+    }
+
+    quality
 }
 
 pub fn benchmark_suite(
@@ -4653,6 +4897,7 @@ pub fn benchmark_suite_with_options(
     let mut total_estimated_reduction_percent = 0.0;
     let mut total_estimated_avoided_grep_commands = 0;
     let mut total_estimated_avoided_file_reads = 0;
+    let mut packet_quality = ContextPacketQuality::default();
     let mut misses = Vec::new();
     let mut observed_summary = ObservedSessionAccumulator::default();
 
@@ -4716,6 +4961,7 @@ pub fn benchmark_suite_with_options(
         total_estimated_reduction_percent += benchmark.savings.estimated_token_reduction_percent;
         total_estimated_avoided_grep_commands += benchmark.savings.avoided_grep_commands;
         total_estimated_avoided_file_reads += benchmark.savings.avoided_file_reads;
+        packet_quality.add(&benchmark.callsieve.packet_quality);
 
         if !expected_files_missing.is_empty() {
             misses.push(BenchmarkSuiteMiss {
@@ -4768,6 +5014,7 @@ pub fn benchmark_suite_with_options(
             total_baseline_context_payload_tokens,
             total_callsieve_context_payload_tokens,
         ),
+        packet_quality,
         total_estimated_token_savings,
         average_estimated_token_reduction_percent: if task_count == 0 {
             0.0
@@ -5125,6 +5372,7 @@ pub fn benchmark_report(
     let mut total_estimated_reduction_percent = 0.0;
     let mut total_avoided_grep_commands = 0;
     let mut total_avoided_file_reads = 0;
+    let mut total_packet_quality = ContextPacketQuality::default();
     let mut misses = Vec::new();
     let mut trace_accumulator = TraceAccumulator::default();
 
@@ -5144,6 +5392,7 @@ pub fn benchmark_report(
         let mut repo_reduction_percent_total = 0.0;
         let mut repo_avoided_grep_commands = 0;
         let mut repo_avoided_file_reads = 0;
+        let mut repo_packet_quality = ContextPacketQuality::default();
         let mut repo_misses = Vec::new();
         let mut repo_warnings = Vec::new();
 
@@ -5174,6 +5423,7 @@ pub fn benchmark_report(
                     * output.summary.task_count as f64;
             repo_avoided_grep_commands += output.summary.total_estimated_avoided_grep_commands;
             repo_avoided_file_reads += output.summary.total_estimated_avoided_file_reads;
+            repo_packet_quality.add(&output.summary.packet_quality);
             repo_misses.extend(output.summary.misses);
             repo_warnings.extend(output.warnings);
         }
@@ -5203,6 +5453,7 @@ pub fn benchmark_report(
         };
         total_avoided_grep_commands += repo_avoided_grep_commands;
         total_avoided_file_reads += repo_avoided_file_reads;
+        total_packet_quality.add(&repo_packet_quality);
 
         if !repo_misses.is_empty() {
             misses.push(BenchmarkReportMiss {
@@ -5261,6 +5512,7 @@ pub fn benchmark_report(
                 repo_baseline_context_payload_tokens,
                 repo_callsieve_context_payload_tokens,
             ),
+            packet_quality: repo_packet_quality,
             misses: repo_misses,
             session_trace,
             observed_session,
@@ -5290,6 +5542,7 @@ pub fn benchmark_report(
             total_baseline_context_payload_tokens,
             total_callsieve_context_payload_tokens,
         ),
+        packet_quality: total_packet_quality,
         total_estimated_token_savings,
         average_estimated_token_reduction_percent: if repo_count == 0 {
             0.0
@@ -5308,6 +5561,39 @@ pub fn benchmark_report(
         repo_count,
         repos,
         summary,
+    })
+}
+
+pub fn benchmark_report_trace_policy_check(
+    manifest: &BenchmarkReportManifest,
+) -> Result<TraceCheckOutput> {
+    let mut sessions = 0usize;
+    let mut violations = 0usize;
+    let mut grep_before_context = 0usize;
+    let mut grep_after_context = 0usize;
+    let mut violation_details = Vec::new();
+
+    for repo in &manifest.repos {
+        for trace_path in repo.policy_trace_paths() {
+            let trace_json = fs::read_to_string(&trace_path)?;
+            let check = trace_check_from_str_with_options(&trace_json, true)?;
+            sessions += check.sessions;
+            violations += check.violations;
+            grep_before_context += check.grep_before_context;
+            grep_after_context += check.grep_after_context;
+            violation_details.extend(check.violation_details);
+        }
+    }
+
+    Ok(TraceCheckOutput {
+        status: if violations == 0 { "pass" } else { "fail" }.to_string(),
+        strict: true,
+        sessions,
+        violations,
+        grep_before_context,
+        grep_after_context,
+        context_first_compliant: violations == 0 && sessions > 0,
+        violation_details,
     })
 }
 
@@ -6694,6 +6980,192 @@ fn miss_reasons_for(
 /// anchor rank; same-directory counts only for the top anchor.
 const GRAPH_CONSENSUS_BASE: i32 = 60;
 const GRAPH_CONSENSUS_ANCHORS: usize = 3;
+const NL_MODULE_NEIGHBOR_ANCHORS: usize = 8;
+const NL_MODULE_NEIGHBOR_MIN_ANCHORS: usize = 2;
+const NL_MODULE_NEIGHBOR_MAX_PER_MODULE: usize = 4;
+const NL_MODULE_NEIGHBOR_BASE: i32 = 80;
+
+struct ModuleNeighborSupport {
+    top_score: i32,
+    anchor_paths: BTreeSet<String>,
+}
+
+fn add_natural_language_module_neighbors(
+    lookup: &IndexLookup<'_>,
+    ranked: &[ranker::RankedMatch],
+    grouped: &mut BTreeMap<String, ContextCandidate>,
+    query_tokens: &[String],
+) {
+    if query_has_unique_code_file_stem(lookup, query_tokens) {
+        return;
+    }
+
+    let mut modules: BTreeMap<String, ModuleNeighborSupport> = BTreeMap::new();
+
+    for ranked_match in ranked.iter().take(NL_MODULE_NEIGHBOR_ANCHORS) {
+        let Some(file) = lookup.file_by_id(&ranked_match.file_id) else {
+            continue;
+        };
+        if !module_neighbor_anchor_file(file) {
+            continue;
+        }
+        let entry =
+            modules
+                .entry(file.module_path.clone())
+                .or_insert_with(|| ModuleNeighborSupport {
+                    top_score: ranked_match.score,
+                    anchor_paths: BTreeSet::new(),
+                });
+        entry.top_score = entry.top_score.max(ranked_match.score);
+        entry.anchor_paths.insert(file.path.clone());
+    }
+
+    for (module_path, support) in modules {
+        let anchor_count = support.anchor_paths.len();
+        if anchor_count < NL_MODULE_NEIGHBOR_MIN_ANCHORS {
+            continue;
+        }
+
+        let mut siblings: Vec<(i32, &FileRecord)> = lookup
+            .files_by_path
+            .values()
+            .copied()
+            .filter(|file| file.module_path == module_path)
+            .filter(|file| module_neighbor_anchor_file(file))
+            .filter(|file| !support.anchor_paths.contains(file.path.as_str()))
+            .map(|file| (module_neighbor_affinity(file, lookup, query_tokens), file))
+            .collect();
+
+        siblings.sort_by(|left, right| {
+            right
+                .0
+                .cmp(&left.0)
+                .then_with(|| left.1.path.cmp(&right.1.path))
+        });
+
+        for (offset, (affinity, file)) in siblings
+            .into_iter()
+            .take(NL_MODULE_NEIGHBOR_MAX_PER_MODULE)
+            .enumerate()
+        {
+            let anchor_points = (NL_MODULE_NEIGHBOR_BASE * anchor_count as i32) + (affinity * 12);
+            let offset_penalty = (offset as i32) * 8;
+            let raw_points = anchor_points.saturating_sub(offset_penalty).max(1);
+            let ceiling = support.top_score.saturating_sub(1);
+            let points = if ceiling > 0 {
+                raw_points.min(ceiling)
+            } else {
+                raw_points
+            };
+            let entry = grouped
+                .entry(file.id.clone())
+                .or_insert_with(|| ContextCandidate::new(file.id.clone(), 0, usize::MAX));
+            entry.add_consensus_boost(
+                points,
+                format!("same module as natural-language anchors: {module_path}"),
+            );
+        }
+    }
+}
+
+fn module_neighbor_anchor_file(file: &FileRecord) -> bool {
+    file.language.is_code()
+        && !file.is_test
+        && !file.is_config
+        && !file.module_path.is_empty()
+        && !is_probably_third_party_path(&file.path)
+}
+
+fn module_neighbor_affinity(
+    file: &FileRecord,
+    lookup: &IndexLookup<'_>,
+    query_tokens: &[String],
+) -> i32 {
+    let query: BTreeSet<&str> = query_tokens.iter().map(String::as_str).collect();
+    let path_terms: BTreeSet<String> = path_tokens(&file.path).into_iter().collect();
+    let path_overlap = path_terms
+        .iter()
+        .filter(|term| query.contains(term.as_str()))
+        .count() as i32;
+    let content_overlap = file
+        .content_terms
+        .iter()
+        .filter(|term| query.contains(term.as_str()))
+        .take(6)
+        .count() as i32;
+    let symbol_overlap = lookup
+        .symbols_for_file(&file.id)
+        .iter()
+        .map(|symbol| {
+            module_neighbor_symbol_terms(symbol, file)
+                .iter()
+                .filter(|term| query.contains(term.as_str()))
+                .take(4)
+                .count() as i32
+        })
+        .max()
+        .unwrap_or(0);
+
+    (path_overlap * 4) + (content_overlap * 2) + (symbol_overlap * 3)
+}
+
+fn module_neighbor_symbol_terms(symbol: &SymbolRecord, file: &FileRecord) -> BTreeSet<String> {
+    let mut terms = BTreeSet::new();
+    for source in [
+        symbol.name.as_str(),
+        symbol.kind.as_str(),
+        symbol.signature.as_str(),
+        symbol.doc.as_deref().unwrap_or_default(),
+        file.path.as_str(),
+        file.module_path.as_str(),
+    ] {
+        terms.extend(formatter::tokenize(source));
+    }
+    terms
+}
+
+fn query_has_unique_code_file_stem(lookup: &IndexLookup<'_>, query_tokens: &[String]) -> bool {
+    let query: BTreeSet<&str> = query_tokens
+        .iter()
+        .filter(|token| token.len() >= 5)
+        .map(String::as_str)
+        .collect();
+    if query.is_empty() {
+        return false;
+    }
+
+    let mut matching_stems: BTreeMap<&str, usize> =
+        query.iter().map(|token| (*token, 0usize)).collect();
+    for file in lookup.files_by_path.values().copied() {
+        if !file.language.is_code() || file.is_test || file.is_config {
+            continue;
+        }
+        for term in path_tokens(file_stem_for_path(&file.path)) {
+            if let Some(count) = matching_stems.get_mut(term.as_str()) {
+                *count += 1;
+            }
+        }
+    }
+
+    matching_stems.values().any(|count| *count == 1)
+}
+
+fn file_stem_for_path(path: &str) -> &str {
+    path.rsplit('/')
+        .next()
+        .unwrap_or(path)
+        .split('.')
+        .next()
+        .unwrap_or(path)
+}
+
+fn is_probably_third_party_path(path: &str) -> bool {
+    let path = path.to_ascii_lowercase();
+    path.starts_with("cextern/")
+        || path.contains("/extern/")
+        || path.contains("/vendor/")
+        || path.contains("/node_modules/")
+}
 
 fn add_graph_consensus_boost(lookup: &IndexLookup<'_>, candidates: &mut [ContextCandidate]) {
     if candidates.len() <= 1 {
@@ -6995,6 +7467,14 @@ fn references_to_file(lookup: &IndexLookup<'_>, path: &str) -> Vec<String> {
         .copied()
         .map(|import| import.source_path.clone())
         .collect();
+    references.extend(
+        lookup
+            .references_to_path(path)
+            .iter()
+            .copied()
+            .filter(|reference| reference.source_path != path && reference.kind != "call")
+            .map(|reference| reference.source_path.clone()),
+    );
     references.sort();
     references.dedup();
     references
@@ -8286,6 +8766,24 @@ mod tests {
         }
     }
 
+    fn reference_record(source: &str, target: &str, kind: &str) -> ReferenceRecord {
+        ReferenceRecord {
+            file_id: format!("file:{source}"),
+            source_path: source.to_string(),
+            source_symbol_id: None,
+            target_name: "targetSymbol".to_string(),
+            target_symbol_id: None,
+            target_path: Some(target.to_string()),
+            kind: kind.to_string(),
+            line: 1,
+            edge_source: "tree_sitter".to_string(),
+            confidence: 0.8,
+            lsp_method: None,
+            source_range: None,
+            target_range: None,
+        }
+    }
+
     #[test]
     fn graph_consensus_requires_two_independent_anchors() {
         let mut files = vec![
@@ -8332,6 +8830,28 @@ mod tests {
     }
 
     #[test]
+    fn references_to_file_includes_non_call_reference_edges() {
+        let mut index = minimal_index(vec![
+            minimal_file("target", "src/auth/session.ts"),
+            minimal_file("importer", "src/auth/router.ts"),
+            minimal_file("reader", "src/user/profile.ts"),
+            minimal_file("caller", "src/auth/session.test.ts"),
+        ]);
+        index.imports = vec![import_record("src/auth/router.ts", "src/auth/session.ts")];
+        index.references = vec![
+            reference_record("src/user/profile.ts", "src/auth/session.ts", "reference"),
+            reference_record("src/auth/session.test.ts", "src/auth/session.ts", "call"),
+            reference_record("src/auth/session.ts", "src/auth/session.ts", "reference"),
+        ];
+        let lookup = IndexLookup::new(&index);
+
+        assert_eq!(
+            references_to_file(&lookup, "src/auth/session.ts"),
+            vec!["src/auth/router.ts", "src/user/profile.ts"]
+        );
+    }
+
+    #[test]
     fn graph_consensus_same_directory_counts_only_alongside_edges() {
         let mut files = vec![
             minimal_file("a1", "src/api/client.rs"),
@@ -8364,6 +8884,79 @@ mod tests {
         assert_eq!(candidates[3].score(), 10 + 4 * GRAPH_CONSENSUS_BASE);
         // sib2: same-directory alone never boosts
         assert_eq!(candidates[4].score(), 10);
+    }
+
+    #[test]
+    fn natural_language_module_neighbors_inject_same_module_siblings() {
+        let temp = tempfile::tempdir().unwrap();
+        write(
+            temp.path().join("src/payments/router.ts"),
+            "export function checkoutRouter() {\n  return 'charge flow';\n}\n",
+        );
+        write(
+            temp.path().join("src/payments/service.ts"),
+            "export function chargeService() {\n  return 'checkout flow';\n}\n",
+        );
+        write(
+            temp.path().join("src/payments/settlement.ts"),
+            "export function settleLedger() {\n  return 'ok';\n}\n",
+        );
+
+        let index = indexer::build_index(temp.path()).unwrap();
+        let output =
+            build_context(temp.path(), &index, "fix checkout charge flow", 3, 0, false).unwrap();
+        let files = context_read_first_files(&output);
+
+        assert!(
+            files.contains(&"src/payments/settlement.ts".to_string()),
+            "same-module sibling should be injected for natural-language vocabulary gaps: {files:?}"
+        );
+        let sibling = output
+            .read_first
+            .iter()
+            .find(|file| file.file == "src/payments/settlement.ts")
+            .unwrap();
+        assert!(
+            sibling
+                .why
+                .iter()
+                .any(|why| why.contains("same module as natural-language anchors")),
+            "injected sibling should explain module-neighbor evidence: {:?}",
+            sibling.why
+        );
+    }
+
+    #[test]
+    fn natural_language_module_neighbors_skip_unique_file_stem_queries() {
+        let mut files = vec![
+            minimal_file("ownership", "src/indexer/ownership.rs"),
+            minimal_file("query", "src/query/mod.rs"),
+            minimal_file("ranker", "src/query/ranker.rs"),
+            minimal_file("django_models", "django/db/models.py"),
+            minimal_file("astropy_models", "astropy/modeling/models.py"),
+        ];
+        for file in &mut files {
+            file.module_path = std::path::Path::new(&file.path)
+                .parent()
+                .unwrap()
+                .to_string_lossy()
+                .to_string();
+        }
+        let index = minimal_index(files);
+        let lookup = IndexLookup::new(&index);
+
+        let ownership_tokens =
+            ranker::query_tokens("where is ownership information attached to selected files");
+        assert!(
+            query_has_unique_code_file_stem(&lookup, &ownership_tokens),
+            "a unique ownership.rs stem should keep module-neighbor expansion out of the way"
+        );
+
+        let models_tokens = ranker::query_tokens("fix nested combined models");
+        assert!(
+            !query_has_unique_code_file_stem(&lookup, &models_tokens),
+            "common stems such as models.py should still allow vocabulary-gap module expansion"
+        );
     }
 
     #[test]
@@ -9459,6 +10052,15 @@ mod tests {
     }
 
     #[test]
+    fn selection_confidence_uses_relative_score_tiers() {
+        assert_eq!(selection_confidence_for_score(100, 100), "high");
+        assert_eq!(selection_confidence_for_score(45, 100), "medium");
+        assert_eq!(selection_confidence_for_score(44, 100), "low");
+        assert_eq!(selection_confidence_for_score(0, 100), "low");
+        assert_eq!(selection_confidence_for_score(10, 0), "medium");
+    }
+
+    #[test]
     fn skim_context_uses_read_first_indexes_for_selection_files() {
         let summary = ContextSelectionSummary {
             top_file: Some("src/auth/session.ts".to_string()),
@@ -9525,6 +10127,7 @@ mod tests {
         let file = ContextFile {
             rank: 1,
             score: 42,
+            selection_confidence: "high".to_string(),
             file: "src/auth/session.ts".to_string(),
             language: Language::TypeScript,
             symbols: Vec::new(),
@@ -9554,7 +10157,70 @@ mod tests {
 
         assert_eq!(
             compact_impact_for_value(&file, &path_indexes),
-            json!(["m", 2, 1])
+            json!(["m", 2, 1, "test,im"])
+        );
+    }
+
+    #[test]
+    fn skim_context_impact_flags_name_graph_edge_kinds() {
+        let file = ContextFile {
+            rank: 1,
+            score: 42,
+            selection_confidence: "high".to_string(),
+            file: "src/auth/session.ts".to_string(),
+            language: Language::TypeScript,
+            symbols: Vec::new(),
+            snippets: Vec::new(),
+            imports: Vec::new(),
+            referenced_by: vec!["src/auth/session.test.ts".to_string()],
+            blast_radius: BlastRadius {
+                imports: vec!["src/auth/token.ts".to_string()],
+                referenced_by: vec!["src/auth/session.test.ts".to_string()],
+                tests: vec!["src/auth/session.test.ts".to_string()],
+                calls: vec!["src/auth/token.ts".to_string()],
+                called_by: vec!["src/auth/session.test.ts".to_string()],
+                risk: "high".to_string(),
+            },
+            calls: vec![ReferenceEdge {
+                file: "src/auth/session.ts".to_string(),
+                symbol: Some("createSession".to_string()),
+                target: "tokenFor".to_string(),
+                target_file: Some("src/auth/token.ts".to_string()),
+                kind: "call".to_string(),
+                line: 4,
+                edge_source: "tree_sitter".to_string(),
+                confidence: 0.8,
+                lsp_method: None,
+                source_range: Some([4, 4]),
+                target_range: None,
+            }],
+            called_by: vec![ReferenceEdge {
+                file: "src/auth/session.test.ts".to_string(),
+                symbol: None,
+                target: "createSession".to_string(),
+                target_file: Some("src/auth/session.ts".to_string()),
+                kind: "call".to_string(),
+                line: 4,
+                edge_source: "tree_sitter".to_string(),
+                confidence: 0.8,
+                lsp_method: None,
+                source_range: Some([4, 4]),
+                target_range: None,
+            }],
+            related_tests: Vec::new(),
+            ownership: None,
+            git: None,
+            why: Vec::new(),
+            why_debug: Vec::new(),
+        };
+        let path_indexes = BTreeMap::from([
+            ("src/auth/session.ts", 0usize),
+            ("src/auth/session.test.ts", 2usize),
+        ]);
+
+        assert_eq!(
+            compact_impact_for_value(&file, &path_indexes),
+            json!(["h", 2, 2, 2, "test,im,call,ref,by"])
         );
     }
 
@@ -9563,6 +10229,7 @@ mod tests {
         let file = ContextFile {
             rank: 1,
             score: 42,
+            selection_confidence: "high".to_string(),
             file: "src/auth/session.ts".to_string(),
             language: Language::TypeScript,
             symbols: Vec::new(),
@@ -9609,6 +10276,7 @@ mod tests {
         let file = ContextFile {
             rank: 1,
             score: 42,
+            selection_confidence: "high".to_string(),
             file: "src/lib.rs".to_string(),
             language: Language::Rust,
             symbols: Vec::new(),
@@ -9989,6 +10657,115 @@ mod tests {
         assert!(
             files.contains(&"tests/cli.rs".to_string()),
             "task-specific test should still be promoted: {files:?}"
+        );
+    }
+
+    #[test]
+    fn test_companion_promotion_keeps_domain_module_implementation() {
+        let temp = tempfile::tempdir().unwrap();
+        write(
+            temp.path().join("django/db/migrations/serializer.py"),
+            "class BaseSerializer:\n    pass\n\nclass EnumSerializer(BaseSerializer):\n    def serialize(self):\n        return 'migration enum default value name generated'\n",
+        );
+        write(
+            temp.path().join("django/db/models/enums.py"),
+            "class Choices:\n    pass\n\nclass Status:\n    GOOD = 'Good'\n",
+        );
+        write(
+            temp.path()
+                .join("django/core/management/commands/makemigrations.py"),
+            "def handle():\n    return 'generated migration file'\n",
+        );
+        write(
+            temp.path().join("django/db/models/fields/__init__.py"),
+            "class CharField:\n    def __init__(self, default=None):\n        self.default = default\n",
+        );
+        write(
+            temp.path()
+                .join("tests/model_inheritance_regress/models.py"),
+            "from django.db import models\n\nclass Item(models.Model):\n    status = models.CharField(default='Good', max_length=128)\n",
+        );
+
+        let index = indexer::build_index(temp.path()).unwrap();
+        let output = build_context(
+            temp.path(),
+            &index,
+            "generated migration uses enum value instead of enum name for a default",
+            5,
+            0,
+            false,
+        )
+        .unwrap();
+        let files = context_read_first_files(&output);
+
+        assert!(
+            files.contains(&"django/db/migrations/serializer.py".to_string()),
+            "domain-module implementation should be retained when test companion is promoted: {files:?}"
+        );
+    }
+
+    #[test]
+    fn proof_report_context_keeps_query_surface_at_default_limit() {
+        let temp = tempfile::tempdir().unwrap();
+        write(
+            temp.path().join("src/query/mod.rs"),
+            "pub fn enterprise_proof_report() {}\npub fn proof_report() {}\npub struct ProofReportOutput;\npub fn evidence_pack_schema_gate() {}\n",
+        );
+        write(
+            temp.path().join("docs/ENTERPRISE_PROOF.md"),
+            "Enterprise proof evidence gates, proof report schema, observed sessions, and strict trace policy.\n",
+        );
+        write(
+            temp.path().join("src/query/ranker.rs"),
+            "fn has_benchmark_evidence_intent() {}\nfn benchmark_evidence_doc_score() {}\nfn proof_report_recall_gate() {}\n",
+        );
+        write(
+            temp.path().join("README.md"),
+            "CallSieve proves enterprise evidence, proof report, and recall results for agents.\n",
+        );
+        write(
+            temp.path().join("src/cli/mod.rs"),
+            "struct EvidencePackOutput;\nfn evidence_pack_protocol() {}\nfn competitive_report_evidence_requires_savings_and_strict_trace_policy() {}\n",
+        );
+        write(
+            temp.path().join("docs/BENCHMARKS.md"),
+            "Benchmark evidence proof report manifest suite trace and recall documentation.\n",
+        );
+        write(
+            temp.path()
+                .join("benchmarks/evidence/enterprise-proof-manifest.example.json"),
+            "{\"proof\":\"evidence\",\"report\":\"manifest\"}\n",
+        );
+        write(
+            temp.path().join("src/bench_public.rs"),
+            "pub fn write_report() {}\npub fn compare_enterprise_proof_evidence() {}\n",
+        );
+        write(
+            temp.path().join("tests/cli.rs"),
+            "#[test]\nfn enterprise_proof_report_requires_clients_and_session_savings_ratios() {}\n#[test]\nfn evidence_pack_preserves_pmf_metrics_and_redacts_team_identifiers() {}\n",
+        );
+
+        let index = indexer::build_index(temp.path()).unwrap();
+        let output = build_context(
+            temp.path(),
+            &index,
+            "improve enterprise proof evidence pack proof report schemas and gates",
+            8,
+            0,
+            false,
+        )
+        .unwrap();
+        let files = context_read_first_files(&output);
+
+        assert!(
+            files.contains(&"src/query/mod.rs".to_string()),
+            "proof implementation surface should be retained at the default limit: {files:?}"
+        );
+        assert!(
+            files.contains(
+                &"benchmarks/evidence/enterprise-proof-manifest.example.json".to_string()
+            ),
+            "proof evidence artifact should be retained at the default limit: {files:?}"
         );
     }
 

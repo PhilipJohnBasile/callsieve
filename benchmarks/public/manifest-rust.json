@@ -1,0 +1,117 @@
+{
+  "schema_version": 1,
+  "description": "CallSieve public benchmark - Rust language slice. Twelve natural-language tasks target a pinned public checkout of CallSieve itself to verify Rust indexing and retrieval coverage. This is a language-smoke slice, not a third-party SWE-bench-style claim.",
+  "mode": "A",
+  "default_k": 5,
+  "source": "https://github.com/PhilipJohnBasile/callsieve",
+  "issues": [
+    {
+      "id": "callsieve-rust-ranker",
+      "repo": "PhilipJohnBasile/callsieve",
+      "base_commit": "11c7ef19bd2250c74f76b5c6409de7b2d2f07394",
+      "task": "rank files for natural language codebase questions with explainable deterministic scoring",
+      "ground_truth_files": [
+        "src/query/ranker.rs"
+      ]
+    },
+    {
+      "id": "callsieve-rust-agent-context",
+      "repo": "PhilipJohnBasile/callsieve",
+      "base_commit": "11c7ef19bd2250c74f76b5c6409de7b2d2f07394",
+      "task": "build compact agent context packets with read first files references tests and blast radius hints",
+      "ground_truth_files": [
+        "src/query/mod.rs"
+      ]
+    },
+    {
+      "id": "callsieve-rust-tree-sitter-symbols",
+      "repo": "PhilipJohnBasile/callsieve",
+      "base_commit": "11c7ef19bd2250c74f76b5c6409de7b2d2f07394",
+      "task": "parse Python TypeScript JavaScript and Rust symbols with tree sitter into symbol spans",
+      "ground_truth_files": [
+        "src/indexer/tree_sitter_symbols.rs"
+      ]
+    },
+    {
+      "id": "callsieve-rust-fallback-symbols",
+      "repo": "PhilipJohnBasile/callsieve",
+      "base_commit": "11c7ef19bd2250c74f76b5c6409de7b2d2f07394",
+      "task": "fallback source scanner extracts functions classes structs enums and constants when tree sitter is unavailable",
+      "ground_truth_files": [
+        "src/indexer/symbols.rs"
+      ]
+    },
+    {
+      "id": "callsieve-rust-public-bench",
+      "repo": "PhilipJohnBasile/callsieve",
+      "base_commit": "11c7ef19bd2250c74f76b5c6409de7b2d2f07394",
+      "task": "run public benchmark manifests against pinned local repositories and score first correct file rate",
+      "ground_truth_files": [
+        "src/bench_public.rs"
+      ]
+    },
+    {
+      "id": "callsieve-rust-public-proof-cli",
+      "repo": "PhilipJohnBasile/callsieve",
+      "base_commit": "11c7ef19bd2250c74f76b5c6409de7b2d2f07394",
+      "task": "generate public proof reports competitive reports evidence packs and CLI command outputs",
+      "ground_truth_files": [
+        "src/cli/mod.rs"
+      ]
+    },
+    {
+      "id": "callsieve-rust-mcp-server",
+      "repo": "PhilipJohnBasile/callsieve",
+      "base_commit": "11c7ef19bd2250c74f76b5c6409de7b2d2f07394",
+      "task": "serve CallSieve context through MCP tools and JSON requests for agent integrations",
+      "ground_truth_files": [
+        "src/mcp.rs"
+      ]
+    },
+    {
+      "id": "callsieve-rust-repo-walker",
+      "repo": "PhilipJohnBasile/callsieve",
+      "base_commit": "11c7ef19bd2250c74f76b5c6409de7b2d2f07394",
+      "task": "walk repository files while respecting gitignore rules and skipping generated folders",
+      "ground_truth_files": [
+        "src/indexer/walker.rs"
+      ]
+    },
+    {
+      "id": "callsieve-rust-json-store",
+      "repo": "PhilipJohnBasile/callsieve",
+      "base_commit": "11c7ef19bd2250c74f76b5c6409de7b2d2f07394",
+      "task": "persist and load the local JSON code index for a repository",
+      "ground_truth_files": [
+        "src/store/json_store.rs"
+      ]
+    },
+    {
+      "id": "callsieve-rust-import-extraction",
+      "repo": "PhilipJohnBasile/callsieve",
+      "base_commit": "11c7ef19bd2250c74f76b5c6409de7b2d2f07394",
+      "task": "extract imports and module dependency edges from source files",
+      "ground_truth_files": [
+        "src/indexer/imports.rs"
+      ]
+    },
+    {
+      "id": "callsieve-rust-stacktrace",
+      "repo": "PhilipJohnBasile/callsieve",
+      "base_commit": "11c7ef19bd2250c74f76b5c6409de7b2d2f07394",
+      "task": "summarize stack traces into relevant source files and frames",
+      "ground_truth_files": [
+        "src/query/stacktrace.rs"
+      ]
+    },
+    {
+      "id": "callsieve-rust-reference-graph",
+      "repo": "PhilipJohnBasile/callsieve",
+      "base_commit": "11c7ef19bd2250c74f76b5c6409de7b2d2f07394",
+      "task": "find references calls and related symbols between indexed files",
+      "ground_truth_files": [
+        "src/indexer/references.rs"
+      ]
+    }
+  ]
+}

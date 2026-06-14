@@ -54,7 +54,7 @@ Use the memory object as hints:
 {
   "memory": {
     "hit": true,
-    "f": ["src/cli.rs"],
+    "f": ["src/cli/mod.rs"],
     "sy": ["Command"]
   }
 }

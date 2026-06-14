@@ -371,8 +371,10 @@ fn expand_compact_selection_signal(name: &str) -> &str {
         "cfgdep" => "config_dependency_intent",
         "dep" => "dependency_manifest_intent",
         "bench" => "benchmark_evidence_file_intent",
+        "bdoc" => "benchmark_evidence_doc_intent",
         "readme" => "readme_evidence_file_intent",
         "comp" => "competitive_positioning_doc",
+        "own" => "ownership_context_attachment",
         "doc" => "docs_intent",
         "docp" => "docs_path_intent",
         "cmd" => "command_surface_intent",
@@ -461,6 +463,30 @@ fn write(path: impl AsRef<Path>, content: &str) {
     fs::write(path, content).unwrap();
 }
 
+fn git(root: &Path, args: &[&str]) -> String {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .output()
+        .expect("failed to run git");
+    assert!(
+        output.status.success(),
+        "git {:?} failed\nstdout:\n{}\nstderr:\n{}",
+        args,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).trim().to_string()
+}
+
+#[cfg(unix)]
+fn unix_socket_bind_available() -> bool {
+    let temp = tempfile::tempdir().unwrap();
+    let socket = temp.path().join("probe.sock");
+    std::os::unix::net::UnixListener::bind(socket).is_ok()
+}
+
 fn fixture_repo() -> tempfile::TempDir {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path();
@@ -529,6 +555,611 @@ fn index_writes_local_json_and_stats_cover_languages() {
     assert_eq!(stats["languages"]["typescript"], 3);
     assert_eq!(stats["languages"]["python"], 1);
     assert_eq!(stats["languages"]["rust"], 1);
+}
+
+#[test]
+fn repo_pack_baseline_measures_gitignored_source_payload() {
+    let repo = tempfile::tempdir().unwrap();
+    let root = repo.path();
+    write(root.join(".gitignore"), "ignored.ts\n");
+    write(root.join("README.md"), "# Demo\n");
+    write(root.join("src/lib.rs"), "pub fn kept() -> bool { true }\n");
+    write(root.join("ignored.ts"), "export function ignored() {}\n");
+    let out = root.join("pack-baseline.json");
+
+    let report = json(&run(&[
+        "repo-pack-baseline",
+        root.to_str().unwrap(),
+        "--id",
+        "fixture-full-repo-pack-proxy",
+        "--out",
+        out.to_str().unwrap(),
+    ]));
+
+    assert_eq!(report["command"], "repo-pack-baseline");
+    assert_eq!(report["id"], "fixture-full-repo-pack-proxy");
+    assert_eq!(report["locally_measured"], true);
+    assert_eq!(report["metrics"]["file_count"], 2);
+    assert!(report["metrics"]["total_bytes"].as_u64().unwrap() > 0);
+    assert!(report["metrics"]["total_tokens"].as_u64().unwrap() > 0);
+    assert!(
+        report["largest_files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|file| file["path"].as_str().unwrap() != "ignored.ts")
+    );
+
+    let artifact: Value = serde_json::from_slice(&fs::read(out).unwrap()).unwrap();
+    assert_eq!(artifact["metrics"]["file_count"], 2);
+    assert!(artifact["metrics"]["total_tokens"].as_u64().unwrap() > 0);
+}
+
+#[test]
+fn agent_native_baseline_computes_public_proof_artifact() {
+    let repo = tempfile::tempdir().unwrap();
+    let root = repo.path();
+    let tasks = root.join("agent-native-tasks.json");
+    let transcript = root.join("cursor-transcript.json");
+    let out = root.join("agent-native-baseline.json");
+    write(&transcript, r#"{"source":"fixture"}"#);
+    write(
+        &tasks,
+        r#"{
+  "tasks": [
+    {
+      "id": "hit",
+      "repo": "psf/requests",
+      "base_commit": "110048f9837f8441ea536804115e80b69f400277",
+      "task": "find session method handling",
+      "expected_files": ["requests/sessions.py"],
+      "agent_native_files": ["requests/models.py", "requests/sessions.py"],
+      "callsieve_files": ["requests/sessions.py"],
+      "agent_native_context_tokens": 2000,
+      "callsieve_packet_tokens": 100,
+      "callsieve_index_fingerprint": "fnv1a64:abc123",
+      "recording_status": "measured"
+    },
+    {
+      "id": "miss",
+      "expected_files": ["requests/adapters.py"],
+      "agent_native_files": ["requests/models.py"],
+      "callsieve_files": ["requests/models.py", "requests/adapters.py"],
+      "agent_native_context_tokens": 3000,
+      "callsieve_packet_tokens": 150,
+      "callsieve_index_fingerprint": "fnv1a64:def456",
+      "recording_status": "measured"
+    }
+  ]
+}"#,
+    );
+
+    let report = json(&run(&[
+        "agent-native-baseline",
+        tasks.to_str().unwrap(),
+        "--id",
+        "cursor-public-requests",
+        "--tool",
+        "Cursor native codebase search",
+        "--k",
+        "2",
+        "--measurement-command",
+        "manual approved Cursor run",
+        "--source-artifact",
+        transcript.to_str().unwrap(),
+        "--measurement-note",
+        "fixture note",
+        "--out",
+        out.to_str().unwrap(),
+    ]));
+
+    assert_eq!(report["command"], "agent-native-baseline");
+    assert_eq!(report["id"], "cursor-public-requests");
+    assert_eq!(report["locally_measured"], true);
+    assert_eq!(report["metrics"]["task_count"], 2);
+    assert_eq!(
+        report["metrics"]["agent_native_first_correct_file_rate_at_k"],
+        0.5
+    );
+    assert_eq!(
+        report["metrics"]["callsieve_first_correct_file_rate_at_k"],
+        1.0
+    );
+    assert_eq!(
+        report["metrics"]["callsieve_minus_agent_native_first_correct_file_rate_at_k"],
+        0.5
+    );
+    assert_eq!(
+        report["metrics"]["agent_native_average_context_tokens"],
+        2500
+    );
+    assert_eq!(report["metrics"]["callsieve_average_packet_tokens"], 125);
+    assert_eq!(
+        report["metrics"]["agent_native_context_token_ratio_vs_callsieve"],
+        20.0
+    );
+    assert_eq!(report["transcript_provenance_status"], "pass");
+    assert_eq!(
+        report["source_artifact_evidence"].as_array().unwrap().len(),
+        2
+    );
+    assert_eq!(
+        report["source_artifact_evidence"][1]["role"],
+        "agent_native_transcript_or_export"
+    );
+    assert!(
+        report["source_artifact_evidence"][1]["hash"]
+            .as_str()
+            .unwrap()
+            .starts_with("fnv1a64:")
+    );
+    assert_eq!(
+        report["tasks"][1]["agent_native_first_correct_file_at_k"],
+        false
+    );
+    assert_eq!(
+        report["tasks"][1]["callsieve_first_correct_file_at_k"],
+        true
+    );
+    assert_eq!(report["tasks"][0]["repo"], "psf/requests");
+    assert_eq!(
+        report["tasks"][0]["base_commit"],
+        "110048f9837f8441ea536804115e80b69f400277"
+    );
+    assert_eq!(
+        report["tasks"][0]["callsieve_index_fingerprint"],
+        "fnv1a64:abc123"
+    );
+    assert!(
+        report["source_artifacts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|path| path.as_str().unwrap() == transcript.to_string_lossy())
+    );
+
+    let artifact: Value = serde_json::from_slice(&fs::read(out).unwrap()).unwrap();
+    assert_eq!(artifact["metrics"]["task_count"], 2);
+    assert_eq!(
+        artifact["metrics"]["agent_native_context_token_ratio_vs_callsieve"],
+        20.0
+    );
+    assert_eq!(
+        artifact["tasks"][0]["base_commit"],
+        report["tasks"][0]["base_commit"]
+    );
+}
+
+#[test]
+fn agent_native_template_prefills_callsieve_side_for_external_measurement() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+    let tasks = repo.path().join("agent-native-template-tasks.json");
+    let out = repo.path().join("agent-native-template.json");
+    write(
+        &tasks,
+        r#"{
+  "tasks": [
+    {
+      "id": "auth",
+      "task": "change createSession token behavior",
+      "expected_files": ["src/auth/session.ts"]
+    }
+  ]
+}"#,
+    );
+
+    let template = json(&run(&[
+        "agent-native-template",
+        root,
+        tasks.to_str().unwrap(),
+        "--k",
+        "2",
+        "--out",
+        out.to_str().unwrap(),
+    ]));
+
+    assert_eq!(template["command"], "agent-native-template");
+    assert_eq!(template["status"], "needs_agent_native_measurement");
+    assert_eq!(template["locally_measured"], false);
+    assert_eq!(template["k"], 2);
+    assert!(
+        template["source_tasks_hash"]
+            .as_str()
+            .unwrap()
+            .starts_with("fnv1a64:")
+    );
+    assert!(
+        template["index_fingerprint"]
+            .as_str()
+            .unwrap()
+            .starts_with("fnv1a64:")
+    );
+    assert!(
+        template["retrieval_contract_fingerprint"]
+            .as_str()
+            .unwrap()
+            .starts_with("fnv1a64:")
+    );
+    assert_eq!(
+        template["tasks"][0]["recording_status"],
+        "needs_agent_native_measurement"
+    );
+    assert_eq!(
+        template["tasks"][0]["agent_native_files"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0
+    );
+    assert_eq!(template["tasks"][0]["agent_native_context_tokens"], 0);
+    assert!(
+        template["tasks"][0]["callsieve_files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|file| file.as_str().unwrap() == "src/auth/session.ts")
+    );
+    assert!(
+        template["tasks"][0]["callsieve_packet_tokens"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
+    let saved: Value = serde_json::from_slice(&fs::read(&out).unwrap()).unwrap();
+    assert_eq!(saved, template);
+    let template_check = json(&run(&[
+        "agent-native-check",
+        out.to_str().unwrap(),
+        "--mode",
+        "template",
+    ]));
+    assert_eq!(template_check["command"], "agent-native-check");
+    assert_eq!(template_check["status"], "pass");
+    assert_eq!(template_check["mode"], "template");
+    assert_eq!(template_check["tasks_ready_for_mode"], 1);
+    assert_eq!(
+        template_check["source_artifact_evidence"][0]["role"],
+        "task_log"
+    );
+
+    let mut measured = template;
+    measured["tasks"][0]["agent_native_files"] = serde_json::json!(["src/auth/session.ts"]);
+    measured["tasks"][0]["agent_native_context_tokens"] = serde_json::json!(2000);
+    measured["tasks"][0]["recording_status"] = serde_json::json!("measured");
+    let transcript = repo.path().join("native-search-transcript.json");
+    write(
+        &transcript,
+        r#"{"tool":"fixture","files":["src/auth/session.ts"]}"#,
+    );
+    write(&out, &serde_json::to_string_pretty(&measured).unwrap());
+    let measured_check = json(&run(&[
+        "agent-native-check",
+        out.to_str().unwrap(),
+        "--mode",
+        "measured",
+        "--source-artifact",
+        transcript.to_str().unwrap(),
+    ]));
+    assert_eq!(measured_check["status"], "pass");
+    assert_eq!(measured_check["mode"], "measured");
+    assert_eq!(measured_check["tasks_with_agent_native_files"], 1);
+    assert_eq!(
+        measured_check["source_artifact_evidence"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(
+        measured_check["source_artifact_evidence"][0]["role"],
+        "task_log"
+    );
+    assert_eq!(
+        measured_check["source_artifact_evidence"][1]["role"],
+        "agent_native_transcript_or_export"
+    );
+    assert!(
+        measured_check["source_artifact_evidence"][1]["hash"]
+            .as_str()
+            .unwrap()
+            .starts_with("fnv1a64:")
+    );
+    let baseline = json(&run(&[
+        "agent-native-baseline",
+        out.to_str().unwrap(),
+        "--id",
+        "fixture-native",
+        "--tool",
+        "Fixture Native Search",
+        "--k",
+        "2",
+        "--source-artifact",
+        transcript.to_str().unwrap(),
+    ]));
+    assert_eq!(baseline["metrics"]["task_count"], 1);
+    assert_eq!(
+        baseline["metrics"]["callsieve_first_correct_file_rate_at_k"],
+        1.0
+    );
+    assert_eq!(
+        baseline["metrics"]["agent_native_first_correct_file_rate_at_k"],
+        1.0
+    );
+}
+
+#[test]
+fn agent_native_template_uses_public_issue_base_commits() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("psf").join("requests");
+    fs::create_dir_all(&root).unwrap();
+    git(&root, &["init", "-q"]);
+    git(
+        &root,
+        &["config", "user.email", "callsieve@example.invalid"],
+    );
+    git(&root, &["config", "user.name", "CallSieve Test"]);
+
+    write(
+        root.join("requests/sessions.py"),
+        "def resolve_redirects():\n    return 'method selection redirect copy'\n",
+    );
+    git(&root, &["add", "."]);
+    git(&root, &["commit", "-q", "-m", "sessions"]);
+    let sessions_commit = git(&root, &["rev-parse", "HEAD"]);
+
+    fs::remove_file(root.join("requests/sessions.py")).unwrap();
+    write(
+        root.join("requests/models.py"),
+        "def prepare_url():\n    return 'unicode url example host validation'\n",
+    );
+    git(&root, &["add", "."]);
+    git(&root, &["commit", "-q", "-m", "models"]);
+    let models_commit = git(&root, &["rev-parse", "HEAD"]);
+
+    let manifest = temp.path().join("manifest.json");
+    write(
+        &manifest,
+        &format!(
+            r#"{{
+  "issues": [
+    {{
+      "id": "sessions-task",
+      "repo": "psf/requests",
+      "base_commit": "{sessions_commit}",
+      "task": "redirect copy method selection",
+      "ground_truth_files": ["requests/sessions.py"]
+    }},
+    {{
+      "id": "models-task",
+      "repo": "psf/requests",
+      "base_commit": "{models_commit}",
+      "task": "unicode url host validation",
+      "ground_truth_files": ["requests/models.py"]
+    }}
+  ]
+}}"#
+        ),
+    );
+
+    let template = json(&run(&[
+        "agent-native-template",
+        root.to_str().unwrap(),
+        manifest.to_str().unwrap(),
+        "--k",
+        "2",
+    ]));
+
+    assert_eq!(template["pinned_base_commits"], true);
+    assert!(
+        template["index_fingerprint"]
+            .as_str()
+            .unwrap()
+            .starts_with("fnv1a64:")
+    );
+    assert_eq!(template["tasks"][0]["repo"], "psf/requests");
+    assert_eq!(template["tasks"][0]["base_commit"], sessions_commit);
+    assert_eq!(template["tasks"][1]["base_commit"], models_commit);
+    assert!(
+        template["tasks"][0]["callsieve_index_fingerprint"]
+            .as_str()
+            .unwrap()
+            .starts_with("fnv1a64:")
+    );
+    assert!(
+        template["tasks"][1]["callsieve_index_fingerprint"]
+            .as_str()
+            .unwrap()
+            .starts_with("fnv1a64:")
+    );
+    assert!(
+        template["tasks"][0]["callsieve_files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|file| file.as_str().unwrap() == "requests/sessions.py")
+    );
+    assert!(
+        template["tasks"][1]["callsieve_files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|file| file.as_str().unwrap() == "requests/models.py")
+    );
+    assert_eq!(git(&root, &["rev-parse", "HEAD"]), models_commit);
+}
+
+#[test]
+fn agent_native_check_reports_partial_measured_task_log() {
+    let repo = tempfile::tempdir().unwrap();
+    let tasks = repo.path().join("partial-agent-native-log.json");
+    write(
+        &tasks,
+        r#"{
+  "tasks": [
+    {
+      "id": "partial",
+      "task": "find createSession token behavior",
+      "expected_files": ["src/auth/session.ts"],
+      "agent_native_files": [],
+      "callsieve_files": ["src/auth/session.ts"],
+      "agent_native_context_tokens": 0,
+      "callsieve_packet_tokens": 100,
+      "recording_status": "needs_agent_native_measurement"
+    }
+  ]
+}"#,
+    );
+
+    let check = json(&run(&[
+        "agent-native-check",
+        tasks.to_str().unwrap(),
+        "--mode",
+        "measured",
+    ]));
+
+    assert_eq!(check["command"], "agent-native-check");
+    assert_eq!(check["status"], "needs_work");
+    assert_eq!(check["tasks_ready_for_mode"], 0);
+    assert!(
+        check["issues"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|issue| issue["field"] == "agent_native_files")
+    );
+    assert!(
+        check["issues"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|issue| issue["field"] == "agent_native_context_tokens")
+    );
+    assert!(
+        check["issues"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|issue| issue["field"] == "source_artifact")
+    );
+    assert!(
+        check["issues"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|issue| issue["field"] == "recording_status")
+    );
+}
+
+#[test]
+fn agent_native_measured_mode_requires_explicit_recording_status() {
+    let repo = tempfile::tempdir().unwrap();
+    let tasks = repo.path().join("agent-native-log.json");
+    let transcript = repo.path().join("native-search-transcript.json");
+    write(&transcript, r#"{"source":"fixture"}"#);
+    write(
+        &tasks,
+        r#"{
+  "tasks": [
+    {
+      "id": "ambiguous-status",
+      "task": "find createSession token behavior",
+      "expected_files": ["src/auth/session.ts"],
+      "agent_native_files": ["src/auth/session.ts"],
+      "callsieve_files": ["src/auth/session.ts"],
+      "agent_native_context_tokens": 2000,
+      "callsieve_packet_tokens": 100
+    }
+  ]
+}"#,
+    );
+
+    let check = json(&run(&[
+        "agent-native-check",
+        tasks.to_str().unwrap(),
+        "--mode",
+        "measured",
+        "--source-artifact",
+        transcript.to_str().unwrap(),
+    ]));
+
+    assert_eq!(check["status"], "needs_work");
+    assert_eq!(check["tasks_ready_for_mode"], 0);
+    assert!(check["issues"].as_array().unwrap().iter().any(|issue| {
+        issue["field"] == "recording_status"
+            && issue["message"]
+                .as_str()
+                .unwrap()
+                .contains("requires recording_status to be measured")
+    }));
+
+    let baseline = run(&[
+        "agent-native-baseline",
+        tasks.to_str().unwrap(),
+        "--id",
+        "fixture-native",
+        "--tool",
+        "Fixture Native Search",
+        "--source-artifact",
+        transcript.to_str().unwrap(),
+    ]);
+    assert!(!baseline.status.success());
+    let baseline_output = format!(
+        "{}{}",
+        String::from_utf8_lossy(&baseline.stdout),
+        String::from_utf8_lossy(&baseline.stderr)
+    );
+    assert!(baseline_output.contains("must set recording_status to measured"));
+}
+
+#[test]
+fn agent_native_protocol_prints_and_writes_measurement_protocol() {
+    let protocol = json(&run(&["agent-native-protocol"]));
+    assert_eq!(protocol["command"], "agent-native-protocol");
+    assert_eq!(protocol["status"], "pass");
+    assert_eq!(protocol["schema_version"], 1);
+    assert!(
+        protocol["claim_boundary"]
+            .as_str()
+            .unwrap()
+            .contains("does not claim a measured win")
+    );
+    assert!(
+        protocol["workflow"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|step| step["name"] == "preflight_measurement")
+    );
+    assert!(
+        protocol["validation_commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|command| command.as_str().unwrap().contains("agent-native-check"))
+    );
+    assert!(
+        protocol["public_proof_integration"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|note| note.as_str().unwrap().contains("agent-native-check"))
+    );
+    assert_eq!(
+        protocol["source_artifact_requirements"]["hash_algorithm"],
+        "fnv1a64 stable_content_hash"
+    );
+
+    let repo = tempfile::tempdir().unwrap();
+    let out = repo.path().join("agent-native-protocol.json");
+    let written = json(&run(&[
+        "agent-native-protocol",
+        "--out",
+        out.to_str().unwrap(),
+    ]));
+    assert!(out.is_file());
+    let saved: Value = serde_json::from_slice(&fs::read(out).unwrap()).unwrap();
+    assert_eq!(saved, written);
 }
 
 #[test]
@@ -1005,6 +1636,7 @@ fn context_returns_read_first_packet_for_agent_task() {
     assert!(next_files[0]["score"].as_i64().unwrap() > 0);
     assert!(!next_files[0]["reason"].as_str().unwrap().is_empty());
     assert_eq!(first["file"], "src/auth/session.ts");
+    assert_eq!(first["selection_confidence"], "high");
     assert!(!first["symbols"].as_array().unwrap().is_empty());
     assert!(
         first["snippets"][0]["text"]
@@ -1236,6 +1868,8 @@ fn agent_context_defaults_to_skim_budgeted_packet_without_snippets() {
     assert!(first.get("s").is_none());
     assert!(first.get("file").is_none());
     assert!(first.get("score").is_none());
+    assert!(first.get("selection_confidence").is_none());
+    assert!(first.get("c").is_none());
     assert!(first.get("rank").is_none());
     assert!(first.get("language").is_none());
     assert!(first.get("git").is_none());
@@ -4382,7 +5016,7 @@ fn proof_report_requires_observed_sessions_and_rejects_mislabeled_replay() {
             r#"{{
   "thresholds": {{
     "minimum_recall": 1.0,
-    "minimum_token_reduction_percent": -300.0,
+    "minimum_token_reduction_percent": -400.0,
     "minimum_observed_sessions": 1,
     "minimum_observed_token_reduction_percent": 50.0,
     "maximum_controlled_replay_ratio": 0.0,
@@ -4577,7 +5211,7 @@ fn proof_report_requires_transcript_token_provenance_when_strict() {
             r#"{{
   "thresholds": {{
     "minimum_recall": 1.0,
-    "minimum_token_reduction_percent": -300.0,
+    "minimum_token_reduction_percent": -400.0,
     "minimum_observed_sessions": 1,
     "minimum_observed_token_reduction_percent": 50.0,
     "minimum_planned_tasks": 1,
@@ -4661,7 +5295,7 @@ fn enterprise_proof_report_fails_below_1000_observed_sessions() {
   "protocol": "enterprise-proof",
   "thresholds": {{
     "minimum_recall": 1.0,
-    "minimum_token_reduction_percent": -300.0,
+    "minimum_token_reduction_percent": -400.0,
     "minimum_observed_sessions": 1000,
     "minimum_observed_token_reduction_percent": 50.0,
     "maximum_controlled_replay_ratio": 0.0,
@@ -4866,7 +5500,7 @@ fn evidence_pack_preserves_pmf_metrics_and_redacts_team_identifiers() {
   "protocol": "enterprise-proof",
   "thresholds": {{
     "minimum_recall": 1.0,
-    "minimum_token_reduction_percent": -300.0,
+    "minimum_token_reduction_percent": -400.0,
     "minimum_pilot_teams": 5,
     "minimum_paid_or_converted_teams": 3,
     "minimum_teams_with_20_sessions": 4,
@@ -5394,6 +6028,2804 @@ fn benchmark_report_aggregates_two_local_repos() {
 }
 
 #[test]
+fn competitive_report_includes_local_perf_evidence() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+    json(&run(&["index", root]));
+    let suite = repo.path().join("tasks.json");
+    write(
+        &suite,
+        r#"{"tasks":[{"id":"auth","task":"change createSession token behavior","expected_files":["src/auth/session.ts","src/auth/token.ts"]}]}"#,
+    );
+    let trace = repo.path().join("trace.json");
+    write(
+        &trace,
+        r#"{
+  "metadata": {"collection": "observed_session", "client": "codex", "model": "example"},
+  "tasks": [
+    {
+      "id": "auth",
+      "task": "change createSession token behavior",
+      "session": {
+        "baseline": {
+          "grep_commands": 3,
+          "file_reads": 4,
+          "tokens": 12000,
+          "commands": ["rg createSession token"],
+          "files_read": ["src/auth/session.ts", "src/auth/token.ts"]
+        },
+        "callsieve": {
+          "grep_commands": 0,
+          "file_reads": 2,
+          "tokens": 3000,
+          "commands": ["callsieve context . \"change createSession token behavior\""],
+          "files_read": ["src/auth/session.ts", "src/auth/token.ts"]
+        }
+      }
+    }
+  ]
+}"#,
+    );
+
+    let manifest_root = tempfile::tempdir().unwrap();
+    let manifest_path = manifest_root.path().join("competitive.json");
+    let escaped_root = root.replace('\\', "\\\\");
+    let escaped_suite = suite.to_string_lossy().replace('\\', "\\\\");
+    let escaped_trace = trace.to_string_lossy().replace('\\', "\\\\");
+    write(
+        &manifest_path,
+        &format!(
+            r#"{{
+  "targets": {{
+    "minimum_first_correct_file_rate_at_k": 1.0,
+    "minimum_expected_file_recall": 1.0,
+    "minimum_natural_language_first_correct_file_rate_at_k": 1.0,
+    "minimum_natural_language_expected_file_recall": 1.0,
+    "maximum_first_query_p95_ms": 10000,
+    "maximum_default_packet_tokens": 10000,
+    "require_natural_language_benchmark": true,
+    "require_trace_or_receipt_proof": true,
+    "require_zero_retrieval_model_tokens": true,
+    "require_zero_per_query_retrieval_cost": true,
+    "require_no_default_code_upload": true,
+    "minimum_agent_coverage": 2,
+    "required_agents": ["Codex", "generic MCP"]
+  }},
+  "benchmark": {{
+    "repos": [
+      {{"label":"fixture","path":"{escaped_root}","suite_path":"{escaped_suite}","trace_path":"{escaped_trace}"}}
+    ]
+  }},
+  "natural_language_benchmark": {{
+    "repos": [
+      {{"label":"fixture-nl","path":"{escaped_root}","suite_path":"{escaped_suite}"}}
+    ]
+  }},
+  "performance": {{
+    "path": "{escaped_root}",
+    "iterations": 1
+  }},
+  "competitors": [
+    {{
+      "name": "Example Context Engine",
+      "category": "context engine",
+      "source": "https://example.com",
+      "install_friction": "account setup",
+      "first_query_time": "not locally measured"
+    }}
+  ]
+}}"#
+        ),
+    );
+
+    let report = json(&run(&[
+        "competitive-report",
+        manifest_path.to_str().unwrap(),
+        "--limit",
+        "5",
+    ]));
+
+    assert_eq!(report["command"], "competitive-report");
+    assert_eq!(report["status"], "pass");
+    assert_eq!(report["targets"]["minimum_expected_file_recall"], 1.0);
+    assert_eq!(
+        report["targets"]["minimum_natural_language_expected_file_recall"],
+        1.0
+    );
+    assert_eq!(report["targets"]["maximum_first_query_p95_ms"], 10000);
+    assert_eq!(report["targets"]["maximum_default_packet_tokens"], 10000);
+    assert_eq!(
+        report["targets"]["require_natural_language_benchmark"],
+        true
+    );
+    assert_eq!(report["targets"]["require_trace_or_receipt_proof"], true);
+    assert_eq!(
+        report["targets"]["require_zero_retrieval_model_tokens"],
+        true
+    );
+    assert_eq!(
+        report["targets"]["require_zero_per_query_retrieval_cost"],
+        true
+    );
+    assert_eq!(report["targets"]["require_no_default_code_upload"], true);
+    assert_eq!(report["targets"]["minimum_agent_coverage"], 2);
+    assert_eq!(report["callsieve"]["retrieval_model_tokens"], 0);
+    assert_eq!(report["callsieve"]["per_query_retrieval_cost_usd"], 0.0);
+    assert_eq!(report["callsieve"]["default_code_upload_required"], false);
+    assert!(
+        report["callsieve"]["default_packet_tokens"]
+            .as_u64()
+            .unwrap()
+            <= 10000
+    );
+    assert_eq!(report["callsieve"]["expected_file_recall"], 1.0);
+    assert_eq!(
+        report["callsieve"]["trace_or_receipt_proof_available"],
+        true
+    );
+    assert!(
+        report["callsieve"]["agent_coverage_count"]
+            .as_u64()
+            .unwrap()
+            >= 2
+    );
+    assert_eq!(
+        report["callsieve"]["missing_required_agents"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0
+    );
+    assert_eq!(
+        report["natural_language"]["first_correct_file_rate_at_k"],
+        1.0
+    );
+    assert_eq!(report["natural_language"]["expected_file_recall"], 1.0);
+    assert_eq!(report["performance"]["command"], "perf-report");
+    assert!(report["callsieve"]["first_query_samples"].as_u64().unwrap() > 0);
+    assert!(report["callsieve"]["first_query_p95_ms"].as_u64().unwrap() <= 10000);
+    assert!(
+        report["comparison_matrix"][0]["first_query_time"]
+            .as_str()
+            .unwrap()
+            .contains("p95")
+    );
+    assert_eq!(
+        report["comparison_matrix"][0]["natural_language_recall"],
+        "100.0%"
+    );
+    assert_eq!(
+        report["comparison_matrix"][1]["first_query_time"],
+        "not locally measured"
+    );
+}
+
+#[test]
+fn public_proof_report_combines_local_gate_and_public_results() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+    let broad_read_noise = format!(
+        "{}\nexport const broadReadFixture = true;\n",
+        "/* broad read fixture: change createSession token behavior */\n".repeat(800)
+    );
+    write(
+        repo.path().join("src/noise/broad_read_fixture.ts"),
+        &broad_read_noise,
+    );
+    json(&run(&["index", root]));
+    let suite = repo.path().join("tasks.json");
+    write(
+        &suite,
+        r#"{"tasks":[{"id":"auth","task":"change createSession token behavior","expected_files":["src/auth/session.ts"]}]}"#,
+    );
+
+    let manifest_root = tempfile::tempdir().unwrap();
+    let competitive_path = manifest_root.path().join("competitive.json");
+    let public_result = manifest_root.path().join("public-result.json");
+    let smaller_public_result = manifest_root.path().join("smaller-public-result.json");
+    let public_triage = manifest_root.path().join("public-triage.json");
+    let repo_packer_result = manifest_root.path().join("repo-packer-result.json");
+    let agent_native_result = manifest_root.path().join("agent-native-result.json");
+    let agent_native_task_log = manifest_root.path().join("agent-native-task-log.json");
+    let agent_native_transcript = manifest_root
+        .path()
+        .join("fixture-native-search-transcript.json");
+    let agent_native_check_artifact = manifest_root.path().join("agent-native-check.json");
+    let terminal_artifact = manifest_root.path().join("public-proof-terminal.txt");
+    let mcp_contract_artifact = manifest_root.path().join("mcp-contract.json");
+    let agent_native_protocol_artifact = manifest_root.path().join("agent-native-protocol.json");
+    let agent_native_template_artifact = manifest_root.path().join("agent-native-template.json");
+    let public_proof_path = manifest_root.path().join("public-proof.json");
+    let escaped_root = root.replace('\\', "\\\\");
+    let escaped_suite = suite.to_string_lossy().replace('\\', "\\\\");
+    write(
+        &competitive_path,
+        &format!(
+            r#"{{
+  "targets": {{
+    "minimum_first_correct_file_rate_at_k": 1.0,
+    "minimum_expected_file_recall": 1.0,
+    "maximum_default_packet_tokens": 10000,
+    "minimum_agent_coverage": 2,
+    "required_agents": ["Codex", "generic MCP"]
+  }},
+  "benchmark": {{
+    "repos": [
+      {{"label":"fixture","path":"{escaped_root}","suite_path":"{escaped_suite}"}}
+    ]
+  }}
+}}"#
+        ),
+    );
+    write(
+        &public_result,
+        r#"{
+  "mode": "A/B",
+  "manifest": {"path": "benchmarks/public/fixture.json", "description": "fixture public benchmark"},
+  "k": 5,
+  "aggregate": {
+    "evaluated": 2,
+    "skipped": 0,
+    "total": 2,
+    "lexical_first_correct_file_rate_at_k": 0.5,
+    "hybrid_first_correct_file_rate_at_k": 0.5,
+    "grep_first_correct_file_rate_at_k": 0.0
+  },
+  "issues": [
+    {
+      "id": "hit",
+      "lexical": {"selected_files_count": 8, "first_correct_file_rate_at_k": 1.0},
+      "grep": {"selected_files_count": 100, "first_correct_file_rate_at_k": 0.0}
+    },
+    {
+      "id": "miss",
+      "lexical": {"selected_files_count": 8, "first_correct_file_rate_at_k": 0.0},
+      "grep": {"selected_files_count": 120, "first_correct_file_rate_at_k": 0.0}
+    }
+  ]
+}"#,
+    );
+    write(
+        &smaller_public_result,
+        r#"{
+  "mode": "A/B",
+  "manifest": {"path": "benchmarks/public/smaller-fixture.json", "description": "smaller fixture public benchmark"},
+  "k": 5,
+  "aggregate": {
+    "evaluated": 1,
+    "skipped": 0,
+    "total": 1,
+    "lexical_first_correct_file_rate_at_k": 0.5,
+    "hybrid_first_correct_file_rate_at_k": 0.5,
+    "grep_first_correct_file_rate_at_k": 0.0
+  },
+  "issues": [
+    {
+      "id": "small-hit",
+      "lexical": {"selected_files_count": 4, "first_correct_file_rate_at_k": 0.5},
+      "grep": {"selected_files_count": 20, "first_correct_file_rate_at_k": 0.0}
+    }
+  ]
+}"#,
+    );
+    write(
+        &public_triage,
+        r#"[
+  {
+    "id": "miss",
+    "truth": "src/auth/session.ts",
+    "reachable": true,
+    "same_dir": ["src/auth/token.ts"],
+    "pool_refs_truth": ["src/auth/token.ts"],
+    "truth_refs_pool": []
+  }
+]"#,
+    );
+    write(
+        &terminal_artifact,
+        "$ callsieve public-proof-report public-proof.json\nstatus: pass\n",
+    );
+    json(&run(&[
+        "mcp-contract",
+        "--out",
+        mcp_contract_artifact.to_str().unwrap(),
+    ]));
+    json(&run(&[
+        "agent-native-protocol",
+        "--out",
+        agent_native_protocol_artifact.to_str().unwrap(),
+    ]));
+    json(&run(&[
+        "agent-native-template",
+        root,
+        suite.to_str().unwrap(),
+        "--k",
+        "5",
+        "--out",
+        agent_native_template_artifact.to_str().unwrap(),
+    ]));
+    write(
+        &repo_packer_result,
+        r#"{
+  "tool": "repomix",
+  "command": "repomix --output repomix-output.txt --style markdown",
+  "metrics": {
+    "total_tokens": 100000,
+    "total_bytes": 400000,
+    "file_count": 120
+  }
+}"#,
+    );
+    write(
+        &agent_native_task_log,
+        r#"{
+  "tasks": [
+    {
+      "id": "agent-native-hit",
+      "repo": "fixture/repo",
+      "base_commit": "fixture-commit",
+      "task": "find createSession token behavior",
+      "expected_files": ["src/auth/session.ts"],
+      "agent_native_files": ["src/auth/session.ts"],
+      "callsieve_files": ["src/auth/session.ts"],
+      "agent_native_context_tokens": 20000,
+      "callsieve_packet_tokens": 1000,
+      "recording_status": "measured"
+    },
+    {
+      "id": "agent-native-miss",
+      "repo": "fixture/repo",
+      "base_commit": "fixture-commit",
+      "task": "find createSession token behavior from broad native search",
+      "expected_files": ["src/auth/session.ts"],
+      "agent_native_files": ["src/auth/token.ts"],
+      "callsieve_files": ["src/auth/session.ts"],
+      "agent_native_context_tokens": 20000,
+      "callsieve_packet_tokens": 1000,
+      "recording_status": "measured"
+    }
+  ]
+}"#,
+    );
+    let agent_native_transcript_json = r#"{"tool":"fixture-native-search","task_ids":["agent-native-hit","agent-native-miss"],"source":"approved local transcript fixture"}"#;
+    write(&agent_native_transcript, agent_native_transcript_json);
+    json(&run(&[
+        "agent-native-check",
+        agent_native_task_log.to_str().unwrap(),
+        "--mode",
+        "measured",
+        "--source-artifact",
+        agent_native_transcript.to_str().unwrap(),
+        "--out",
+        agent_native_check_artifact.to_str().unwrap(),
+    ]));
+    json(&run(&[
+        "agent-native-baseline",
+        agent_native_task_log.to_str().unwrap(),
+        "--id",
+        "fixture-agent-native",
+        "--tool",
+        "Fixture Native Search",
+        "--k",
+        "5",
+        "--measurement-command",
+        "fixture native search measurement",
+        "--source-artifact",
+        agent_native_transcript.to_str().unwrap(),
+        "--out",
+        agent_native_result.to_str().unwrap(),
+    ]));
+    let escaped_competitive = competitive_path.to_string_lossy().replace('\\', "\\\\");
+    let escaped_public_result = public_result.to_string_lossy().replace('\\', "\\\\");
+    let escaped_smaller_public_result = smaller_public_result
+        .to_string_lossy()
+        .replace('\\', "\\\\");
+    let escaped_public_triage = public_triage.to_string_lossy().replace('\\', "\\\\");
+    let escaped_repo_packer_result = repo_packer_result.to_string_lossy().replace('\\', "\\\\");
+    let escaped_agent_native_result = agent_native_result.to_string_lossy().replace('\\', "\\\\");
+    let escaped_agent_native_check_artifact = agent_native_check_artifact
+        .to_string_lossy()
+        .replace('\\', "\\\\");
+    let escaped_terminal_artifact = terminal_artifact.to_string_lossy().replace('\\', "\\\\");
+    let escaped_mcp_contract_artifact = mcp_contract_artifact
+        .to_string_lossy()
+        .replace('\\', "\\\\");
+    let escaped_agent_native_protocol_artifact = agent_native_protocol_artifact
+        .to_string_lossy()
+        .replace('\\', "\\\\");
+    let escaped_agent_native_template_artifact = agent_native_template_artifact
+        .to_string_lossy()
+        .replace('\\', "\\\\");
+    write(
+        &public_proof_path,
+        &format!(
+            r#"{{
+  "competitive_report": "{escaped_competitive}",
+  "miss_triage": "{escaped_public_triage}",
+  "targets": {{
+    "maximum_default_packet_tokens": 10000,
+    "minimum_public_reports": 1,
+    "minimum_total_public_evaluated": 2
+  }},
+  "public_reports": [
+    {{
+      "id": "fixture-public",
+      "path": "{escaped_public_result}",
+      "preferred_arm": "lexical",
+      "minimum_first_correct_file_rate_at_k": 0.5,
+      "minimum_minus_grep": 0.5,
+      "require_grep_baseline": true,
+      "minimum_evaluated": 2
+    }}
+  ],
+  "public_result_catalog": [
+    "{escaped_smaller_public_result}",
+    "{escaped_public_result}"
+  ],
+  "repo_packer_baselines": [
+    {{
+      "id": "repomix-fixture",
+      "tool": "Repomix",
+      "path": "{escaped_repo_packer_result}",
+      "command": "repomix --output repomix-output.txt --style markdown",
+      "required": true,
+      "token_count_pointer": "/metrics/total_tokens",
+      "byte_count_pointer": "/metrics/total_bytes",
+      "file_count_pointer": "/metrics/file_count",
+      "minimum_token_ratio_vs_callsieve_packet": 2.0
+    }}
+  ],
+  "agent_native_search_baselines": [
+    {{
+      "id": "fixture-agent-native",
+      "tool": "Fixture Native Search",
+      "path": "{escaped_agent_native_result}",
+      "command": "fixture native search measurement",
+      "required": true,
+      "minimum_tasks": 2,
+      "minimum_callsieve_minus_agent_native_first_correct_file_rate_at_k": 0.25,
+      "minimum_agent_native_context_token_ratio_vs_callsieve": 10.0
+    }}
+  ],
+  "terminal_artifacts": [
+    {{
+      "id": "terminal",
+      "path": "{escaped_terminal_artifact}",
+      "kind": "terminal_output",
+      "description": "captured public proof output",
+      "required": true
+    }},
+    {{
+      "id": "mcp-contract",
+      "path": "{escaped_mcp_contract_artifact}",
+      "kind": "json_artifact",
+      "description": "standalone MCP contract artifact",
+      "required": true
+    }},
+    {{
+      "id": "agent-native-protocol",
+      "path": "{escaped_agent_native_protocol_artifact}",
+      "kind": "json_artifact",
+      "description": "standalone agent-native measurement protocol",
+      "required": true
+    }},
+    {{
+      "id": "agent-native-check",
+      "path": "{escaped_agent_native_check_artifact}",
+      "kind": "json_artifact",
+      "description": "measured native-search preflight check",
+      "required": true
+    }},
+    {{
+      "id": "agent-native-template",
+      "path": "{escaped_agent_native_template_artifact}",
+      "kind": "json_artifact",
+      "description": "prepared native-search measurement template",
+      "required": true
+    }}
+  ]
+}}"#
+        ),
+    );
+
+    let report = json(&run(&[
+        "public-proof-report",
+        public_proof_path.to_str().unwrap(),
+        "--limit",
+        "5",
+    ]));
+
+    assert_eq!(report["command"], "public-proof-report");
+    assert_eq!(report["status"], "pass");
+    assert_eq!(report["local_gate"]["status"], "pass");
+    assert_eq!(report["local_gate"]["expected_file_recall"], 1.0);
+    assert_eq!(report["local_gate"]["retrieval_model_tokens"], 0);
+    assert_eq!(report["local_gate"]["per_query_retrieval_cost_usd"], 0.0);
+    assert_eq!(report["local_gate"]["default_code_upload_required"], false);
+    assert_eq!(
+        report["targets"]["require_current_public_report_retrieval_contract"],
+        false
+    );
+    assert_eq!(report["broad_read_guardrail"]["status"], "pass");
+    assert!(
+        report["broad_read_guardrail"]["baseline_context_payload_tokens"]
+            .as_u64()
+            .unwrap()
+            > report["broad_read_guardrail"]["callsieve_context_payload_tokens"]
+                .as_u64()
+                .unwrap()
+    );
+    assert!(
+        report["broad_read_guardrail"]["context_payload_reduction_percent"]
+            .as_f64()
+            .unwrap()
+            > 0.0
+    );
+    assert_eq!(
+        report["evidence_pack"]["broad_read_guardrail"]["status"],
+        "pass"
+    );
+    assert!(
+        report["evidence_pack"]["metrics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(
+                |metric| metric["name"] == "broad_read.context_payload_reduction_percent"
+                    && metric["status"] == "pass"
+            )
+    );
+    assert_eq!(
+        report["public_benchmarks"][0]["first_correct_file_rate_at_k"],
+        0.5
+    );
+    assert_eq!(report["public_benchmarks"][0]["minus_grep"], 0.5);
+    assert_eq!(
+        report["public_benchmarks"][0]["average_selected_files"],
+        8.0
+    );
+    assert_eq!(
+        report["public_benchmarks"][0]["average_grep_matched_files"],
+        110.0
+    );
+    assert_eq!(report["public_benchmarks"][0]["misses"][0], "miss");
+    assert_eq!(
+        report["public_benchmarks"][0]["retrieval_contract_status"],
+        "missing"
+    );
+    assert!(report["public_benchmarks"][0]["retrieval_contract_fingerprint"].is_null());
+    assert_eq!(
+        report["public_result_catalog"]["reports"][0]["best_arm"],
+        "lexical"
+    );
+    assert_eq!(
+        report["public_result_catalog"]["reports"][0]["retrieval_contract_status"],
+        "missing"
+    );
+    assert_eq!(
+        report["public_result_catalog"]["reports"][0]["best_first_correct_file_rate_at_k"],
+        0.5
+    );
+    assert!(
+        report["public_result_catalog"]["best_swe_bench_style"]["gap_to_target"]
+            .as_f64()
+            .unwrap()
+            > 0.11
+    );
+    assert_eq!(
+        report["public_result_catalog"]["best_swe_bench_style"]["report"],
+        public_result.to_string_lossy().as_ref()
+    );
+    assert!(
+        report["evidence_pack"]["fixture_manifests"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|path| path.as_str().unwrap() == "benchmarks/public/fixture.json")
+    );
+    assert!(
+        report["evidence_pack"]["result_reports"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|path| path.as_str().unwrap() == public_result.to_string_lossy().as_ref())
+    );
+    assert_eq!(report["evidence_pack"]["misses"][0]["sample"][0], "miss");
+    assert!(
+        report["evidence_pack"]["receipt_commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|command| command.as_str().unwrap().contains("receipt"))
+    );
+    assert_eq!(
+        report["evidence_pack"]["terminal_artifacts"][0]["exists"],
+        true
+    );
+    let contract_artifact = report["evidence_pack"]["terminal_artifacts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|artifact| artifact["id"] == "mcp-contract")
+        .unwrap();
+    assert_eq!(contract_artifact["exists"], true);
+    assert_eq!(contract_artifact["status"], "pass");
+    assert_eq!(
+        contract_artifact["validation"],
+        "matches live callsieve mcp-contract output"
+    );
+    assert!(
+        report["evidence_pack"]["metrics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(
+                |metric| metric["name"] == "mcp_contract.artifact_matches_live_contract"
+                    && metric["status"] == "pass"
+            )
+    );
+    let protocol_artifact = report["evidence_pack"]["terminal_artifacts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|artifact| artifact["id"] == "agent-native-protocol")
+        .unwrap();
+    assert_eq!(protocol_artifact["exists"], true);
+    assert_eq!(protocol_artifact["status"], "pass");
+    assert_eq!(
+        protocol_artifact["validation"],
+        "matches live callsieve agent-native-protocol output"
+    );
+    assert!(
+        report["evidence_pack"]["metrics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(
+                |metric| metric["name"] == "agent_native_protocol.artifact_matches_live_protocol"
+                    && metric["status"] == "pass"
+            )
+    );
+    let check_artifact = report["evidence_pack"]["terminal_artifacts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|artifact| artifact["id"] == "agent-native-check")
+        .unwrap();
+    assert_eq!(check_artifact["exists"], true);
+    assert_eq!(check_artifact["status"], "pass");
+    assert!(
+        check_artifact["validation"]
+            .as_str()
+            .unwrap()
+            .contains("measured preflight passed")
+    );
+    assert_eq!(
+        check_artifact["source_artifact_hashes"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert!(
+        report["evidence_pack"]["metrics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(
+                |metric| metric["name"] == "agent_native_check.measured_preflight_passed"
+                    && metric["status"] == "pass"
+            )
+    );
+    let template_artifact = report["evidence_pack"]["terminal_artifacts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|artifact| artifact["id"] == "agent-native-template")
+        .unwrap();
+    assert_eq!(template_artifact["exists"], true);
+    assert_eq!(template_artifact["status"], "pass");
+    assert!(
+        template_artifact["validation"]
+            .as_str()
+            .unwrap()
+            .contains("source/index/retrieval provenance")
+    );
+    assert!(
+        report["evidence_pack"]["metrics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(
+                |metric| metric["name"] == "agent_native_template.ready_for_measurement"
+                    && metric["status"] == "pass"
+            )
+    );
+    assert_eq!(report["miss_triage"]["reachable"], 1);
+    assert_eq!(report["miss_triage"]["same_directory_hints"], 1);
+    assert_eq!(report["repo_packer_guardrail"]["status"], "pass");
+    assert!(
+        report["repo_packer_guardrail"]["claim_scope"]
+            .as_str()
+            .unwrap()
+            .contains("Measured comparison")
+    );
+    assert_eq!(
+        report["repo_packer_guardrail"]["baselines"][0]["tool"],
+        "Repomix"
+    );
+    assert_eq!(
+        report["repo_packer_guardrail"]["baselines"][0]["tokens"],
+        100000
+    );
+    assert_eq!(
+        report["repo_packer_guardrail"]["baselines"][0]["files"],
+        120
+    );
+    assert!(
+        report["repo_packer_guardrail"]["baselines"][0]["token_ratio_vs_callsieve_packet"]
+            .as_f64()
+            .unwrap()
+            >= 2.0
+    );
+    assert!(
+        report["evidence_pack"]["result_reports"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|path| path.as_str().unwrap() == repo_packer_result.to_string_lossy().as_ref())
+    );
+    assert_eq!(
+        report["evidence_pack"]["repo_packer_baselines"][0]["locally_measured"],
+        true
+    );
+    assert_eq!(report["agent_native_search_guardrail"]["status"], "pass");
+    assert_eq!(
+        report["agent_native_search_guardrail"]["summary"]["baseline_count"],
+        1
+    );
+    assert_eq!(
+        report["agent_native_search_guardrail"]["summary"]["measured_baseline_count"],
+        1
+    );
+    assert_eq!(
+        report["agent_native_search_guardrail"]["summary"]["transcript_backed_baseline_count"],
+        1
+    );
+    assert_eq!(
+        report["agent_native_search_guardrail"]["summary"]["total_measured_tasks"],
+        2
+    );
+    assert_eq!(
+        report["agent_native_search_guardrail"]["summary"]["distinct_agent_tool_count"],
+        1
+    );
+    assert_eq!(
+        report["agent_native_search_guardrail"]["summary"]["single_agent_only"],
+        true
+    );
+    assert_eq!(
+        report["agent_native_search_guardrail"]["summary"]["multi_agent_status"],
+        "single_agent_only"
+    );
+    assert_eq!(
+        report["agent_native_search_guardrail"]["summary"]["repositories"][0],
+        "fixture/repo"
+    );
+    assert_eq!(
+        report["agent_native_search_guardrail"]["summary"]["base_commits"][0],
+        "fixture-commit"
+    );
+    assert_eq!(
+        report["agent_native_search_guardrail"]["summary"]["task_languages"][0],
+        "TypeScript"
+    );
+    assert!(
+        report["agent_native_search_guardrail"]["claim_scope"]
+            .as_str()
+            .unwrap()
+            .contains("Measured comparison")
+    );
+    assert_eq!(
+        report["agent_native_search_guardrail"]["baselines"][0]["tool"],
+        "Fixture Native Search"
+    );
+    assert_eq!(
+        report["agent_native_search_guardrail"]["baselines"][0]["transcript_provenance_status"],
+        "pass"
+    );
+    assert_eq!(
+        report["agent_native_search_guardrail"]["baselines"][0]["source_artifacts"],
+        2
+    );
+    assert_eq!(
+        report["agent_native_search_guardrail"]["baselines"][0]["source_artifact_hashes"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert!(
+        report["agent_native_search_guardrail"]["baselines"][0]["source_artifact_hashes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|hash| hash.as_str().unwrap().starts_with("fnv1a64:"))
+    );
+    assert_eq!(
+        report["agent_native_search_guardrail"]["baselines"][0]["source_artifact_hashes"]
+            .as_array()
+            .unwrap(),
+        check_artifact["source_artifact_hashes"].as_array().unwrap()
+    );
+    assert_eq!(
+        report["agent_native_search_guardrail"]["baselines"][0]["tasks"],
+        2
+    );
+    assert!(
+        report["agent_native_search_guardrail"]["baselines"][0]
+            ["callsieve_minus_agent_native_first_correct_file_rate_at_k"]
+            .as_f64()
+            .unwrap()
+            >= 0.25
+    );
+    assert!(
+        report["agent_native_search_guardrail"]["baselines"][0]
+            ["agent_native_context_token_ratio_vs_callsieve"]
+            .as_f64()
+            .unwrap()
+            >= 10.0
+    );
+    assert!(
+        report["evidence_pack"]["result_reports"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|path| path.as_str().unwrap() == agent_native_result.to_string_lossy().as_ref())
+    );
+    assert_eq!(
+        report["evidence_pack"]["agent_native_search_baselines"][0]["locally_measured"],
+        true
+    );
+    assert_eq!(
+        report["evidence_pack"]["agent_native_search_baselines"][0]["transcript_provenance_status"],
+        "pass"
+    );
+    assert_eq!(
+        report["evidence_pack"]["agent_native_search_summary"]["multi_agent_status"],
+        "single_agent_only"
+    );
+    assert!(
+        report["evidence_pack"]["metrics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(
+                |metric| metric["name"] == "agent_native_search.distinct_agent_tool_count"
+                    && metric["status"] == "pass"
+                    && metric["target"].is_null()
+            )
+    );
+    assert!(
+        report["evidence_pack"]["metrics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|metric| metric["name"]
+                == "agent_native_search.fixture-agent-native.transcript_provenance"
+                && metric["status"] == "pass")
+    );
+    assert!(
+        report["evidence_pack"]["metrics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|metric| metric["name"]
+                == "agent_native_search.fixture-agent-native.context_token_ratio_vs_callsieve")
+    );
+    write(
+        &agent_native_transcript,
+        r#"{"tool":"fixture-native-search","tampered":true}"#,
+    );
+    let tampered_transcript_report = json(&run(&[
+        "public-proof-report",
+        public_proof_path.to_str().unwrap(),
+        "--limit",
+        "5",
+    ]));
+    assert_eq!(tampered_transcript_report["status"], "needs_work");
+    assert_eq!(
+        tampered_transcript_report["agent_native_search_guardrail"]["baselines"][0]["transcript_provenance_status"],
+        "needs_work"
+    );
+    assert!(
+        tampered_transcript_report["failures"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|failure| failure
+                .as_str()
+                .unwrap()
+                .contains("lacks hashed transcript/export provenance"))
+    );
+    write(&agent_native_transcript, agent_native_transcript_json);
+    assert_eq!(report["mcp_surface"]["status"], "pass");
+    assert_eq!(
+        report["mcp_surface"]["context_first_tool"],
+        "callsieve_context"
+    );
+    assert!(
+        report["mcp_surface"]["required_first_mile_tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|tool| tool == "callsieve_focus")
+    );
+    assert!(
+        report["mcp_surface"]["exposed_tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|tool| tool == "callsieve_context")
+    );
+    assert!(
+        report["evidence_pack"]["metrics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(
+                |metric| metric["name"] == "mcp_surface.required_first_mile_tools_covered"
+                    && metric["status"] == "pass"
+            )
+    );
+    assert_eq!(report["evidence_pack"]["mcp_surface"]["status"], "pass");
+    assert_eq!(report["mcp_contract"]["status"], "pass");
+    assert_eq!(report["mcp_contract"]["context_tool"], "callsieve_context");
+    assert_eq!(report["mcp_contract"]["default_profile"], "skim");
+    assert!(
+        report["mcp_contract"]["required_structured_content_fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|field| field == "read_first")
+    );
+    assert!(
+        report["mcp_contract"]["supported_instruction_expansion_keys"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|key| key == "rel")
+    );
+    assert!(
+        report["mcp_contract"]["required_freshness_fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|field| field == "final_fresh")
+    );
+    assert_eq!(report["evidence_pack"]["mcp_contract"]["status"], "pass");
+    assert!(
+        report["evidence_pack"]["metrics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(
+                |metric| metric["name"] == "mcp_contract.required_structured_content_fields"
+                    && metric["status"] == "pass"
+            )
+    );
+    assert_eq!(report["agent_setup"]["status"], "pass");
+    assert_eq!(report["agent_setup"]["minimum_agent_coverage"], 2);
+    assert_eq!(
+        report["agent_setup"]["default_layer_clients"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(
+        report["agent_setup"]["default_layer_clients_covered"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(
+        report["agent_setup"]["missing_default_layer_clients"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0
+    );
+    assert_eq!(report["public_checkouts"]["status"], "needs_work");
+    assert!(
+        report["public_checkouts"]["missing_manifests"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|path| path.as_str().unwrap() == "benchmarks/public/fixture.json")
+    );
+    assert!(
+        report["public_checkouts"]["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|command| command
+                .as_str()
+                .unwrap()
+                .contains("--workdir benchmarks/public/repos --compare --out"))
+    );
+    assert!(
+        report["public_checkouts"]["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|command| command
+                .as_str()
+                .unwrap()
+                .contains("benchmarks/public/manifest.json"))
+    );
+    assert!(
+        report["evidence_pack"]["metrics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|metric| metric["name"] == "public_checkouts.missing_manifests")
+    );
+    assert!(
+        report["agent_setup"]["priority_clients"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|client| client.as_str().unwrap() == "Codex")
+    );
+    assert!(
+        report["agent_setup"]["priority_clients_covered"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|client| client.as_str().unwrap() == "generic MCP")
+    );
+    assert!(
+        report["agent_setup"]["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|command| command.as_str().unwrap().contains("setup-auto"))
+    );
+    assert!(
+        report["evidence_pack"]["agent_setup"]["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|command| command.as_str().unwrap().contains("mcp-config"))
+    );
+    assert!(
+        report["evidence_pack"]["metrics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|metric| metric["name"] == "agent_setup.priority_clients_covered")
+    );
+    assert!(
+        report["evidence_pack"]["metrics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|metric| metric["name"] == "agent_setup.default_layer_clients_covered")
+    );
+    assert!(
+        report["evidence_pack"]["metrics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|metric| metric["name"]
+                == "public_catalog.best_swe_bench_style_first_correct_file_rate_at_k")
+    );
+    assert!(
+        report["evidence_commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|command| command.as_str().unwrap().contains("public-proof-report"))
+    );
+
+    let original_public_proof = fs::read_to_string(&public_proof_path).unwrap();
+    let mut strict_public_proof: Value = serde_json::from_str(&original_public_proof).unwrap();
+    strict_public_proof["targets"]["require_current_public_report_retrieval_contract"] =
+        serde_json::json!(true);
+    write(
+        &public_proof_path,
+        &serde_json::to_string_pretty(&strict_public_proof).unwrap(),
+    );
+    let missing_contract_report = json(&run(&[
+        "public-proof-report",
+        public_proof_path.to_str().unwrap(),
+        "--limit",
+        "5",
+    ]));
+    assert_eq!(missing_contract_report["status"], "needs_work");
+    assert_eq!(
+        missing_contract_report["targets"]["require_current_public_report_retrieval_contract"],
+        true
+    );
+    assert_eq!(
+        missing_contract_report["public_benchmarks"][0]["status"],
+        "needs_work"
+    );
+    assert!(
+        missing_contract_report["failures"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|failure| failure.as_str().unwrap().contains("current is required"))
+    );
+    write(&public_proof_path, &original_public_proof);
+
+    let original_public_result = fs::read_to_string(&public_result).unwrap();
+    let mut stale_public_result: Value = serde_json::from_str(&original_public_result).unwrap();
+    stale_public_result["retrieval_contract_fingerprint"] = serde_json::json!("fnv1a64:stale");
+    write(
+        &public_result,
+        &serde_json::to_string_pretty(&stale_public_result).unwrap(),
+    );
+    let stale_public_report = json(&run(&[
+        "public-proof-report",
+        public_proof_path.to_str().unwrap(),
+        "--limit",
+        "5",
+    ]));
+    assert_eq!(stale_public_report["status"], "needs_work");
+    assert_eq!(
+        stale_public_report["public_benchmarks"][0]["retrieval_contract_status"],
+        "stale"
+    );
+    assert!(
+        stale_public_report["public_result_catalog"]["reports"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|report| report["retrieval_contract_status"] == "stale")
+    );
+    assert!(
+        stale_public_report["failures"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|failure| failure
+                .as_str()
+                .unwrap()
+                .contains("retrieval_contract_fingerprint is stale"))
+    );
+    write(&public_result, &original_public_result);
+
+    write(
+        &mcp_contract_artifact,
+        r#"{"command":"mcp-contract","status":"needs_work"}"#,
+    );
+    let stale_contract_report = json(&run(&[
+        "public-proof-report",
+        public_proof_path.to_str().unwrap(),
+        "--limit",
+        "5",
+    ]));
+    assert_eq!(stale_contract_report["status"], "needs_work");
+    let stale_contract_artifact = stale_contract_report["evidence_pack"]["terminal_artifacts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|artifact| artifact["id"] == "mcp-contract")
+        .unwrap();
+    assert_eq!(stale_contract_artifact["status"], "needs_work");
+    assert_eq!(
+        stale_contract_artifact["validation"],
+        "does not match live callsieve mcp-contract output"
+    );
+    assert!(
+        stale_contract_report["failures"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|failure| failure
+                .as_str()
+                .unwrap()
+                .contains("required public proof artifact `mcp-contract`"))
+    );
+
+    json(&run(&[
+        "mcp-contract",
+        "--out",
+        mcp_contract_artifact.to_str().unwrap(),
+    ]));
+    let mut stale_template: Value =
+        serde_json::from_slice(&fs::read(&agent_native_template_artifact).unwrap()).unwrap();
+    stale_template["retrieval_contract_fingerprint"] = serde_json::json!("fnv1a64:stale");
+    write(
+        &agent_native_template_artifact,
+        &serde_json::to_string_pretty(&stale_template).unwrap(),
+    );
+    let stale_template_report = json(&run(&[
+        "public-proof-report",
+        public_proof_path.to_str().unwrap(),
+        "--limit",
+        "5",
+    ]));
+    assert_eq!(stale_template_report["status"], "needs_work");
+    let stale_template_artifact = stale_template_report["evidence_pack"]["terminal_artifacts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|artifact| artifact["id"] == "agent-native-template")
+        .unwrap();
+    assert_eq!(stale_template_artifact["status"], "needs_work");
+    assert_eq!(
+        stale_template_artifact["validation"],
+        "retrieval_contract_fingerprint does not match the current retrieval contract"
+    );
+
+    json(&run(&[
+        "agent-native-template",
+        root,
+        suite.to_str().unwrap(),
+        "--k",
+        "5",
+        "--out",
+        agent_native_template_artifact.to_str().unwrap(),
+    ]));
+    let mut forged_template: Value =
+        serde_json::from_slice(&fs::read(&agent_native_template_artifact).unwrap()).unwrap();
+    forged_template["tasks"][0]["callsieve_files"] =
+        serde_json::json!(["src/auth/not-selected.ts"]);
+    write(
+        &agent_native_template_artifact,
+        &serde_json::to_string_pretty(&forged_template).unwrap(),
+    );
+    let forged_template_report = json(&run(&[
+        "public-proof-report",
+        public_proof_path.to_str().unwrap(),
+        "--limit",
+        "5",
+    ]));
+    assert_eq!(forged_template_report["status"], "needs_work");
+    let forged_template_artifact = forged_template_report["evidence_pack"]["terminal_artifacts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|artifact| artifact["id"] == "agent-native-template")
+        .unwrap();
+    assert_eq!(forged_template_artifact["status"], "needs_work");
+    assert_eq!(
+        forged_template_artifact["validation"],
+        "template task payload does not match recomputed CallSieve template"
+    );
+
+    json(&run(&[
+        "agent-native-template",
+        root,
+        suite.to_str().unwrap(),
+        "--k",
+        "5",
+        "--out",
+        agent_native_template_artifact.to_str().unwrap(),
+    ]));
+    let mut measured_template: Value =
+        serde_json::from_slice(&fs::read(&agent_native_template_artifact).unwrap()).unwrap();
+    measured_template["tasks"][0]["agent_native_files"] =
+        serde_json::json!(["src/auth/session.ts"]);
+    measured_template["tasks"][0]["agent_native_context_tokens"] = serde_json::json!(2000);
+    write(
+        &agent_native_template_artifact,
+        &serde_json::to_string_pretty(&measured_template).unwrap(),
+    );
+    let measured_template_report = json(&run(&[
+        "public-proof-report",
+        public_proof_path.to_str().unwrap(),
+        "--limit",
+        "5",
+    ]));
+    assert_eq!(measured_template_report["status"], "needs_work");
+    let measured_template_artifact =
+        measured_template_report["evidence_pack"]["terminal_artifacts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|artifact| artifact["id"] == "agent-native-template")
+            .unwrap();
+    assert_eq!(measured_template_artifact["status"], "needs_work");
+    assert!(
+        measured_template_artifact["validation"]
+            .as_str()
+            .unwrap()
+            .contains("already contains native-search measurements")
+    );
+    assert!(
+        measured_template_report["failures"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|failure| failure
+                .as_str()
+                .unwrap()
+                .contains("required public proof artifact `agent-native-template`"))
+    );
+}
+
+#[test]
+fn public_proof_report_fails_closed_on_public_result_target_miss() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+    json(&run(&["index", root]));
+    let suite = repo.path().join("tasks.json");
+    write(
+        &suite,
+        r#"{"tasks":[{"id":"auth","task":"change createSession token behavior","expected_files":["src/auth/session.ts"]}]}"#,
+    );
+
+    let manifest_root = tempfile::tempdir().unwrap();
+    let competitive_path = manifest_root.path().join("competitive.json");
+    let public_result = manifest_root.path().join("public-result.json");
+    let public_proof_path = manifest_root.path().join("public-proof.json");
+    let escaped_root = root.replace('\\', "\\\\");
+    let escaped_suite = suite.to_string_lossy().replace('\\', "\\\\");
+    write(
+        &competitive_path,
+        &format!(
+            r#"{{
+  "targets": {{"minimum_first_correct_file_rate_at_k": 1.0, "minimum_expected_file_recall": 1.0}},
+  "benchmark": {{
+    "repos": [
+      {{"label":"fixture","path":"{escaped_root}","suite_path":"{escaped_suite}"}}
+    ]
+  }}
+}}"#
+        ),
+    );
+    write(
+        &public_result,
+        r#"{
+  "mode": "A/B",
+  "manifest": {"path": "benchmarks/public/fixture.json"},
+  "k": 5,
+  "aggregate": {
+    "evaluated": 1,
+    "skipped": 0,
+    "total": 1,
+    "lexical_first_correct_file_rate_at_k": 0.0,
+    "grep_first_correct_file_rate_at_k": 0.0
+  },
+  "issues": [
+    {
+      "id": "miss",
+      "lexical": {"selected_files_count": 8, "first_correct_file_rate_at_k": 0.0},
+      "grep": {"selected_files_count": 100, "first_correct_file_rate_at_k": 0.0}
+    }
+  ]
+}"#,
+    );
+    let escaped_competitive = competitive_path.to_string_lossy().replace('\\', "\\\\");
+    let escaped_public_result = public_result.to_string_lossy().replace('\\', "\\\\");
+    write(
+        &public_proof_path,
+        &format!(
+            r#"{{
+  "competitive_report": "{escaped_competitive}",
+  "targets": {{"minimum_public_reports": 1}},
+  "public_reports": [
+    {{
+      "id": "fixture-public",
+      "path": "{escaped_public_result}",
+      "minimum_first_correct_file_rate_at_k": 1.0
+    }}
+  ]
+}}"#
+        ),
+    );
+
+    let report = json(&run(&[
+        "public-proof-report",
+        public_proof_path.to_str().unwrap(),
+        "--limit",
+        "5",
+    ]));
+
+    assert_eq!(report["status"], "needs_work");
+    assert_eq!(report["public_benchmarks"][0]["status"], "needs_work");
+    assert!(
+        report["failures"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|failure| failure
+                .as_str()
+                .unwrap()
+                .contains("first_correct_file_rate_at_k"))
+    );
+}
+
+#[test]
+fn public_proof_report_fails_closed_on_required_repo_packer_baseline_miss() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+    json(&run(&["index", root]));
+    let suite = repo.path().join("tasks.json");
+    write(
+        &suite,
+        r#"{"tasks":[{"id":"auth","task":"change createSession token behavior","expected_files":["src/auth/session.ts"]}]}"#,
+    );
+
+    let manifest_root = tempfile::tempdir().unwrap();
+    let competitive_path = manifest_root.path().join("competitive.json");
+    let public_result = manifest_root.path().join("public-result.json");
+    let repo_packer_result = manifest_root.path().join("repo-packer-result.json");
+    let public_proof_path = manifest_root.path().join("public-proof.json");
+    let escaped_root = root.replace('\\', "\\\\");
+    let escaped_suite = suite.to_string_lossy().replace('\\', "\\\\");
+    write(
+        &competitive_path,
+        &format!(
+            r#"{{
+  "targets": {{"minimum_first_correct_file_rate_at_k": 1.0, "minimum_expected_file_recall": 1.0}},
+  "benchmark": {{
+    "repos": [
+      {{"label":"fixture","path":"{escaped_root}","suite_path":"{escaped_suite}"}}
+    ]
+  }}
+}}"#
+        ),
+    );
+    write(
+        &public_result,
+        r#"{
+  "mode": "A/B",
+  "manifest": {"path": "benchmarks/public/fixture.json"},
+  "k": 5,
+  "aggregate": {
+    "evaluated": 1,
+    "skipped": 0,
+    "total": 1,
+    "lexical_first_correct_file_rate_at_k": 1.0,
+    "grep_first_correct_file_rate_at_k": 0.0
+  },
+  "issues": [
+    {
+      "id": "hit",
+      "lexical": {"selected_files_count": 8, "first_correct_file_rate_at_k": 1.0},
+      "grep": {"selected_files_count": 100, "first_correct_file_rate_at_k": 0.0}
+    }
+  ]
+}"#,
+    );
+    write(
+        &repo_packer_result,
+        r#"{"tool":"repomix","metrics":{"total_tokens":100}}"#,
+    );
+    let escaped_competitive = competitive_path.to_string_lossy().replace('\\', "\\\\");
+    let escaped_public_result = public_result.to_string_lossy().replace('\\', "\\\\");
+    let escaped_repo_packer_result = repo_packer_result.to_string_lossy().replace('\\', "\\\\");
+    write(
+        &public_proof_path,
+        &format!(
+            r#"{{
+  "competitive_report": "{escaped_competitive}",
+  "targets": {{"minimum_public_reports": 1}},
+  "public_reports": [
+    {{
+      "id": "fixture-public",
+      "path": "{escaped_public_result}",
+      "minimum_first_correct_file_rate_at_k": 1.0
+    }}
+  ],
+  "repo_packer_baselines": [
+    {{
+      "id": "repomix-fixture",
+      "tool": "Repomix",
+      "path": "{escaped_repo_packer_result}",
+      "required": true,
+      "minimum_token_ratio_vs_callsieve_packet": 999.0
+    }}
+  ]
+}}"#
+        ),
+    );
+
+    let report = json(&run(&[
+        "public-proof-report",
+        public_proof_path.to_str().unwrap(),
+        "--limit",
+        "5",
+    ]));
+
+    assert_eq!(report["status"], "needs_work");
+    assert_eq!(report["repo_packer_guardrail"]["status"], "needs_work");
+    assert_eq!(
+        report["repo_packer_guardrail"]["baselines"][0]["status"],
+        "needs_work"
+    );
+    assert!(
+        report["failures"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|failure| failure
+                .as_str()
+                .unwrap()
+                .contains("required repo-packer baseline"))
+    );
+}
+
+#[test]
+fn public_proof_report_fails_closed_on_invalid_agent_native_measurement_plan() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+    json(&run(&["index", root]));
+    let suite = repo.path().join("tasks.json");
+    write(
+        &suite,
+        r#"{"tasks":[{"id":"auth","task":"change createSession token behavior","expected_files":["src/auth/session.ts"]}]}"#,
+    );
+
+    let manifest_root = tempfile::tempdir().unwrap();
+    let competitive_path = manifest_root.path().join("competitive.json");
+    let public_result = manifest_root.path().join("public-result.json");
+    let measurement_plan = manifest_root.path().join("agent-native-plan.json");
+    let public_proof_path = manifest_root.path().join("public-proof.json");
+    let escaped_root = root.replace('\\', "\\\\");
+    let escaped_suite = suite.to_string_lossy().replace('\\', "\\\\");
+    write(
+        &competitive_path,
+        &format!(
+            r#"{{
+  "targets": {{"minimum_first_correct_file_rate_at_k": 1.0, "minimum_expected_file_recall": 1.0}},
+  "benchmark": {{
+    "repos": [
+      {{"label":"fixture","path":"{escaped_root}","suite_path":"{escaped_suite}"}}
+    ]
+  }}
+}}"#
+        ),
+    );
+    write(
+        &public_result,
+        r#"{
+  "mode": "A/B",
+  "manifest": {"path": "benchmarks/public/fixture.json"},
+  "k": 5,
+  "aggregate": {
+    "evaluated": 1,
+    "skipped": 0,
+    "total": 1,
+    "lexical_first_correct_file_rate_at_k": 1.0,
+    "grep_first_correct_file_rate_at_k": 0.0
+  },
+  "issues": [
+    {
+      "id": "hit",
+      "lexical": {"selected_files_count": 8, "first_correct_file_rate_at_k": 1.0},
+      "grep": {"selected_files_count": 100, "first_correct_file_rate_at_k": 0.0}
+    }
+  ]
+}"#,
+    );
+    write(
+        &measurement_plan,
+        r#"{
+  "tool": "Claude Code",
+  "suite": "requests",
+  "task_count": 1,
+  "constraints": ["do not use CallSieve"],
+  "post_run_artifacts": {
+    "protocol": "agent-native-protocol.json",
+    "task_log": "task-log.json",
+    "transcript": "transcript.json",
+    "check": "check.json",
+    "baseline": "baseline.json",
+    "overlay_manifest": "overlay.json",
+    "proof": "proof.json"
+  },
+  "tasks": [
+    {
+      "task_id": "auth",
+      "prompt": "Find the relevant auth file.",
+      "command": ["claude", "-p", "Find the relevant auth file."],
+      "raw_transcript": "raw/auth.json"
+    }
+  ]
+}"#,
+    );
+    let escaped_competitive = competitive_path.to_string_lossy().replace('\\', "\\\\");
+    let escaped_public_result = public_result.to_string_lossy().replace('\\', "\\\\");
+    let escaped_measurement_plan = measurement_plan.to_string_lossy().replace('\\', "\\\\");
+    write(
+        &public_proof_path,
+        &format!(
+            r#"{{
+  "competitive_report": "{escaped_competitive}",
+  "targets": {{"minimum_public_reports": 1}},
+  "public_reports": [
+    {{
+      "id": "fixture-public",
+      "path": "{escaped_public_result}",
+      "minimum_first_correct_file_rate_at_k": 1.0
+    }}
+  ],
+  "terminal_artifacts": [
+    {{
+      "id": "agent-native-measurement-plan",
+      "path": "{escaped_measurement_plan}",
+      "kind": "json_artifact",
+      "description": "invalid native-agent measurement plan",
+      "required": true
+    }}
+  ]
+}}"#
+        ),
+    );
+
+    let report = json(&run(&[
+        "public-proof-report",
+        public_proof_path.to_str().unwrap(),
+        "--limit",
+        "5",
+    ]));
+
+    assert_eq!(report["status"], "needs_work");
+    let plan_artifact = report["evidence_pack"]["terminal_artifacts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|artifact| artifact["id"] == "agent-native-measurement-plan")
+        .unwrap();
+    assert_eq!(plan_artifact["status"], "needs_work");
+    assert!(
+        plan_artifact["validation"]
+            .as_str()
+            .unwrap()
+            .contains("token_accounting")
+    );
+    assert!(
+        report["failures"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|failure| failure
+                .as_str()
+                .unwrap()
+                .contains("agent-native-measurement-plan"))
+    );
+}
+
+#[test]
+fn public_proof_report_fails_closed_on_agent_native_multi_agent_target_miss() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+    json(&run(&["index", root]));
+    let suite = repo.path().join("tasks.json");
+    write(
+        &suite,
+        r#"{"tasks":[{"id":"auth","task":"change createSession token behavior","expected_files":["src/auth/session.ts"]}]}"#,
+    );
+
+    let manifest_root = tempfile::tempdir().unwrap();
+    let competitive_path = manifest_root.path().join("competitive.json");
+    let public_result = manifest_root.path().join("public-result.json");
+    let public_proof_path = manifest_root.path().join("public-proof.json");
+    let escaped_root = root.replace('\\', "\\\\");
+    let escaped_suite = suite.to_string_lossy().replace('\\', "\\\\");
+    write(
+        &competitive_path,
+        &format!(
+            r#"{{
+  "targets": {{"minimum_first_correct_file_rate_at_k": 1.0, "minimum_expected_file_recall": 1.0}},
+  "benchmark": {{
+    "repos": [
+      {{"label":"fixture","path":"{escaped_root}","suite_path":"{escaped_suite}"}}
+    ]
+  }}
+}}"#
+        ),
+    );
+    write(
+        &public_result,
+        r#"{
+  "mode": "A/B",
+  "manifest": {"path": "benchmarks/public/fixture.json"},
+  "k": 5,
+  "aggregate": {
+    "evaluated": 1,
+    "skipped": 0,
+    "total": 1,
+    "lexical_first_correct_file_rate_at_k": 1.0,
+    "grep_first_correct_file_rate_at_k": 0.0
+  },
+  "issues": [
+    {
+      "id": "hit",
+      "lexical": {"selected_files_count": 8, "first_correct_file_rate_at_k": 1.0},
+      "grep": {"selected_files_count": 100, "first_correct_file_rate_at_k": 0.0}
+    }
+  ]
+}"#,
+    );
+    let escaped_competitive = competitive_path.to_string_lossy().replace('\\', "\\\\");
+    let escaped_public_result = public_result.to_string_lossy().replace('\\', "\\\\");
+    write(
+        &public_proof_path,
+        &format!(
+            r#"{{
+  "competitive_report": "{escaped_competitive}",
+  "targets": {{
+    "minimum_public_reports": 1,
+    "minimum_agent_native_distinct_tools": 2
+  }},
+  "public_reports": [
+    {{
+      "id": "fixture-public",
+      "path": "{escaped_public_result}",
+      "minimum_first_correct_file_rate_at_k": 1.0
+    }}
+  ]
+}}"#
+        ),
+    );
+
+    let report = json(&run(&[
+        "public-proof-report",
+        public_proof_path.to_str().unwrap(),
+        "--limit",
+        "5",
+    ]));
+
+    assert_eq!(report["status"], "needs_work");
+    assert_eq!(report["targets"]["minimum_agent_native_distinct_tools"], 2);
+    assert_eq!(
+        report["agent_native_search_guardrail"]["summary"]["distinct_agent_tool_count"],
+        0
+    );
+    assert_eq!(
+        report["agent_native_search_guardrail"]["status"],
+        "not_measured"
+    );
+    assert!(
+        report["failures"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|failure| failure
+                .as_str()
+                .unwrap()
+                .contains("minimum_agent_native_distinct_tools"))
+    );
+}
+
+#[test]
+fn public_proof_report_fails_closed_on_required_agent_native_search_baseline_miss() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+    json(&run(&["index", root]));
+    let suite = repo.path().join("tasks.json");
+    write(
+        &suite,
+        r#"{"tasks":[{"id":"auth","task":"change createSession token behavior","expected_files":["src/auth/session.ts"]}]}"#,
+    );
+
+    let manifest_root = tempfile::tempdir().unwrap();
+    let competitive_path = manifest_root.path().join("competitive.json");
+    let public_result = manifest_root.path().join("public-result.json");
+    let agent_native_result = manifest_root
+        .path()
+        .join("missing-agent-native-result.json");
+    let public_proof_path = manifest_root.path().join("public-proof.json");
+    let escaped_root = root.replace('\\', "\\\\");
+    let escaped_suite = suite.to_string_lossy().replace('\\', "\\\\");
+    write(
+        &competitive_path,
+        &format!(
+            r#"{{
+  "targets": {{"minimum_first_correct_file_rate_at_k": 1.0, "minimum_expected_file_recall": 1.0}},
+  "benchmark": {{
+    "repos": [
+      {{"label":"fixture","path":"{escaped_root}","suite_path":"{escaped_suite}"}}
+    ]
+  }}
+}}"#
+        ),
+    );
+    write(
+        &public_result,
+        r#"{
+  "mode": "A/B",
+  "manifest": {"path": "benchmarks/public/fixture.json"},
+  "k": 5,
+  "aggregate": {
+    "evaluated": 1,
+    "skipped": 0,
+    "total": 1,
+    "lexical_first_correct_file_rate_at_k": 1.0,
+    "grep_first_correct_file_rate_at_k": 0.0
+  },
+  "issues": [
+    {
+      "id": "hit",
+      "lexical": {"selected_files_count": 8, "first_correct_file_rate_at_k": 1.0},
+      "grep": {"selected_files_count": 100, "first_correct_file_rate_at_k": 0.0}
+    }
+  ]
+}"#,
+    );
+    let escaped_competitive = competitive_path.to_string_lossy().replace('\\', "\\\\");
+    let escaped_public_result = public_result.to_string_lossy().replace('\\', "\\\\");
+    let escaped_agent_native_result = agent_native_result.to_string_lossy().replace('\\', "\\\\");
+    write(
+        &public_proof_path,
+        &format!(
+            r#"{{
+  "competitive_report": "{escaped_competitive}",
+  "targets": {{"minimum_public_reports": 1}},
+  "public_reports": [
+    {{
+      "id": "fixture-public",
+      "path": "{escaped_public_result}",
+      "minimum_first_correct_file_rate_at_k": 1.0
+    }}
+  ],
+  "agent_native_search_baselines": [
+    {{
+      "id": "fixture-agent-native",
+      "tool": "Fixture Native Search",
+      "path": "{escaped_agent_native_result}",
+      "required": true,
+      "minimum_tasks": 1
+    }}
+  ]
+}}"#
+        ),
+    );
+
+    let report = json(&run(&[
+        "public-proof-report",
+        public_proof_path.to_str().unwrap(),
+        "--limit",
+        "5",
+    ]));
+
+    assert_eq!(report["status"], "needs_work");
+    assert_eq!(
+        report["agent_native_search_guardrail"]["status"],
+        "needs_work"
+    );
+    assert_eq!(
+        report["agent_native_search_guardrail"]["baselines"][0]["exists"],
+        false
+    );
+    assert!(
+        report["failures"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|failure| failure
+                .as_str()
+                .unwrap()
+                .contains("required agent-native search baseline"))
+    );
+}
+
+#[test]
+fn public_proof_report_fails_closed_on_agent_native_baseline_without_provenance() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+    json(&run(&["index", root]));
+    let suite = repo.path().join("tasks.json");
+    write(
+        &suite,
+        r#"{"tasks":[{"id":"auth","task":"change createSession token behavior","expected_files":["src/auth/session.ts"]}]}"#,
+    );
+
+    let manifest_root = tempfile::tempdir().unwrap();
+    let competitive_path = manifest_root.path().join("competitive.json");
+    let public_result = manifest_root.path().join("public-result.json");
+    let agent_native_result = manifest_root.path().join("agent-native-result.json");
+    let public_proof_path = manifest_root.path().join("public-proof.json");
+    let escaped_root = root.replace('\\', "\\\\");
+    let escaped_suite = suite.to_string_lossy().replace('\\', "\\\\");
+    write(
+        &competitive_path,
+        &format!(
+            r#"{{
+  "targets": {{"minimum_first_correct_file_rate_at_k": 1.0, "minimum_expected_file_recall": 1.0}},
+  "benchmark": {{
+    "repos": [
+      {{"label":"fixture","path":"{escaped_root}","suite_path":"{escaped_suite}"}}
+    ]
+  }}
+}}"#
+        ),
+    );
+    write(
+        &public_result,
+        r#"{
+  "mode": "A/B",
+  "manifest": {"path": "benchmarks/public/fixture.json"},
+  "k": 5,
+  "aggregate": {
+    "evaluated": 1,
+    "skipped": 0,
+    "total": 1,
+    "lexical_first_correct_file_rate_at_k": 1.0,
+    "grep_first_correct_file_rate_at_k": 0.0
+  },
+  "issues": [
+    {
+      "id": "hit",
+      "lexical": {"selected_files_count": 8, "first_correct_file_rate_at_k": 1.0},
+      "grep": {"selected_files_count": 100, "first_correct_file_rate_at_k": 0.0}
+    }
+  ]
+}"#,
+    );
+    write(
+        &agent_native_result,
+        r#"{
+  "schema_version": 1,
+  "tool": "Fixture Native Search",
+  "locally_measured": true,
+  "metrics": {
+    "task_count": 1,
+    "agent_native_first_correct_file_rate_at_k": 0.0,
+    "callsieve_first_correct_file_rate_at_k": 1.0,
+    "agent_native_average_context_tokens": 20000,
+    "callsieve_average_packet_tokens": 1000
+  }
+}"#,
+    );
+    let escaped_competitive = competitive_path.to_string_lossy().replace('\\', "\\\\");
+    let escaped_public_result = public_result.to_string_lossy().replace('\\', "\\\\");
+    let escaped_agent_native_result = agent_native_result.to_string_lossy().replace('\\', "\\\\");
+    write(
+        &public_proof_path,
+        &format!(
+            r#"{{
+  "competitive_report": "{escaped_competitive}",
+  "targets": {{"minimum_public_reports": 1}},
+  "public_reports": [
+    {{
+      "id": "fixture-public",
+      "path": "{escaped_public_result}",
+      "minimum_first_correct_file_rate_at_k": 1.0
+    }}
+  ],
+  "agent_native_search_baselines": [
+    {{
+      "id": "fixture-agent-native",
+      "tool": "Fixture Native Search",
+      "path": "{escaped_agent_native_result}",
+      "required": true,
+      "minimum_tasks": 1,
+      "minimum_callsieve_minus_agent_native_first_correct_file_rate_at_k": 1.0,
+      "minimum_agent_native_context_token_ratio_vs_callsieve": 10.0
+    }}
+  ]
+}}"#
+        ),
+    );
+
+    let report = json(&run(&[
+        "public-proof-report",
+        public_proof_path.to_str().unwrap(),
+        "--limit",
+        "5",
+    ]));
+
+    assert_eq!(report["status"], "needs_work");
+    assert_eq!(
+        report["agent_native_search_guardrail"]["baselines"][0]["locally_measured"],
+        true
+    );
+    assert_eq!(
+        report["agent_native_search_guardrail"]["baselines"][0]["transcript_provenance_status"],
+        "needs_work"
+    );
+    assert!(
+        report["failures"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|failure| failure
+                .as_str()
+                .unwrap()
+                .contains("lacks hashed transcript/export provenance"))
+    );
+}
+
+#[test]
+fn public_proof_report_requires_agent_native_protocol_for_measured_baseline() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+    json(&run(&["index", root]));
+    let suite = repo.path().join("tasks.json");
+    write(
+        &suite,
+        r#"{"tasks":[{"id":"auth","task":"change createSession token behavior","expected_files":["src/auth/session.ts"]}]}"#,
+    );
+
+    let manifest_root = tempfile::tempdir().unwrap();
+    let competitive_path = manifest_root.path().join("competitive.json");
+    let public_result = manifest_root.path().join("public-result.json");
+    let agent_native_task_log = manifest_root.path().join("agent-native-task-log.json");
+    let agent_native_transcript = manifest_root.path().join("agent-native-transcript.json");
+    let agent_native_result = manifest_root.path().join("agent-native-result.json");
+    let public_proof_path = manifest_root.path().join("public-proof.json");
+    let escaped_root = root.replace('\\', "\\\\");
+    let escaped_suite = suite.to_string_lossy().replace('\\', "\\\\");
+    write(
+        &competitive_path,
+        &format!(
+            r#"{{
+  "targets": {{"minimum_first_correct_file_rate_at_k": 1.0, "minimum_expected_file_recall": 1.0}},
+  "benchmark": {{
+    "repos": [
+      {{"label":"fixture","path":"{escaped_root}","suite_path":"{escaped_suite}"}}
+    ]
+  }}
+}}"#
+        ),
+    );
+    write(
+        &public_result,
+        r#"{
+  "mode": "A/B",
+  "manifest": {"path": "benchmarks/public/fixture.json"},
+  "k": 5,
+  "aggregate": {
+    "evaluated": 1,
+    "skipped": 0,
+    "total": 1,
+    "lexical_first_correct_file_rate_at_k": 1.0,
+    "grep_first_correct_file_rate_at_k": 0.0
+  },
+  "issues": [
+    {
+      "id": "hit",
+      "lexical": {"selected_files_count": 8, "first_correct_file_rate_at_k": 1.0},
+      "grep": {"selected_files_count": 100, "first_correct_file_rate_at_k": 0.0}
+    }
+  ]
+}"#,
+    );
+    write(
+        &agent_native_task_log,
+        r#"{
+  "tasks": [
+    {
+      "id": "native-hit",
+      "task": "find createSession token behavior",
+      "expected_files": ["src/auth/session.ts"],
+      "agent_native_files": ["src/auth/session.ts"],
+      "callsieve_files": ["src/auth/session.ts"],
+      "agent_native_context_tokens": 20000,
+      "callsieve_packet_tokens": 1000,
+      "recording_status": "measured"
+    }
+  ]
+}"#,
+    );
+    write(
+        &agent_native_transcript,
+        r#"{"tool":"fixture-native-search","task_ids":["native-hit"],"source":"approved local transcript fixture"}"#,
+    );
+    json(&run(&[
+        "agent-native-baseline",
+        agent_native_task_log.to_str().unwrap(),
+        "--id",
+        "fixture-agent-native",
+        "--tool",
+        "Fixture Native Search",
+        "--k",
+        "5",
+        "--measurement-command",
+        "fixture native search measurement",
+        "--source-artifact",
+        agent_native_transcript.to_str().unwrap(),
+        "--out",
+        agent_native_result.to_str().unwrap(),
+    ]));
+    let escaped_competitive = competitive_path.to_string_lossy().replace('\\', "\\\\");
+    let escaped_public_result = public_result.to_string_lossy().replace('\\', "\\\\");
+    let escaped_agent_native_result = agent_native_result.to_string_lossy().replace('\\', "\\\\");
+    write(
+        &public_proof_path,
+        &format!(
+            r#"{{
+  "competitive_report": "{escaped_competitive}",
+  "targets": {{"minimum_public_reports": 1}},
+  "public_reports": [
+    {{
+      "id": "fixture-public",
+      "path": "{escaped_public_result}",
+      "minimum_first_correct_file_rate_at_k": 1.0
+    }}
+  ],
+  "agent_native_search_baselines": [
+    {{
+      "id": "fixture-agent-native",
+      "tool": "Fixture Native Search",
+      "path": "{escaped_agent_native_result}",
+      "required": true,
+      "minimum_tasks": 1,
+      "minimum_callsieve_minus_agent_native_first_correct_file_rate_at_k": 0.0,
+      "minimum_agent_native_context_token_ratio_vs_callsieve": 10.0
+    }}
+  ]
+}}"#
+        ),
+    );
+
+    let report = json(&run(&[
+        "public-proof-report",
+        public_proof_path.to_str().unwrap(),
+        "--limit",
+        "5",
+    ]));
+
+    assert_eq!(report["status"], "needs_work");
+    assert_eq!(
+        report["agent_native_search_guardrail"]["status"],
+        "needs_work"
+    );
+    assert_eq!(
+        report["agent_native_search_guardrail"]["baselines"][0]["status"],
+        "pass"
+    );
+    assert_eq!(
+        report["agent_native_search_guardrail"]["baselines"][0]["transcript_provenance_status"],
+        "pass"
+    );
+    assert!(
+        report["failures"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|failure| failure
+                .as_str()
+                .unwrap()
+                .contains("`agent-native-protocol` public proof artifact"))
+    );
+}
+
+#[test]
+fn public_proof_report_requires_agent_native_check_for_measured_baseline() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+    json(&run(&["index", root]));
+    let suite = repo.path().join("tasks.json");
+    write(
+        &suite,
+        r#"{"tasks":[{"id":"auth","task":"change createSession token behavior","expected_files":["src/auth/session.ts"]}]}"#,
+    );
+
+    let manifest_root = tempfile::tempdir().unwrap();
+    let competitive_path = manifest_root.path().join("competitive.json");
+    let public_result = manifest_root.path().join("public-result.json");
+    let agent_native_task_log = manifest_root.path().join("agent-native-task-log.json");
+    let agent_native_transcript = manifest_root.path().join("agent-native-transcript.json");
+    let agent_native_result = manifest_root.path().join("agent-native-result.json");
+    let agent_native_protocol_artifact = manifest_root.path().join("agent-native-protocol.json");
+    let public_proof_path = manifest_root.path().join("public-proof.json");
+    let escaped_root = root.replace('\\', "\\\\");
+    let escaped_suite = suite.to_string_lossy().replace('\\', "\\\\");
+    write(
+        &competitive_path,
+        &format!(
+            r#"{{
+  "targets": {{"minimum_first_correct_file_rate_at_k": 1.0, "minimum_expected_file_recall": 1.0}},
+  "benchmark": {{
+    "repos": [
+      {{"label":"fixture","path":"{escaped_root}","suite_path":"{escaped_suite}"}}
+    ]
+  }}
+}}"#
+        ),
+    );
+    write(
+        &public_result,
+        r#"{
+  "mode": "A/B",
+  "manifest": {"path": "benchmarks/public/fixture.json"},
+  "k": 5,
+  "aggregate": {
+    "evaluated": 1,
+    "skipped": 0,
+    "total": 1,
+    "lexical_first_correct_file_rate_at_k": 1.0,
+    "grep_first_correct_file_rate_at_k": 0.0
+  },
+  "issues": [
+    {
+      "id": "hit",
+      "lexical": {"selected_files_count": 8, "first_correct_file_rate_at_k": 1.0},
+      "grep": {"selected_files_count": 100, "first_correct_file_rate_at_k": 0.0}
+    }
+  ]
+}"#,
+    );
+    write(
+        &agent_native_task_log,
+        r#"{
+  "tasks": [
+    {
+      "id": "native-hit",
+      "task": "find createSession token behavior",
+      "expected_files": ["src/auth/session.ts"],
+      "agent_native_files": ["src/auth/session.ts"],
+      "callsieve_files": ["src/auth/session.ts"],
+      "agent_native_context_tokens": 20000,
+      "callsieve_packet_tokens": 1000,
+      "recording_status": "measured"
+    }
+  ]
+}"#,
+    );
+    write(
+        &agent_native_transcript,
+        r#"{"tool":"fixture-native-search","task_ids":["native-hit"],"source":"approved local transcript fixture"}"#,
+    );
+    json(&run(&[
+        "agent-native-baseline",
+        agent_native_task_log.to_str().unwrap(),
+        "--id",
+        "fixture-agent-native",
+        "--tool",
+        "Fixture Native Search",
+        "--k",
+        "5",
+        "--measurement-command",
+        "fixture native search measurement",
+        "--source-artifact",
+        agent_native_transcript.to_str().unwrap(),
+        "--out",
+        agent_native_result.to_str().unwrap(),
+    ]));
+    json(&run(&[
+        "agent-native-protocol",
+        "--out",
+        agent_native_protocol_artifact.to_str().unwrap(),
+    ]));
+    let escaped_competitive = competitive_path.to_string_lossy().replace('\\', "\\\\");
+    let escaped_public_result = public_result.to_string_lossy().replace('\\', "\\\\");
+    let escaped_agent_native_result = agent_native_result.to_string_lossy().replace('\\', "\\\\");
+    let escaped_agent_native_protocol_artifact = agent_native_protocol_artifact
+        .to_string_lossy()
+        .replace('\\', "\\\\");
+    write(
+        &public_proof_path,
+        &format!(
+            r#"{{
+  "competitive_report": "{escaped_competitive}",
+  "targets": {{"minimum_public_reports": 1}},
+  "public_reports": [
+    {{
+      "id": "fixture-public",
+      "path": "{escaped_public_result}",
+      "minimum_first_correct_file_rate_at_k": 1.0
+    }}
+  ],
+  "agent_native_search_baselines": [
+    {{
+      "id": "fixture-agent-native",
+      "tool": "Fixture Native Search",
+      "path": "{escaped_agent_native_result}",
+      "required": true,
+      "minimum_tasks": 1,
+      "minimum_callsieve_minus_agent_native_first_correct_file_rate_at_k": 0.0,
+      "minimum_agent_native_context_token_ratio_vs_callsieve": 10.0
+    }}
+  ],
+  "terminal_artifacts": [
+    {{
+      "id": "agent-native-protocol",
+      "path": "{escaped_agent_native_protocol_artifact}",
+      "kind": "json_artifact",
+      "description": "standalone agent-native measurement protocol",
+      "required": true
+    }}
+  ]
+}}"#
+        ),
+    );
+
+    let report = json(&run(&[
+        "public-proof-report",
+        public_proof_path.to_str().unwrap(),
+        "--limit",
+        "5",
+    ]));
+
+    assert_eq!(report["status"], "needs_work");
+    assert_eq!(
+        report["agent_native_search_guardrail"]["status"],
+        "needs_work"
+    );
+    assert_eq!(
+        report["agent_native_search_guardrail"]["baselines"][0]["status"],
+        "pass"
+    );
+    let protocol_artifact = report["evidence_pack"]["terminal_artifacts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|artifact| artifact["id"] == "agent-native-protocol")
+        .unwrap();
+    assert_eq!(protocol_artifact["status"], "pass");
+    assert!(
+        report["failures"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|failure| failure
+                .as_str()
+                .unwrap()
+                .contains("`agent-native-check` public proof artifact"))
+    );
+}
+
+#[test]
+fn public_proof_report_links_agent_native_check_to_measured_baseline_hashes() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+    json(&run(&["index", root]));
+    let suite = repo.path().join("tasks.json");
+    write(
+        &suite,
+        r#"{"tasks":[{"id":"auth","task":"change createSession token behavior","expected_files":["src/auth/session.ts"]}]}"#,
+    );
+
+    let manifest_root = tempfile::tempdir().unwrap();
+    let competitive_path = manifest_root.path().join("competitive.json");
+    let public_result = manifest_root.path().join("public-result.json");
+    let agent_native_task_log = manifest_root.path().join("agent-native-task-log.json");
+    let other_agent_native_task_log = manifest_root
+        .path()
+        .join("other-agent-native-task-log.json");
+    let agent_native_transcript = manifest_root.path().join("agent-native-transcript.json");
+    let unrelated_transcript = manifest_root
+        .path()
+        .join("unrelated-agent-native-transcript.json");
+    let agent_native_result = manifest_root.path().join("agent-native-result.json");
+    let agent_native_check_artifact = manifest_root.path().join("agent-native-check.json");
+    let other_agent_native_check_artifact =
+        manifest_root.path().join("other-agent-native-check.json");
+    let agent_native_protocol_artifact = manifest_root.path().join("agent-native-protocol.json");
+    let public_proof_path = manifest_root.path().join("public-proof.json");
+    let escaped_root = root.replace('\\', "\\\\");
+    let escaped_suite = suite.to_string_lossy().replace('\\', "\\\\");
+    write(
+        &competitive_path,
+        &format!(
+            r#"{{
+  "targets": {{"minimum_first_correct_file_rate_at_k": 1.0, "minimum_expected_file_recall": 1.0}},
+  "benchmark": {{
+    "repos": [
+      {{"label":"fixture","path":"{escaped_root}","suite_path":"{escaped_suite}"}}
+    ]
+  }}
+}}"#
+        ),
+    );
+    write(
+        &public_result,
+        r#"{
+  "mode": "A/B",
+  "manifest": {"path": "benchmarks/public/fixture.json"},
+  "k": 5,
+  "aggregate": {
+    "evaluated": 1,
+    "skipped": 0,
+    "total": 1,
+    "lexical_first_correct_file_rate_at_k": 1.0,
+    "grep_first_correct_file_rate_at_k": 0.0
+  },
+  "issues": [
+    {
+      "id": "hit",
+      "lexical": {"selected_files_count": 8, "first_correct_file_rate_at_k": 1.0},
+      "grep": {"selected_files_count": 100, "first_correct_file_rate_at_k": 0.0}
+    }
+  ]
+}"#,
+    );
+    write(
+        &agent_native_task_log,
+        r#"{
+  "tasks": [
+    {
+      "id": "native-hit",
+      "task": "find createSession token behavior",
+      "expected_files": ["src/auth/session.ts"],
+      "agent_native_files": ["src/auth/session.ts"],
+      "callsieve_files": ["src/auth/session.ts"],
+      "agent_native_context_tokens": 20000,
+      "callsieve_packet_tokens": 1000,
+      "recording_status": "measured"
+    }
+  ]
+}"#,
+    );
+    write(
+        &other_agent_native_task_log,
+        r#"{
+  "tasks": [
+    {
+      "id": "other-native-hit",
+      "task": "find createSession token behavior in another checked log",
+      "expected_files": ["src/auth/session.ts"],
+      "agent_native_files": ["src/auth/session.ts"],
+      "callsieve_files": ["src/auth/session.ts"],
+      "agent_native_context_tokens": 20000,
+      "callsieve_packet_tokens": 1000,
+      "recording_status": "measured"
+    }
+  ]
+}"#,
+    );
+    write(
+        &agent_native_transcript,
+        r#"{"tool":"fixture-native-search","task_ids":["native-hit"],"source":"approved local transcript fixture"}"#,
+    );
+    write(
+        &unrelated_transcript,
+        r#"{"tool":"fixture-native-search","task_ids":["different-hit"],"source":"different local transcript fixture"}"#,
+    );
+    json(&run(&[
+        "agent-native-check",
+        agent_native_task_log.to_str().unwrap(),
+        "--mode",
+        "measured",
+        "--source-artifact",
+        unrelated_transcript.to_str().unwrap(),
+        "--out",
+        agent_native_check_artifact.to_str().unwrap(),
+    ]));
+    json(&run(&[
+        "agent-native-check",
+        other_agent_native_task_log.to_str().unwrap(),
+        "--mode",
+        "measured",
+        "--source-artifact",
+        agent_native_transcript.to_str().unwrap(),
+        "--out",
+        other_agent_native_check_artifact.to_str().unwrap(),
+    ]));
+    json(&run(&[
+        "agent-native-baseline",
+        agent_native_task_log.to_str().unwrap(),
+        "--id",
+        "fixture-agent-native",
+        "--tool",
+        "Fixture Native Search",
+        "--k",
+        "5",
+        "--measurement-command",
+        "fixture native search measurement",
+        "--source-artifact",
+        agent_native_transcript.to_str().unwrap(),
+        "--out",
+        agent_native_result.to_str().unwrap(),
+    ]));
+    json(&run(&[
+        "agent-native-protocol",
+        "--out",
+        agent_native_protocol_artifact.to_str().unwrap(),
+    ]));
+    let escaped_competitive = competitive_path.to_string_lossy().replace('\\', "\\\\");
+    let escaped_public_result = public_result.to_string_lossy().replace('\\', "\\\\");
+    let escaped_agent_native_result = agent_native_result.to_string_lossy().replace('\\', "\\\\");
+    let escaped_agent_native_check_artifact = agent_native_check_artifact
+        .to_string_lossy()
+        .replace('\\', "\\\\");
+    let escaped_other_agent_native_check_artifact = other_agent_native_check_artifact
+        .to_string_lossy()
+        .replace('\\', "\\\\");
+    let escaped_agent_native_protocol_artifact = agent_native_protocol_artifact
+        .to_string_lossy()
+        .replace('\\', "\\\\");
+    write(
+        &public_proof_path,
+        &format!(
+            r#"{{
+  "competitive_report": "{escaped_competitive}",
+  "targets": {{"minimum_public_reports": 1}},
+  "public_reports": [
+    {{
+      "id": "fixture-public",
+      "path": "{escaped_public_result}",
+      "minimum_first_correct_file_rate_at_k": 1.0
+    }}
+  ],
+  "agent_native_search_baselines": [
+    {{
+      "id": "fixture-agent-native",
+      "tool": "Fixture Native Search",
+      "path": "{escaped_agent_native_result}",
+      "required": true,
+      "minimum_tasks": 1,
+      "minimum_callsieve_minus_agent_native_first_correct_file_rate_at_k": 0.0,
+      "minimum_agent_native_context_token_ratio_vs_callsieve": 10.0
+    }}
+  ],
+  "terminal_artifacts": [
+    {{
+      "id": "agent-native-protocol",
+      "path": "{escaped_agent_native_protocol_artifact}",
+      "kind": "json_artifact",
+      "description": "standalone agent-native measurement protocol",
+      "required": true
+    }},
+    {{
+      "id": "agent-native-check",
+      "path": "{escaped_agent_native_check_artifact}",
+      "kind": "json_artifact",
+      "description": "measured native-search preflight check",
+      "required": true
+    }},
+    {{
+      "id": "agent-native-check",
+      "path": "{escaped_other_agent_native_check_artifact}",
+      "kind": "json_artifact",
+      "description": "second measured native-search preflight check",
+      "required": true
+    }}
+  ]
+}}"#
+        ),
+    );
+
+    let report = json(&run(&[
+        "public-proof-report",
+        public_proof_path.to_str().unwrap(),
+        "--limit",
+        "5",
+    ]));
+
+    assert_eq!(report["status"], "needs_work");
+    assert_eq!(
+        report["agent_native_search_guardrail"]["baselines"][0]["status"],
+        "pass"
+    );
+    assert_eq!(
+        report["agent_native_search_guardrail"]["baselines"][0]["transcript_provenance_status"],
+        "pass"
+    );
+    let check_artifacts = report["evidence_pack"]["terminal_artifacts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|artifact| artifact["id"] == "agent-native-check")
+        .collect::<Vec<_>>();
+    assert_eq!(check_artifacts.len(), 2);
+    assert!(
+        check_artifacts
+            .iter()
+            .all(|artifact| artifact["status"] == "pass")
+    );
+    assert!(
+        check_artifacts
+            .iter()
+            .all(|artifact| artifact["source_artifact_hashes"].as_array().unwrap().len() == 2)
+    );
+    assert!(
+        report["failures"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|failure| failure
+                .as_str()
+                .unwrap()
+                .contains("containing all source artifact hashes"))
+    );
+}
+
+#[test]
+fn competitive_report_rejects_default_packet_over_budget() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+    json(&run(&["index", root]));
+    let suite = repo.path().join("tasks.json");
+    write(
+        &suite,
+        r#"{"tasks":[{"id":"auth","task":"change createSession token behavior","expected_files":["src/auth/session.ts"]}]}"#,
+    );
+
+    let manifest_root = tempfile::tempdir().unwrap();
+    let manifest_path = manifest_root.path().join("competitive.json");
+    let escaped_root = root.replace('\\', "\\\\");
+    let escaped_suite = suite.to_string_lossy().replace('\\', "\\\\");
+    write(
+        &manifest_path,
+        &format!(
+            r#"{{
+  "targets": {{
+    "minimum_first_correct_file_rate_at_k": 0.0,
+    "maximum_default_packet_tokens": 1
+  }},
+  "benchmark": {{
+    "repos": [
+      {{"label":"fixture","path":"{escaped_root}","suite_path":"{escaped_suite}"}}
+    ]
+  }}
+}}"#
+        ),
+    );
+
+    let report = json(&run(&[
+        "competitive-report",
+        manifest_path.to_str().unwrap(),
+        "--limit",
+        "5",
+    ]));
+
+    assert_eq!(report["status"], "needs_work");
+    assert_eq!(report["targets"]["maximum_default_packet_tokens"], 1);
+    assert!(
+        report["callsieve"]["default_packet_tokens"]
+            .as_u64()
+            .unwrap()
+            > 1
+    );
+    assert!(
+        report["failures"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|failure| failure.as_str().unwrap().contains("default_packet_tokens"))
+    );
+}
+
+#[test]
+fn competitive_report_rejects_bad_trace_when_proof_is_required() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+    json(&run(&["index", root]));
+    let suite = repo.path().join("tasks.json");
+    write(
+        &suite,
+        r#"{"tasks":[{"id":"auth","task":"change createSession token behavior","expected_files":["src/auth/session.ts"]}]}"#,
+    );
+    let trace = repo.path().join("bad-trace.json");
+    write(
+        &trace,
+        r#"{
+  "metadata": {"collection": "observed_session", "client": "codex", "model": "example"},
+  "tasks": [
+    {
+      "id": "auth",
+      "task": "change createSession token behavior",
+      "session": {
+        "baseline": {
+          "grep_commands": 3,
+          "file_reads": 4,
+          "tokens": 12000,
+          "commands": ["rg createSession token"],
+          "files_read": ["src/auth/session.ts"]
+        },
+        "callsieve": {
+          "grep_commands": 1,
+          "file_reads": 2,
+          "tokens": 3000,
+          "commands": ["rg createSession token", "callsieve context . \"change createSession token behavior\""],
+          "files_read": ["src/auth/session.ts"]
+        }
+      }
+    }
+  ]
+}"#,
+    );
+
+    let manifest_root = tempfile::tempdir().unwrap();
+    let manifest_path = manifest_root.path().join("competitive.json");
+    let escaped_root = root.replace('\\', "\\\\");
+    let escaped_suite = suite.to_string_lossy().replace('\\', "\\\\");
+    let escaped_trace = trace.to_string_lossy().replace('\\', "\\\\");
+    write(
+        &manifest_path,
+        &format!(
+            r#"{{
+  "targets": {{
+    "minimum_first_correct_file_rate_at_k": 0.0,
+    "require_trace_or_receipt_proof": true
+  }},
+  "benchmark": {{
+    "repos": [
+      {{"label":"fixture","path":"{escaped_root}","suite_path":"{escaped_suite}","trace_path":"{escaped_trace}"}}
+    ]
+  }}
+}}"#
+        ),
+    );
+
+    let report = json(&run(&[
+        "competitive-report",
+        manifest_path.to_str().unwrap(),
+        "--limit",
+        "5",
+    ]));
+
+    assert_eq!(report["status"], "needs_work");
+    assert_eq!(
+        report["callsieve"]["trace_or_receipt_proof_available"],
+        false
+    );
+    assert_eq!(report["callsieve"]["strict_trace_policy_sessions"], 1);
+    assert_eq!(report["callsieve"]["strict_trace_policy_violations"], 1);
+    assert_eq!(report["callsieve"]["context_first_compliant"], false);
+    assert!(
+        report["failures"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|failure| failure
+                .as_str()
+                .unwrap()
+                .contains("trace or receipt proof is required but missing"))
+    );
+}
+
+#[test]
+fn competitive_report_rejects_missing_required_agent_coverage() {
+    let repo = fixture_repo();
+    let root = repo.path().to_str().unwrap();
+    json(&run(&["index", root]));
+    let suite = repo.path().join("tasks.json");
+    write(
+        &suite,
+        r#"{"tasks":[{"id":"auth","task":"change createSession token behavior","expected_files":["src/auth/session.ts"]}]}"#,
+    );
+
+    let manifest_root = tempfile::tempdir().unwrap();
+    let manifest_path = manifest_root.path().join("competitive.json");
+    let escaped_root = root.replace('\\', "\\\\");
+    let escaped_suite = suite.to_string_lossy().replace('\\', "\\\\");
+    write(
+        &manifest_path,
+        &format!(
+            r#"{{
+  "targets": {{
+    "minimum_first_correct_file_rate_at_k": 0.0,
+    "minimum_agent_coverage": 1,
+    "required_agents": ["Codex", "Imaginary Agent"]
+  }},
+  "benchmark": {{
+    "repos": [
+      {{"label":"fixture","path":"{escaped_root}","suite_path":"{escaped_suite}"}}
+    ]
+  }}
+}}"#
+        ),
+    );
+
+    let report = json(&run(&[
+        "competitive-report",
+        manifest_path.to_str().unwrap(),
+        "--limit",
+        "5",
+    ]));
+
+    assert_eq!(report["status"], "needs_work");
+    assert_eq!(
+        report["callsieve"]["missing_required_agents"],
+        serde_json::json!(["Imaginary Agent"])
+    );
+    assert!(
+        report["failures"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|failure| failure
+                .as_str()
+                .unwrap()
+                .contains("required agent coverage is missing: Imaginary Agent"))
+    );
+}
+
+#[test]
 fn pilot_report_combines_benchmarks_traces_status_and_thresholds() {
     let repo = fixture_repo();
     let root = repo.path().to_str().unwrap();
@@ -5443,7 +8875,7 @@ fn pilot_report_combines_benchmarks_traces_status_and_thresholds() {
             r#"{{
   "thresholds": {{
     "minimum_recall": 1.0,
-    "minimum_token_reduction_percent": -300.0,
+    "minimum_token_reduction_percent": -400.0,
     "maximum_trace_violations": 0,
     "require_fresh_index": true
   }},
@@ -6013,6 +9445,44 @@ fn mcp_registry_manifest_prints_and_writes_server_descriptor() {
         "--out",
         out.to_str().unwrap(),
     ]));
+    assert!(out.is_file());
+    let saved: Value = serde_json::from_slice(&fs::read(out).unwrap()).unwrap();
+    assert_eq!(saved, written);
+}
+
+#[test]
+fn mcp_contract_prints_and_writes_context_contract() {
+    let contract = json(&run(&["mcp-contract"]));
+    assert_eq!(contract["command"], "mcp-contract");
+    assert_eq!(contract["status"], "pass");
+    assert_eq!(contract["context_tool"], "callsieve_context");
+    assert_eq!(contract["default_profile"], "skim");
+    assert_eq!(contract["default_token_budget"], 1200);
+    assert!(
+        contract["required_structured_content_fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|field| field == "read_first")
+    );
+    assert!(
+        contract["supported_instruction_expansion_keys"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|key| key == "tests")
+    );
+    assert!(
+        contract["required_freshness_fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|field| field == "fix_command")
+    );
+
+    let repo = tempfile::tempdir().unwrap();
+    let out = repo.path().join("mcp-contract.json");
+    let written = json(&run(&["mcp-contract", "--out", out.to_str().unwrap()]));
     assert!(out.is_file());
     let saved: Value = serde_json::from_slice(&fs::read(out).unwrap()).unwrap();
     assert_eq!(saved, written);
@@ -8276,6 +11746,11 @@ fn session_finish_without_ground_truth_omits_metrics() {
 #[cfg(unix)]
 #[test]
 fn daemon_serves_agent_context_identical_to_direct_and_falls_back_after_stop() {
+    if !unix_socket_bind_available() {
+        eprintln!("skipping daemon socket integration assertion: AF_UNIX bind is unavailable");
+        return;
+    }
+
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().canonicalize().unwrap();
     fs::write(
