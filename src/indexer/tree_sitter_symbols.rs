@@ -107,6 +107,10 @@ fn js_symbol_for_node(node: Node<'_>, content: &str) -> Option<RawSymbol> {
 }
 
 fn python_symbol_for_node(node: Node<'_>, content: &str) -> Option<RawSymbol> {
+    if let Some(name) = python_constant_name(node, content) {
+        return Some(raw_symbol(node, content, name, "constant", "public"));
+    }
+
     let kind = match node.kind() {
         "function_definition" => "function",
         "class_definition" => "class",
@@ -119,6 +123,34 @@ fn python_symbol_for_node(node: Node<'_>, content: &str) -> Option<RawSymbol> {
         "public"
     };
     Some(raw_symbol(node, content, name, kind, visibility))
+}
+
+fn python_constant_name(node: Node<'_>, content: &str) -> Option<String> {
+    if node.kind() != "assignment" || is_inside_python_function(node) {
+        return None;
+    }
+
+    let left = node.child_by_field_name("left")?;
+    if left.kind() != "identifier" {
+        return None;
+    }
+
+    let name = node_text(left, content).map(clean_name)?;
+    is_python_constant_name(&name).then_some(name)
+}
+
+fn is_inside_python_function(node: Node<'_>) -> bool {
+    let mut current = node.parent();
+    while let Some(parent) = current {
+        if matches!(
+            parent.kind(),
+            "function_definition" | "lambda" | "lambda_parameters"
+        ) {
+            return true;
+        }
+        current = parent.parent();
+    }
+    false
 }
 
 fn rust_symbol_for_node(node: Node<'_>, content: &str) -> Option<RawSymbol> {
@@ -199,6 +231,17 @@ fn variable_kind(node: Node<'_>, content: &str, name: &str) -> Option<&'static s
             }
         }
     })
+}
+
+fn is_python_constant_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    first.is_ascii_uppercase()
+        && chars.all(|character| {
+            character.is_ascii_uppercase() || character.is_ascii_digit() || character == '_'
+        })
 }
 
 fn is_react_component(name: &str, value: Node<'_>, content: &str) -> bool {
@@ -342,6 +385,28 @@ mod tests {
                 .iter()
                 .any(|symbol| symbol.name == "login"
                     && symbol.parent.as_deref() == Some("Service"))
+        );
+    }
+
+    #[test]
+    fn parses_python_module_constants_without_local_assignments() {
+        let symbols = extract_symbols(
+            "FILE_UPLOAD_PERMISSIONS = None\nlower_value = 1\n\ndef configure():\n    LOCAL_SETTING = True\n",
+            Language::Python,
+        )
+        .unwrap();
+
+        assert!(
+            symbols
+                .iter()
+                .any(|symbol| symbol.name == "FILE_UPLOAD_PERMISSIONS"
+                    && symbol.kind == "constant"
+                    && symbol.visibility == "public")
+        );
+        assert!(
+            symbols
+                .iter()
+                .all(|symbol| symbol.name != "lower_value" && symbol.name != "LOCAL_SETTING")
         );
     }
 

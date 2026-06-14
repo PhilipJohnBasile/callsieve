@@ -11,6 +11,34 @@ use serde_json::{Value, json};
 
 use crate::{indexer, query, store};
 
+pub const FIRST_MILE_MCP_TOOLS: &[&str] = &[
+    "callsieve_context",
+    "callsieve_focus",
+    "callsieve_related",
+    "callsieve_tests",
+    "callsieve_status",
+];
+pub const CONTEXT_STRUCTURED_CONTENT_FIELDS: &[&str] = &[
+    "read_first",
+    "sel",
+    "instruction",
+    "freshness",
+    "retrieval_cost",
+    "stats",
+    "trace_event",
+];
+pub const CONTEXT_INSTRUCTION_EXPANSION_KEYS: &[&str] = &["o", "next", "rel", "tests"];
+pub const CONTEXT_FRESHNESS_FIELDS: &[&str] = &[
+    "initial_fresh",
+    "refreshed",
+    "final_fresh",
+    "index_generation",
+    "stale_files",
+    "fix_command",
+];
+pub const CONTEXT_DEFAULT_PROFILE: &str = "skim";
+pub const CONTEXT_STRUCTURED_CONTENT_CONTRACT_VERSION: u16 = 1;
+
 /// The MCP server is a long-running process, but parsing a large index.json
 /// dominates per-call latency. Cache the parsed index for the last-used root
 /// and revalidate freshness (stat-level checks only) before each reuse.
@@ -340,6 +368,17 @@ fn tools_list_result() -> Value {
             }
         ]
     })
+}
+
+pub fn listed_tool_names() -> Vec<String> {
+    tools_list_result()
+        .get("tools")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|tool| tool.get("name").and_then(Value::as_str))
+        .map(str::to_string)
+        .collect()
 }
 
 fn call_tool(params: Option<Value>) -> Result<Value> {
@@ -1224,6 +1263,18 @@ mod tests {
     }
 
     #[test]
+    fn listed_tool_names_cover_first_mile_mcp_tools() {
+        let names = listed_tool_names();
+
+        for required in FIRST_MILE_MCP_TOOLS {
+            assert!(
+                names.iter().any(|name| name == required),
+                "missing first-mile MCP tool {required}"
+            );
+        }
+    }
+
+    #[test]
     fn context_tool_returns_structured_content() {
         let _guard = cache_lock();
         let temp = tempfile::tempdir().unwrap();
@@ -1253,6 +1304,14 @@ mod tests {
         let response = handle_line(&request).unwrap();
 
         assert_eq!(response["result"]["isError"], false);
+        for field in CONTEXT_STRUCTURED_CONTENT_FIELDS {
+            assert!(
+                response["result"]["structuredContent"]
+                    .get(*field)
+                    .is_some(),
+                "missing MCP structuredContent contract field {field}"
+            );
+        }
         assert_eq!(
             response["result"]["structuredContent"]["read_first"][0]["f"],
             "src/auth/session.ts"

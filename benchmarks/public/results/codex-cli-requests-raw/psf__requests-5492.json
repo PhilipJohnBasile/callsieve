@@ -1,0 +1,101 @@
+{
+  "task_id": "psf__requests-5492",
+  "repo": "psf/requests",
+  "base_commit": "9ed5db8ed28e816b597dafd328b342ec95466afa",
+  "checked_out_commit": "9ed5db8ed28e816b597dafd328b342ec95466afa",
+  "prompt": "Measurement task for CallSieve public proof.\nDo not use CallSieve, callsieve commands, callsieve MCP tools, or any repo-specific precomputed CallSieve context.\nDo not use browser, web, MCP, plugin, memory, or external documentation tools.\nDo not edit files.\nUse only Codex native read-only shell search and file-read commands inside this Requests checkout.\nInspect the repository as needed. You must read every file you rely on.\nReturn JSON only, matching the provided schema.\n\nTask id: psf__requests-5492\nRepository task: Avoid calling resolve_redirects when not following redirects while creating request history\n\nReturn files_selected_or_read as repo-relative paths ordered by first use.",
+  "command": [
+    "/Applications/Codex.app/Contents/Resources/codex",
+    "--ask-for-approval",
+    "never",
+    "--disable",
+    "plugins",
+    "--disable",
+    "memories",
+    "--disable",
+    "chronicle",
+    "--disable",
+    "apps",
+    "--disable",
+    "browser_use",
+    "--disable",
+    "browser_use_external",
+    "--disable",
+    "computer_use",
+    "--disable",
+    "multi_agent",
+    "--disable",
+    "goals",
+    "--disable",
+    "hooks",
+    "exec",
+    "--ephemeral",
+    "--json",
+    "--ignore-user-config",
+    "--ignore-rules",
+    "-C",
+    "/Users/pjb/git/callsieve/benchmarks/public/repos/psf/requests",
+    "--sandbox",
+    "read-only",
+    "--output-schema",
+    "/Users/pjb/git/callsieve/benchmarks/public/results/codex-cli-requests-result-schema.json",
+    "Measurement task for CallSieve public proof.\nDo not use CallSieve, callsieve commands, callsieve MCP tools, or any repo-specific precomputed CallSieve context.\nDo not use browser, web, MCP, plugin, memory, or external documentation tools.\nDo not edit files.\nUse only Codex native read-only shell search and file-read commands inside this Requests checkout.\nInspect the repository as needed. You must read every file you rely on.\nReturn JSON only, matching the provided schema.\n\nTask id: psf__requests-5492\nRepository task: Avoid calling resolve_redirects when not following redirects while creating request history\n\nReturn files_selected_or_read as repo-relative paths ordered by first use."
+  ],
+  "parsed_result": {
+    "task_id": "psf__requests-5492",
+    "files_selected_or_read": [
+      "requests/sessions.py"
+    ],
+    "rationale": "The redirect-history behavior is implemented in SessionRedirectMixin.resolve_redirects and Session.send in requests/sessions.py. Session.send always builds r.history by calling self.resolve_redirects(r, request, **kwargs) and consuming it with allow_redirects=False after the initial send path, even when the caller is not following redirects. That call is the relevant location for avoiding resolve_redirects when not following redirects while still creating request history; the fix would need to gate the history-building resolve_redirects call on allow_redirects or otherwise avoid invoking the generator when redirects are disabled."
+  },
+  "files_selected_or_read": [
+    "requests/sessions.py"
+  ],
+  "agent_native_context_tokens": 10154,
+  "token_accounting": {
+    "source": "Codex CLI JSONL turn.completed usage.input_tokens",
+    "context_tokens": 10154,
+    "fields": {
+      "input_tokens": 10154,
+      "cached_input_tokens": 2432,
+      "output_tokens": 367,
+      "reasoning_output_tokens": 62
+    }
+  },
+  "raw_events": [
+    {
+      "type": "thread.started",
+      "thread_id": "019ec67d-22be-7a33-85f3-9508f1353d47"
+    },
+    {
+      "type": "turn.started"
+    },
+    {
+      "type": "item.completed",
+      "item": {
+        "id": "item_0",
+        "type": "agent_message",
+        "text": "{\"task_id\":\"psf__requests-5492\",\"files_selected_or_read\":[\"requests/sessions.py\"],\"rationale\":\"The redirect-history behavior is implemented in SessionRedirectMixin.resolve_redirects and Session.send in requests/sessions.py. Session.send always builds r.history by calling self.resolve_redirects(r, request, **kwargs) and consuming it with allow_redirects=False after the initial send path, even when the caller is not following redirects. That call is the relevant location for avoiding resolve_redirects when not following redirects while still creating request history; the fix would need to gate the history-building resolve_redirects call on allow_redirects or otherwise avoid invoking the generator when redirects are disabled.\"}"
+      }
+    },
+    {
+      "type": "item.completed",
+      "item": {
+        "id": "item_1",
+        "type": "agent_message",
+        "text": "{\"task_id\":\"psf__requests-5492\",\"files_selected_or_read\":[\"requests/sessions.py\"],\"rationale\":\"The redirect-history behavior is implemented in SessionRedirectMixin.resolve_redirects and Session.send in requests/sessions.py. Session.send always builds r.history by calling self.resolve_redirects(r, request, **kwargs) and consuming it with allow_redirects=False after the initial send path, even when the caller is not following redirects. That call is the relevant location for avoiding resolve_redirects when not following redirects while still creating request history; the fix would need to gate the history-building resolve_redirects call on allow_redirects or otherwise avoid invoking the generator when redirects are disabled.\"}"
+      }
+    },
+    {
+      "type": "turn.completed",
+      "usage": {
+        "input_tokens": 10154,
+        "cached_input_tokens": 2432,
+        "output_tokens": 367,
+        "reasoning_output_tokens": 62
+      }
+    }
+  ],
+  "non_json_stdout": [],
+  "stderr": "Reading additional input from stdin...\n2026-06-14T14:15:50.239558Z  WARN codex_rollout::list: state db discrepancy during find_thread_path_by_id_str_in_subdir: falling_back\n2026-06-14T14:15:50.262871Z  WARN codex_rollout::list: state db discrepancy during find_thread_path_by_id_str_in_subdir: falling_back\n2026-06-14T14:15:50.287949Z  WARN codex_rollout::list: state db discrepancy during find_thread_path_by_id_str_in_subdir: falling_back\n2026-06-14T14:15:50.313107Z  WARN codex_rollout::list: state db discrepancy during find_thread_path_by_id_str_in_subdir: falling_back\n2026-06-14T14:15:50.336624Z  WARN codex_rollout::list: state db discrepancy during find_thread_path_by_id_str_in_subdir: falling_back\n2026-06-14T14:15:50.361394Z  WARN codex_rollout::list: state db discrepancy during find_thread_path_by_id_str_in_subdir: falling_back\n2026-06-14T14:15:50.384974Z  WARN codex_rollout::list: state db discrepancy during find_thread_path_by_id_str_in_subdir: falling_back\n"
+}

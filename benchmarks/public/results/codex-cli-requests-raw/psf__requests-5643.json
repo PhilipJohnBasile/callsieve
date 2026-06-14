@@ -1,0 +1,103 @@
+{
+  "task_id": "psf__requests-5643",
+  "repo": "psf/requests",
+  "base_commit": "143150233162d609330941ec2aacde5ed4caa510",
+  "checked_out_commit": "143150233162d609330941ec2aacde5ed4caa510",
+  "prompt": "Measurement task for CallSieve public proof.\nDo not use CallSieve, callsieve commands, callsieve MCP tools, or any repo-specific precomputed CallSieve context.\nDo not use browser, web, MCP, plugin, memory, or external documentation tools.\nDo not edit files.\nUse only Codex native read-only shell search and file-read commands inside this Requests checkout.\nInspect the repository as needed. You must read every file you rely on.\nReturn JSON only, matching the provided schema.\n\nTask id: psf__requests-5643\nRepository task: Respect the NETRC environment variable\n\nReturn files_selected_or_read as repo-relative paths ordered by first use.",
+  "command": [
+    "/Applications/Codex.app/Contents/Resources/codex",
+    "--ask-for-approval",
+    "never",
+    "--disable",
+    "plugins",
+    "--disable",
+    "memories",
+    "--disable",
+    "chronicle",
+    "--disable",
+    "apps",
+    "--disable",
+    "browser_use",
+    "--disable",
+    "browser_use_external",
+    "--disable",
+    "computer_use",
+    "--disable",
+    "multi_agent",
+    "--disable",
+    "goals",
+    "--disable",
+    "hooks",
+    "exec",
+    "--ephemeral",
+    "--json",
+    "--ignore-user-config",
+    "--ignore-rules",
+    "-C",
+    "/Users/pjb/git/callsieve/benchmarks/public/repos/psf/requests",
+    "--sandbox",
+    "read-only",
+    "--output-schema",
+    "/Users/pjb/git/callsieve/benchmarks/public/results/codex-cli-requests-result-schema.json",
+    "Measurement task for CallSieve public proof.\nDo not use CallSieve, callsieve commands, callsieve MCP tools, or any repo-specific precomputed CallSieve context.\nDo not use browser, web, MCP, plugin, memory, or external documentation tools.\nDo not edit files.\nUse only Codex native read-only shell search and file-read commands inside this Requests checkout.\nInspect the repository as needed. You must read every file you rely on.\nReturn JSON only, matching the provided schema.\n\nTask id: psf__requests-5643\nRepository task: Respect the NETRC environment variable\n\nReturn files_selected_or_read as repo-relative paths ordered by first use."
+  ],
+  "parsed_result": {
+    "task_id": "psf__requests-5643",
+    "files_selected_or_read": [
+      "requests/utils.py",
+      "tests/test_requests.py"
+    ],
+    "rationale": "The NETRC handling path is in `requests/utils.py`: `get_netrc_auth()` currently hard-codes default `~/.netrc`/`~/_netrc` discovery and does not consult the `NETRC` environment variable before probing those locations. The existing behavioral coverage for netrc authentication lives in `tests/test_requests.py`, including `NetrcAuthTests`, which is the focused place to add or adjust tests for honoring a custom `NETRC` path."
+  },
+  "files_selected_or_read": [
+    "requests/utils.py",
+    "tests/test_requests.py"
+  ],
+  "agent_native_context_tokens": 10147,
+  "token_accounting": {
+    "source": "Codex CLI JSONL turn.completed usage.input_tokens",
+    "context_tokens": 10147,
+    "fields": {
+      "input_tokens": 10147,
+      "cached_input_tokens": 2432,
+      "output_tokens": 326,
+      "reasoning_output_tokens": 47
+    }
+  },
+  "raw_events": [
+    {
+      "type": "thread.started",
+      "thread_id": "019ec67d-c2f1-7c53-b2e3-73279fcc7cbd"
+    },
+    {
+      "type": "turn.started"
+    },
+    {
+      "type": "item.completed",
+      "item": {
+        "id": "item_0",
+        "type": "agent_message",
+        "text": "{\"task_id\":\"psf__requests-5643\",\"files_selected_or_read\":[\"requests/utils.py\",\"tests/test_requests.py\"],\"rationale\":\"The NETRC handling path is in `requests/utils.py`: `get_netrc_auth()` currently hard-codes default `~/.netrc`/`~/_netrc` discovery and does not consult the `NETRC` environment variable before probing those locations. The existing behavioral coverage for netrc authentication lives in `tests/test_requests.py`, including `NetrcAuthTests`, which is the focused place to add or adjust tests for honoring a custom `NETRC` path.\"}"
+      }
+    },
+    {
+      "type": "item.completed",
+      "item": {
+        "id": "item_1",
+        "type": "agent_message",
+        "text": "{\"task_id\":\"psf__requests-5643\",\"files_selected_or_read\":[\"requests/utils.py\",\"tests/test_requests.py\"],\"rationale\":\"The NETRC handling path is in `requests/utils.py`: `get_netrc_auth()` currently hard-codes default `~/.netrc`/`~/_netrc` discovery and does not consult the `NETRC` environment variable before probing those locations. The existing behavioral coverage for netrc authentication lives in `tests/test_requests.py`, including `NetrcAuthTests`, which is the focused place to add or adjust tests for honoring a custom `NETRC` path.\"}"
+      }
+    },
+    {
+      "type": "turn.completed",
+      "usage": {
+        "input_tokens": 10147,
+        "cached_input_tokens": 2432,
+        "output_tokens": 326,
+        "reasoning_output_tokens": 47
+      }
+    }
+  ],
+  "non_json_stdout": [],
+  "stderr": "Reading additional input from stdin...\n2026-06-14T14:16:31.248263Z  WARN codex_rollout::list: state db discrepancy during find_thread_path_by_id_str_in_subdir: falling_back\n2026-06-14T14:16:31.273254Z  WARN codex_rollout::list: state db discrepancy during find_thread_path_by_id_str_in_subdir: falling_back\n2026-06-14T14:16:31.296922Z  WARN codex_rollout::list: state db discrepancy during find_thread_path_by_id_str_in_subdir: falling_back\n2026-06-14T14:16:31.321885Z  WARN codex_rollout::list: state db discrepancy during find_thread_path_by_id_str_in_subdir: falling_back\n2026-06-14T14:16:31.346418Z  WARN codex_rollout::list: state db discrepancy during find_thread_path_by_id_str_in_subdir: falling_back\n2026-06-14T14:16:31.370697Z  WARN codex_rollout::list: state db discrepancy during find_thread_path_by_id_str_in_subdir: falling_back\n2026-06-14T14:16:31.395832Z  WARN codex_rollout::list: state db discrepancy during find_thread_path_by_id_str_in_subdir: falling_back\n"
+}

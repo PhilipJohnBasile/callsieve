@@ -1,0 +1,188 @@
+{
+  "tool": "Claude Code",
+  "tool_version": "2.1.175 (Claude Code)",
+  "model": "sonnet",
+  "suite": "typescript",
+  "repo": "benchmarks/public/repos/PhilipJohnBasile/callsieve",
+  "template": "benchmarks/public/results/agent-native-typescript-callsieve-template.json",
+  "public_manifest": "benchmarks/public/manifest-typescript.json",
+  "raw_task_transcripts": "benchmarks/public/results/claude-code-typescript-callsieve-raw",
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "task_id": {
+        "type": "string"
+      },
+      "files_selected_or_read": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "minItems": 1
+      },
+      "rationale": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "task_id",
+      "files_selected_or_read",
+      "rationale"
+    ],
+    "additionalProperties": false
+  },
+  "constraints": [
+    "Do not use CallSieve, callsieve commands, callsieve MCP tools, or precomputed CallSieve context.",
+    "Do not expose ground-truth files in Claude prompts.",
+    "Do not edit files.",
+    "Check out each task's pinned base_commit before running Claude.",
+    "Use only Claude Code native Glob, Grep, and Read tools.",
+    "Record repo, base_commit, and checked_out_commit in every raw task envelope.",
+    "Record files_selected_or_read from Claude's JSON result.",
+    "Record agent_native_context_tokens from Claude Code JSON usage fields."
+  ],
+  "post_run_artifacts": {
+    "protocol": "benchmarks/public/results/agent-native-protocol.json",
+    "task_log": "benchmarks/public/results/claude-code-typescript-callsieve-task-log.json",
+    "transcript": "benchmarks/public/results/claude-code-typescript-callsieve-transcript.json",
+    "check": "benchmarks/public/results/claude-code-typescript-callsieve-check.json",
+    "baseline": "benchmarks/public/results/claude-code-typescript-callsieve.json",
+    "overlay_manifest": "benchmarks/public-proof-manifest.claude-code-typescript-callsieve.json",
+    "proof": "benchmarks/public/results/claude-code-typescript-callsieve-public-proof.json"
+  },
+  "token_accounting": "agent_native_context_tokens = input_tokens + cache_creation_input_tokens + cache_read_input_tokens from each Claude Code JSON envelope",
+  "template_source_tasks_hash": "fnv1a64:e1054fe7949e9455",
+  "template_index_fingerprint": "fnv1a64:ad75157e6137833e",
+  "template_retrieval_contract_fingerprint": "fnv1a64:18cc30cd8ca21577",
+  "task_count": 4,
+  "tasks": [
+    {
+      "task_id": "callsieve-typescript-extension-activation",
+      "repo": "PhilipJohnBasile/callsieve",
+      "base_commit": "11c7ef19bd2250c74f76b5c6409de7b2d2f07394",
+      "task": "activate the VS Code extension and register CallSieve editor commands",
+      "prompt": "Measurement task for CallSieve public proof.\nDo not use CallSieve, callsieve commands, callsieve MCP tools, or any repo-specific precomputed CallSieve context.\nDo not edit files.\nUse only Claude Code native Glob, Grep, and Read tools made available in this run inside this CallSieve TypeScript checkout.\nInspect the repository as needed. You must Read every file you rely on.\nReturn JSON only, matching the provided schema.\n\nTask id: callsieve-typescript-extension-activation\nRepository task: activate the VS Code extension and register CallSieve editor commands\n\nReturn files_selected_or_read as repo-relative paths ordered by first use.",
+      "command": [
+        "claude",
+        "-p",
+        "Measurement task for CallSieve public proof.\nDo not use CallSieve, callsieve commands, callsieve MCP tools, or any repo-specific precomputed CallSieve context.\nDo not edit files.\nUse only Claude Code native Glob, Grep, and Read tools made available in this run inside this CallSieve TypeScript checkout.\nInspect the repository as needed. You must Read every file you rely on.\nReturn JSON only, matching the provided schema.\n\nTask id: callsieve-typescript-extension-activation\nRepository task: activate the VS Code extension and register CallSieve editor commands\n\nReturn files_selected_or_read as repo-relative paths ordered by first use.",
+        "--output-format",
+        "json",
+        "--json-schema",
+        "{\"type\":\"object\",\"properties\":{\"task_id\":{\"type\":\"string\"},\"files_selected_or_read\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"minItems\":1},\"rationale\":{\"type\":\"string\"}},\"required\":[\"task_id\",\"files_selected_or_read\",\"rationale\"],\"additionalProperties\":false}",
+        "--tools",
+        "Glob,Grep,Read",
+        "--permission-mode",
+        "dontAsk",
+        "--max-budget-usd",
+        "0.25",
+        "--model",
+        "sonnet",
+        "--no-session-persistence"
+      ],
+      "checkout_command": [
+        "git",
+        "checkout",
+        "-f",
+        "11c7ef19bd2250c74f76b5c6409de7b2d2f07394"
+      ],
+      "raw_transcript": "benchmarks/public/results/claude-code-typescript-callsieve-raw/callsieve-typescript-extension-activation.json"
+    },
+    {
+      "task_id": "callsieve-typescript-extension-context-output",
+      "repo": "PhilipJohnBasile/callsieve",
+      "base_commit": "11c7ef19bd2250c74f76b5c6409de7b2d2f07394",
+      "task": "show agent context results in VS Code with read first files snippets and status messages",
+      "prompt": "Measurement task for CallSieve public proof.\nDo not use CallSieve, callsieve commands, callsieve MCP tools, or any repo-specific precomputed CallSieve context.\nDo not edit files.\nUse only Claude Code native Glob, Grep, and Read tools made available in this run inside this CallSieve TypeScript checkout.\nInspect the repository as needed. You must Read every file you rely on.\nReturn JSON only, matching the provided schema.\n\nTask id: callsieve-typescript-extension-context-output\nRepository task: show agent context results in VS Code with read first files snippets and status messages\n\nReturn files_selected_or_read as repo-relative paths ordered by first use.",
+      "command": [
+        "claude",
+        "-p",
+        "Measurement task for CallSieve public proof.\nDo not use CallSieve, callsieve commands, callsieve MCP tools, or any repo-specific precomputed CallSieve context.\nDo not edit files.\nUse only Claude Code native Glob, Grep, and Read tools made available in this run inside this CallSieve TypeScript checkout.\nInspect the repository as needed. You must Read every file you rely on.\nReturn JSON only, matching the provided schema.\n\nTask id: callsieve-typescript-extension-context-output\nRepository task: show agent context results in VS Code with read first files snippets and status messages\n\nReturn files_selected_or_read as repo-relative paths ordered by first use.",
+        "--output-format",
+        "json",
+        "--json-schema",
+        "{\"type\":\"object\",\"properties\":{\"task_id\":{\"type\":\"string\"},\"files_selected_or_read\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"minItems\":1},\"rationale\":{\"type\":\"string\"}},\"required\":[\"task_id\",\"files_selected_or_read\",\"rationale\"],\"additionalProperties\":false}",
+        "--tools",
+        "Glob,Grep,Read",
+        "--permission-mode",
+        "dontAsk",
+        "--max-budget-usd",
+        "0.25",
+        "--model",
+        "sonnet",
+        "--no-session-persistence"
+      ],
+      "checkout_command": [
+        "git",
+        "checkout",
+        "-f",
+        "11c7ef19bd2250c74f76b5c6409de7b2d2f07394"
+      ],
+      "raw_transcript": "benchmarks/public/results/claude-code-typescript-callsieve-raw/callsieve-typescript-extension-context-output.json"
+    },
+    {
+      "task_id": "callsieve-typescript-cli-client",
+      "repo": "PhilipJohnBasile/callsieve",
+      "base_commit": "11c7ef19bd2250c74f76b5c6409de7b2d2f07394",
+      "task": "spawn the CallSieve CLI from TypeScript and handle command failures",
+      "prompt": "Measurement task for CallSieve public proof.\nDo not use CallSieve, callsieve commands, callsieve MCP tools, or any repo-specific precomputed CallSieve context.\nDo not edit files.\nUse only Claude Code native Glob, Grep, and Read tools made available in this run inside this CallSieve TypeScript checkout.\nInspect the repository as needed. You must Read every file you rely on.\nReturn JSON only, matching the provided schema.\n\nTask id: callsieve-typescript-cli-client\nRepository task: spawn the CallSieve CLI from TypeScript and handle command failures\n\nReturn files_selected_or_read as repo-relative paths ordered by first use.",
+      "command": [
+        "claude",
+        "-p",
+        "Measurement task for CallSieve public proof.\nDo not use CallSieve, callsieve commands, callsieve MCP tools, or any repo-specific precomputed CallSieve context.\nDo not edit files.\nUse only Claude Code native Glob, Grep, and Read tools made available in this run inside this CallSieve TypeScript checkout.\nInspect the repository as needed. You must Read every file you rely on.\nReturn JSON only, matching the provided schema.\n\nTask id: callsieve-typescript-cli-client\nRepository task: spawn the CallSieve CLI from TypeScript and handle command failures\n\nReturn files_selected_or_read as repo-relative paths ordered by first use.",
+        "--output-format",
+        "json",
+        "--json-schema",
+        "{\"type\":\"object\",\"properties\":{\"task_id\":{\"type\":\"string\"},\"files_selected_or_read\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"minItems\":1},\"rationale\":{\"type\":\"string\"}},\"required\":[\"task_id\",\"files_selected_or_read\",\"rationale\"],\"additionalProperties\":false}",
+        "--tools",
+        "Glob,Grep,Read",
+        "--permission-mode",
+        "dontAsk",
+        "--max-budget-usd",
+        "0.25",
+        "--model",
+        "sonnet",
+        "--no-session-persistence"
+      ],
+      "checkout_command": [
+        "git",
+        "checkout",
+        "-f",
+        "11c7ef19bd2250c74f76b5c6409de7b2d2f07394"
+      ],
+      "raw_transcript": "benchmarks/public/results/claude-code-typescript-callsieve-raw/callsieve-typescript-cli-client.json"
+    },
+    {
+      "task_id": "callsieve-typescript-client-json",
+      "repo": "PhilipJohnBasile/callsieve",
+      "base_commit": "11c7ef19bd2250c74f76b5c6409de7b2d2f07394",
+      "task": "parse JSON responses for query context and status in the VS Code client",
+      "prompt": "Measurement task for CallSieve public proof.\nDo not use CallSieve, callsieve commands, callsieve MCP tools, or any repo-specific precomputed CallSieve context.\nDo not edit files.\nUse only Claude Code native Glob, Grep, and Read tools made available in this run inside this CallSieve TypeScript checkout.\nInspect the repository as needed. You must Read every file you rely on.\nReturn JSON only, matching the provided schema.\n\nTask id: callsieve-typescript-client-json\nRepository task: parse JSON responses for query context and status in the VS Code client\n\nReturn files_selected_or_read as repo-relative paths ordered by first use.",
+      "command": [
+        "claude",
+        "-p",
+        "Measurement task for CallSieve public proof.\nDo not use CallSieve, callsieve commands, callsieve MCP tools, or any repo-specific precomputed CallSieve context.\nDo not edit files.\nUse only Claude Code native Glob, Grep, and Read tools made available in this run inside this CallSieve TypeScript checkout.\nInspect the repository as needed. You must Read every file you rely on.\nReturn JSON only, matching the provided schema.\n\nTask id: callsieve-typescript-client-json\nRepository task: parse JSON responses for query context and status in the VS Code client\n\nReturn files_selected_or_read as repo-relative paths ordered by first use.",
+        "--output-format",
+        "json",
+        "--json-schema",
+        "{\"type\":\"object\",\"properties\":{\"task_id\":{\"type\":\"string\"},\"files_selected_or_read\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"minItems\":1},\"rationale\":{\"type\":\"string\"}},\"required\":[\"task_id\",\"files_selected_or_read\",\"rationale\"],\"additionalProperties\":false}",
+        "--tools",
+        "Glob,Grep,Read",
+        "--permission-mode",
+        "dontAsk",
+        "--max-budget-usd",
+        "0.25",
+        "--model",
+        "sonnet",
+        "--no-session-persistence"
+      ],
+      "checkout_command": [
+        "git",
+        "checkout",
+        "-f",
+        "11c7ef19bd2250c74f76b5c6409de7b2d2f07394"
+      ],
+      "raw_transcript": "benchmarks/public/results/claude-code-typescript-callsieve-raw/callsieve-typescript-client-json.json"
+    }
+  ]
+}

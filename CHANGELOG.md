@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### Added
+
+- Added a transcript-backed agent-native proof suite for Codex CLI across public Requests, CallSieve Rust, and CallSieve TypeScript tasks. The checked artifacts include per-task raw transcripts, task logs, measured preflight checks, standardized baselines, overlay proof manifests, and suite-specific measurement plans.
+- Added a suite-aware Claude Code measurement harness for Requests, Rust, and TypeScript. It can generate exact prompts/commands with `--plan-only`, validate them with `--validate-plan`, and exercise cached-transcript provenance with `--self-test` before any authenticated Claude run.
+- Added `agent-native-measurement-plan` public-proof artifacts, validated for tool, suite, task count, constraints, token accounting, prompts, commands, raw transcript paths, and post-run artifact paths.
+- Added public proof summaries for agent-native coverage: measured baseline count, transcript-backed baseline count, distinct native-agent tools, repositories, base commits, task languages, and explicit `multi_agent_status`.
+
+### Changed
+
+- Public proof now has explicit agent-native coverage targets for measured baselines, distinct native-agent tools, repositories, and task languages. The checked proof intentionally remains `needs_work` on the distinct-tool target until a second real native-agent baseline is recorded.
+- Public proof docs and benchmark tooling now separate what is measured today from what is ready to measure next: Codex has checked transcript-backed baselines; Claude has checked repeatability plans but no measured baseline until Claude Code is authenticated.
+
+### Benchmarks
+
+- Checked Codex CLI native-search/read baselines currently tie CallSieve on first-correct-file@5 across all measured public tasks while CallSieve uses far smaller context packets: Requests `303.9x`, Rust `1,845.6x`, and TypeScript `935.1x` lower average native context tokens versus CallSieve packet tokens.
+
 ## v0.3.4 - 2026-06-10
 
 ### Changed

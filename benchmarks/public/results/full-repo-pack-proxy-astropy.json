@@ -1,0 +1,85 @@
+{
+  "command": "repo-pack-baseline",
+  "schema_version": 1,
+  "id": "full-repo-pack-proxy-astropy",
+  "tool": "FullRepoPackProxy",
+  "generated_at": 1781375458,
+  "root": "/Users/pjb/git/callsieve/benchmarks/public/repos/astropy/astropy",
+  "inclusion_scope": "gitignore-respecting source/config/docs files from the local checkout, measured as a full-repo prompt-pack proxy",
+  "token_estimate": "ceil(total_bytes / 4)",
+  "locally_measured": true,
+  "measurement_notes": [
+    "No external repo-packer CLI was executed.",
+    "This proxy measures the local prompt payload class that repo packers produce: file headers plus source/config/docs bytes.",
+    "Use external Repomix, Gitingest, or Code2Prompt JSON artifacts when those tools are installed and approved."
+  ],
+  "metrics": {
+    "file_count": 1257,
+    "source_bytes": 22500741,
+    "framing_bytes": 53129,
+    "total_bytes": 22553870,
+    "total_tokens": 5638468
+  },
+  "largest_files": [
+    {
+      "path": "cextern/wcslib/C/flexed/wcsbth.c",
+      "bytes": 1120466,
+      "tokens": 280117
+    },
+    {
+      "path": "cextern/wcslib/C/flexed/wcspih.c",
+      "bytes": 919468,
+      "tokens": 229867
+    },
+    {
+      "path": "cextern/wcslib/C/flexed/fitshdr.c",
+      "bytes": 538098,
+      "tokens": 134525
+    },
+    {
+      "path": "astropy/extern/js/jquery.dataTables.js",
+      "bytes": 447282,
+      "tokens": 111821
+    },
+    {
+      "path": "cextern/wcslib/C/flexed/wcsulex.c",
+      "bytes": 390150,
+      "tokens": 97538
+    },
+    {
+      "path": "cextern/cfitsio/lib/imcompress.c",
+      "bytes": 374143,
+      "tokens": 93536
+    },
+    {
+      "path": "cextern/cfitsio/lib/fitscore.c",
+      "bytes": 312108,
+      "tokens": 78027
+    },
+    {
+      "path": "cextern/expat/conftools/ltmain.sh",
+      "bytes": 282967,
+      "tokens": 70742
+    },
+    {
+      "path": "cextern/cfitsio/lib/eval_y.c",
+      "bytes": 276938,
+      "tokens": 69235
+    },
+    {
+      "path": "astropy/extern/js/jquery-3.1.1.js",
+      "bytes": 267194,
+      "tokens": 66799
+    },
+    {
+      "path": "cextern/cfitsio/lib/cfileio.c",
+      "bytes": 249874,
+      "tokens": 62469
+    },
+    {
+      "path": "cextern/wcslib/C/flexed/wcsutrn.c",
+      "bytes": 238101,
+      "tokens": 59526
+    }
+  ]
+}

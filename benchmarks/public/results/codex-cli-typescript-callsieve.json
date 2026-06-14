@@ -1,0 +1,173 @@
+{
+  "command": "agent-native-baseline",
+  "schema_version": 1,
+  "id": "codex-cli-public-typescript-callsieve",
+  "tool": "Codex CLI native search/read workflow",
+  "generated_at": 1781448544,
+  "locally_measured": true,
+  "measurement_scope": "operator-recorded agent-native codebase-search files and token counts compared with CallSieve read-first packets",
+  "measurement_command": "benchmarks/tools/codex-agent-native-requests.py --suite typescript",
+  "source_artifacts": [
+    "benchmarks/public/results/codex-cli-typescript-callsieve-task-log.json",
+    "benchmarks/public/results/codex-cli-typescript-callsieve-transcript.json"
+  ],
+  "transcript_provenance_status": "pass",
+  "source_artifact_evidence": [
+    {
+      "path": "benchmarks/public/results/codex-cli-typescript-callsieve-task-log.json",
+      "role": "task_log",
+      "bytes": 5565,
+      "hash": "fnv1a64:4afe280d051e4c74"
+    },
+    {
+      "path": "benchmarks/public/results/codex-cli-typescript-callsieve-transcript.json",
+      "role": "agent_native_transcript_or_export",
+      "bytes": 748456,
+      "hash": "fnv1a64:d10a019a3a710b72"
+    }
+  ],
+  "measurement_notes": [
+    "Generated from local task-level records of approved agent-native search runs.",
+    "CallSieve did not execute or simulate the external agent; it only computed metrics from recorded files and token counts.",
+    "Transcript provenance is backed by hashed local source artifacts.",
+    "Measured pinned public CallSieve TypeScript language-slice tasks with Codex CLI native shell search/read only. Task count: 4."
+  ],
+  "k": 5,
+  "metrics": {
+    "task_count": 4,
+    "agent_native_first_correct_file_hits": 4,
+    "callsieve_first_correct_file_hits": 4,
+    "agent_native_first_correct_file_rate_at_k": 1.0,
+    "callsieve_first_correct_file_rate_at_k": 1.0,
+    "callsieve_minus_agent_native_first_correct_file_rate_at_k": 0.0,
+    "agent_native_total_context_tokens": 748102,
+    "callsieve_total_packet_tokens": 798,
+    "agent_native_average_context_tokens": 187026,
+    "callsieve_average_packet_tokens": 200,
+    "agent_native_context_token_ratio_vs_callsieve": 935.13
+  },
+  "tasks": [
+    {
+      "id": "callsieve-typescript-extension-activation",
+      "repo": "PhilipJohnBasile/callsieve",
+      "base_commit": "11c7ef19bd2250c74f76b5c6409de7b2d2f07394",
+      "task": "activate the VS Code extension and register CallSieve editor commands",
+      "expected_files": [
+        "editors/vscode/src/extension.ts"
+      ],
+      "agent_native_files": [
+        "editors/vscode/package.json",
+        "editors/vscode/src/extension.ts",
+        "editors/vscode/src/client.ts",
+        "editors/vscode/test/suite/index.ts",
+        "editors/vscode/README.md",
+        "editors/vscode/tsconfig.json"
+      ],
+      "callsieve_files": [
+        "editors/vscode/src/extension.ts",
+        "editors/vscode/src/client.ts",
+        "src/mcp.rs",
+        "src/cli/mod.rs",
+        "editors/vscode/test/suite/index.ts"
+      ],
+      "callsieve_index_fingerprint": "fnv1a64:66be0886ea01357c",
+      "agent_native_first_correct_file_at_k": true,
+      "callsieve_first_correct_file_at_k": true,
+      "agent_native_context_tokens": 144672,
+      "callsieve_packet_tokens": 202
+    },
+    {
+      "id": "callsieve-typescript-extension-context-output",
+      "repo": "PhilipJohnBasile/callsieve",
+      "base_commit": "11c7ef19bd2250c74f76b5c6409de7b2d2f07394",
+      "task": "show agent context results in VS Code with read first files snippets and status messages",
+      "expected_files": [
+        "editors/vscode/src/extension.ts"
+      ],
+      "agent_native_files": [
+        "editors/vscode/package.json",
+        "editors/vscode/src/extension.ts",
+        "editors/vscode/src/client.ts",
+        "editors/vscode/README.md",
+        "editors/vscode/test/suite/index.ts",
+        "editors/vscode/test/runTest.ts",
+        "editors/vscode/tsconfig.json",
+        "src/query/mod.rs",
+        "src/cli/mod.rs",
+        "src/mcp.rs",
+        "tests/cli.rs"
+      ],
+      "callsieve_files": [
+        "editors/vscode/src/client.ts",
+        "src/query/mod.rs",
+        "src/cli/mod.rs",
+        "tests/cli.rs",
+        "editors/vscode/src/extension.ts"
+      ],
+      "callsieve_index_fingerprint": "fnv1a64:66be0886ea01357c",
+      "agent_native_first_correct_file_at_k": true,
+      "callsieve_first_correct_file_at_k": true,
+      "agent_native_context_tokens": 208063,
+      "callsieve_packet_tokens": 220
+    },
+    {
+      "id": "callsieve-typescript-cli-client",
+      "repo": "PhilipJohnBasile/callsieve",
+      "base_commit": "11c7ef19bd2250c74f76b5c6409de7b2d2f07394",
+      "task": "spawn the CallSieve CLI from TypeScript and handle command failures",
+      "expected_files": [
+        "editors/vscode/src/client.ts"
+      ],
+      "agent_native_files": [
+        "editors/vscode/src/client.ts",
+        "editors/vscode/src/extension.ts",
+        "editors/vscode/package.json",
+        "editors/vscode/README.md",
+        "editors/vscode/test/suite/index.ts"
+      ],
+      "callsieve_files": [
+        "src/cli/mod.rs",
+        "editors/vscode/src/client.ts",
+        "tests/cli.rs",
+        "src/mcp.rs",
+        "src/indexer/lsp.rs"
+      ],
+      "callsieve_index_fingerprint": "fnv1a64:66be0886ea01357c",
+      "agent_native_first_correct_file_at_k": true,
+      "callsieve_first_correct_file_at_k": true,
+      "agent_native_context_tokens": 133939,
+      "callsieve_packet_tokens": 184
+    },
+    {
+      "id": "callsieve-typescript-client-json",
+      "repo": "PhilipJohnBasile/callsieve",
+      "base_commit": "11c7ef19bd2250c74f76b5c6409de7b2d2f07394",
+      "task": "parse JSON responses for query context and status in the VS Code client",
+      "expected_files": [
+        "editors/vscode/src/client.ts"
+      ],
+      "agent_native_files": [
+        "editors/vscode/src/client.ts",
+        "editors/vscode/src/extension.ts",
+        "editors/vscode/README.md",
+        "editors/vscode/package.json",
+        "src/mcp.rs",
+        "src/output/json.rs",
+        "editors/vscode/tsconfig.json",
+        "src/query/mod.rs"
+      ],
+      "callsieve_files": [
+        "editors/vscode/src/client.ts",
+        "src/cli/mod.rs",
+        "src/indexer/lsp.rs",
+        "tests/cli.rs",
+        "src/query/mod.rs"
+      ],
+      "callsieve_index_fingerprint": "fnv1a64:66be0886ea01357c",
+      "agent_native_first_correct_file_at_k": true,
+      "callsieve_first_correct_file_at_k": true,
+      "agent_native_context_tokens": 261428,
+      "callsieve_packet_tokens": 192
+    }
+  ]
+}

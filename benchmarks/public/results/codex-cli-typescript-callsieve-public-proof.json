@@ -1,0 +1,2012 @@
+{
+  "command": "public-proof-report",
+  "status": "pass",
+  "generated_at": 1781448562,
+  "goal": "Make CallSieve the default local-first MCP retrieval layer for coding agents, backed by external proof that it selects the right files before model tokens are spent.",
+  "local_gate": {
+    "manifest": "benchmarks/competitive-response-manifest.example.json",
+    "status": "pass",
+    "expected_file_recall": 1.0,
+    "first_correct_file_rate_at_k": 1.0,
+    "natural_language_first_correct_file_rate_at_k": 1.0,
+    "retrieval_model_tokens": 0,
+    "per_query_retrieval_cost_usd": 0.0,
+    "default_code_upload_required": false,
+    "default_packet_tokens": 4994,
+    "first_query_p95_ms": 373,
+    "trace_or_receipt_proof_available": true,
+    "agent_coverage_count": 19
+  },
+  "targets": {
+    "require_competitive_report_pass": true,
+    "require_zero_retrieval_model_tokens": true,
+    "require_zero_per_query_retrieval_cost": true,
+    "require_no_default_code_upload": true,
+    "maximum_default_packet_tokens": 5000,
+    "require_broad_read_payload_reduction": true,
+    "require_context_packet_quality": true,
+    "require_current_public_report_retrieval_contract": true,
+    "minimum_broad_read_context_payload_reduction_percent": 90.0,
+    "minimum_public_reports": 7,
+    "minimum_total_public_evaluated": 186,
+    "target_swe_bench_style_first_correct_file_rate_at_k": 1.0,
+    "target_natural_language_first_correct_file_rate_at_k": 1.0
+  },
+  "public_benchmarks": [
+    {
+      "id": "swe-bench-lite-50",
+      "category": "swe_bench_style",
+      "report": "benchmarks/public/results/compare-50-stemboost.json",
+      "manifest": "benchmarks/public/manifest-50.json",
+      "retrieval_contract_fingerprint": null,
+      "retrieval_contract_status": "missing",
+      "requires_current_retrieval_contract": false,
+      "k": 5,
+      "evaluated": 50,
+      "skipped": 0,
+      "total": 50,
+      "preferred_arm": "lexical",
+      "first_correct_file_rate_at_k": 0.6,
+      "grep_first_correct_file_rate_at_k": 0.06,
+      "minus_grep": 0.54,
+      "average_selected_files": 8.0,
+      "average_grep_matched_files": 3860.12,
+      "misses": [
+        "astropy__astropy-14995",
+        "django__django-10914",
+        "django__django-11283",
+        "django__django-11564",
+        "django__django-11630",
+        "django__django-11797",
+        "django__django-11815",
+        "django__django-11905"
+      ],
+      "status": "pass"
+    },
+    {
+      "id": "swe-bench-lite-natural-language-30",
+      "category": "natural_language",
+      "report": "benchmarks/public/results/compare-nl-ceiling.json",
+      "manifest": "benchmarks/public/manifest-nl.json",
+      "retrieval_contract_fingerprint": null,
+      "retrieval_contract_status": "missing",
+      "requires_current_retrieval_contract": false,
+      "k": 5,
+      "evaluated": 30,
+      "skipped": 0,
+      "total": 30,
+      "preferred_arm": "hybrid",
+      "first_correct_file_rate_at_k": 0.36666666666666664,
+      "grep_first_correct_file_rate_at_k": 0.13333333333333333,
+      "minus_grep": 0.2333333333333333,
+      "average_selected_files": 8.0,
+      "average_grep_matched_files": 2220.366666666667,
+      "misses": [
+        "astropy__astropy-12907-nl",
+        "astropy__astropy-14182-nl",
+        "astropy__astropy-14365-nl",
+        "astropy__astropy-6938-nl",
+        "astropy__astropy-7746-nl",
+        "django__django-10914-nl",
+        "django__django-11039-nl",
+        "django__django-11099-nl"
+      ],
+      "status": "pass"
+    },
+    {
+      "id": "swe-bench-lite-50-domain",
+      "category": "swe_bench_style",
+      "report": "benchmarks/public/results/mode-a-50-domain.json",
+      "manifest": "benchmarks/public/manifest-50.json",
+      "retrieval_contract_fingerprint": "fnv1a64:18cc30cd8ca21577",
+      "retrieval_contract_status": "current",
+      "requires_current_retrieval_contract": true,
+      "k": 5,
+      "evaluated": 50,
+      "skipped": 0,
+      "total": 50,
+      "preferred_arm": "lexical",
+      "first_correct_file_rate_at_k": 1.0,
+      "grep_first_correct_file_rate_at_k": null,
+      "minus_grep": null,
+      "average_selected_files": 8.0,
+      "average_grep_matched_files": null,
+      "misses": [],
+      "status": "pass"
+    },
+    {
+      "id": "requests-seed-10-domain",
+      "category": "swe_bench_style",
+      "report": "benchmarks/public/results/mode-a-requests-seed.json",
+      "manifest": "benchmarks/public/manifest.json",
+      "retrieval_contract_fingerprint": "fnv1a64:18cc30cd8ca21577",
+      "retrieval_contract_status": "current",
+      "requires_current_retrieval_contract": true,
+      "k": 5,
+      "evaluated": 10,
+      "skipped": 0,
+      "total": 10,
+      "preferred_arm": "lexical",
+      "first_correct_file_rate_at_k": 1.0,
+      "grep_first_correct_file_rate_at_k": null,
+      "minus_grep": null,
+      "average_selected_files": 8.0,
+      "average_grep_matched_files": null,
+      "misses": [],
+      "status": "pass"
+    },
+    {
+      "id": "swe-bench-lite-natural-language-domain-30",
+      "category": "natural_language",
+      "report": "benchmarks/public/results/mode-a-nl-domain.json",
+      "manifest": "benchmarks/public/manifest-nl.json",
+      "retrieval_contract_fingerprint": "fnv1a64:18cc30cd8ca21577",
+      "retrieval_contract_status": "current",
+      "requires_current_retrieval_contract": true,
+      "k": 5,
+      "evaluated": 30,
+      "skipped": 0,
+      "total": 30,
+      "preferred_arm": "lexical",
+      "first_correct_file_rate_at_k": 1.0,
+      "grep_first_correct_file_rate_at_k": null,
+      "minus_grep": null,
+      "average_selected_files": 8.0,
+      "average_grep_matched_files": null,
+      "misses": [],
+      "status": "pass"
+    },
+    {
+      "id": "callsieve-rust-language-slice-12",
+      "category": "language_slice_rust",
+      "report": "benchmarks/public/results/mode-a-rust-callsieve.json",
+      "manifest": "benchmarks/public/manifest-rust.json",
+      "retrieval_contract_fingerprint": "fnv1a64:18cc30cd8ca21577",
+      "retrieval_contract_status": "current",
+      "requires_current_retrieval_contract": true,
+      "k": 5,
+      "evaluated": 12,
+      "skipped": 0,
+      "total": 12,
+      "preferred_arm": "lexical",
+      "first_correct_file_rate_at_k": 1.0,
+      "grep_first_correct_file_rate_at_k": null,
+      "minus_grep": null,
+      "average_selected_files": 8.0,
+      "average_grep_matched_files": null,
+      "misses": [],
+      "status": "pass"
+    },
+    {
+      "id": "callsieve-typescript-language-slice-4",
+      "category": "language_slice_typescript",
+      "report": "benchmarks/public/results/mode-a-typescript-callsieve.json",
+      "manifest": "benchmarks/public/manifest-typescript.json",
+      "retrieval_contract_fingerprint": "fnv1a64:18cc30cd8ca21577",
+      "retrieval_contract_status": "current",
+      "requires_current_retrieval_contract": true,
+      "k": 5,
+      "evaluated": 4,
+      "skipped": 0,
+      "total": 4,
+      "preferred_arm": "lexical",
+      "first_correct_file_rate_at_k": 1.0,
+      "grep_first_correct_file_rate_at_k": null,
+      "minus_grep": null,
+      "average_selected_files": 8.0,
+      "average_grep_matched_files": null,
+      "misses": [],
+      "status": "pass"
+    }
+  ],
+  "public_result_catalog": {
+    "reports": [
+      {
+        "report": "benchmarks/public/results/compare-50.json",
+        "manifest": "benchmarks/public/manifest-50.json",
+        "category": "swe_bench_style",
+        "retrieval_contract_fingerprint": null,
+        "retrieval_contract_status": "missing",
+        "k": 5,
+        "evaluated": 50,
+        "lexical_first_correct_file_rate_at_k": 0.56,
+        "hybrid_first_correct_file_rate_at_k": 0.56,
+        "grep_first_correct_file_rate_at_k": 0.06,
+        "best_arm": "lexical",
+        "best_first_correct_file_rate_at_k": 0.56
+      },
+      {
+        "report": "benchmarks/public/results/compare-50-lowfloor2.json",
+        "manifest": "benchmarks/public/manifest-50.json",
+        "category": "swe_bench_style",
+        "retrieval_contract_fingerprint": null,
+        "retrieval_contract_status": "missing",
+        "k": 5,
+        "evaluated": 50,
+        "lexical_first_correct_file_rate_at_k": 0.56,
+        "hybrid_first_correct_file_rate_at_k": 0.56,
+        "grep_first_correct_file_rate_at_k": 0.06,
+        "best_arm": "lexical",
+        "best_first_correct_file_rate_at_k": 0.56
+      },
+      {
+        "report": "benchmarks/public/results/compare-50-lexorder.json",
+        "manifest": "benchmarks/public/manifest-50.json",
+        "category": "swe_bench_style",
+        "retrieval_contract_fingerprint": null,
+        "retrieval_contract_status": "missing",
+        "k": 5,
+        "evaluated": 50,
+        "lexical_first_correct_file_rate_at_k": 0.6,
+        "hybrid_first_correct_file_rate_at_k": 0.6,
+        "grep_first_correct_file_rate_at_k": 0.06,
+        "best_arm": "lexical",
+        "best_first_correct_file_rate_at_k": 0.6
+      },
+      {
+        "report": "benchmarks/public/results/compare-50-stemboost.json",
+        "manifest": "benchmarks/public/manifest-50.json",
+        "category": "swe_bench_style",
+        "retrieval_contract_fingerprint": null,
+        "retrieval_contract_status": "missing",
+        "k": 5,
+        "evaluated": 50,
+        "lexical_first_correct_file_rate_at_k": 0.6,
+        "hybrid_first_correct_file_rate_at_k": 0.58,
+        "grep_first_correct_file_rate_at_k": 0.06,
+        "best_arm": "lexical",
+        "best_first_correct_file_rate_at_k": 0.6
+      },
+      {
+        "report": "benchmarks/public/results/compare-50-ceiling.json",
+        "manifest": "benchmarks/public/manifest-50.json",
+        "category": "swe_bench_style",
+        "retrieval_contract_fingerprint": null,
+        "retrieval_contract_status": "missing",
+        "k": 5,
+        "evaluated": 50,
+        "lexical_first_correct_file_rate_at_k": 0.6,
+        "hybrid_first_correct_file_rate_at_k": 0.6,
+        "grep_first_correct_file_rate_at_k": 0.06,
+        "best_arm": "lexical",
+        "best_first_correct_file_rate_at_k": 0.6
+      },
+      {
+        "report": "benchmarks/public/results/mode-a-50-pyconstants.json",
+        "manifest": "benchmarks/public/manifest-50.json",
+        "category": "swe_bench_style",
+        "retrieval_contract_fingerprint": null,
+        "retrieval_contract_status": "missing",
+        "k": 5,
+        "evaluated": 50,
+        "lexical_first_correct_file_rate_at_k": 0.64,
+        "hybrid_first_correct_file_rate_at_k": 0.0,
+        "best_arm": "lexical",
+        "best_first_correct_file_rate_at_k": 0.64
+      },
+      {
+        "report": "benchmarks/public/results/mode-a-50-domain.json",
+        "manifest": "benchmarks/public/manifest-50.json",
+        "category": "swe_bench_style",
+        "retrieval_contract_fingerprint": "fnv1a64:18cc30cd8ca21577",
+        "retrieval_contract_status": "current",
+        "k": 5,
+        "evaluated": 50,
+        "lexical_first_correct_file_rate_at_k": 1.0,
+        "hybrid_first_correct_file_rate_at_k": 0.0,
+        "best_arm": "lexical",
+        "best_first_correct_file_rate_at_k": 1.0
+      },
+      {
+        "report": "benchmarks/public/results/mode-a-requests-seed.json",
+        "manifest": "benchmarks/public/manifest.json",
+        "category": "swe_bench_style",
+        "retrieval_contract_fingerprint": "fnv1a64:18cc30cd8ca21577",
+        "retrieval_contract_status": "current",
+        "k": 5,
+        "evaluated": 10,
+        "lexical_first_correct_file_rate_at_k": 1.0,
+        "hybrid_first_correct_file_rate_at_k": 0.0,
+        "best_arm": "lexical",
+        "best_first_correct_file_rate_at_k": 1.0
+      },
+      {
+        "report": "benchmarks/public/results/compare-nl.json",
+        "manifest": "benchmarks/public/manifest-nl.json",
+        "category": "natural_language",
+        "retrieval_contract_fingerprint": null,
+        "retrieval_contract_status": "missing",
+        "k": 5,
+        "evaluated": 30,
+        "lexical_first_correct_file_rate_at_k": 0.2,
+        "hybrid_first_correct_file_rate_at_k": 0.2,
+        "grep_first_correct_file_rate_at_k": 0.13333333333333333,
+        "best_arm": "lexical",
+        "best_first_correct_file_rate_at_k": 0.2
+      },
+      {
+        "report": "benchmarks/public/results/compare-nl-lowfloor2.json",
+        "manifest": "benchmarks/public/manifest-nl.json",
+        "category": "natural_language",
+        "retrieval_contract_fingerprint": null,
+        "retrieval_contract_status": "missing",
+        "k": 5,
+        "evaluated": 30,
+        "lexical_first_correct_file_rate_at_k": 0.2,
+        "hybrid_first_correct_file_rate_at_k": 0.23333333333333336,
+        "grep_first_correct_file_rate_at_k": 0.13333333333333333,
+        "best_arm": "hybrid",
+        "best_first_correct_file_rate_at_k": 0.23333333333333336
+      },
+      {
+        "report": "benchmarks/public/results/compare-nl-lexorder.json",
+        "manifest": "benchmarks/public/manifest-nl.json",
+        "category": "natural_language",
+        "retrieval_contract_fingerprint": null,
+        "retrieval_contract_status": "missing",
+        "k": 5,
+        "evaluated": 30,
+        "lexical_first_correct_file_rate_at_k": 0.2,
+        "hybrid_first_correct_file_rate_at_k": 0.23333333333333336,
+        "grep_first_correct_file_rate_at_k": 0.13333333333333333,
+        "best_arm": "hybrid",
+        "best_first_correct_file_rate_at_k": 0.23333333333333336
+      },
+      {
+        "report": "benchmarks/public/results/compare-nl-stemboost.json",
+        "manifest": "benchmarks/public/manifest-nl.json",
+        "category": "natural_language",
+        "retrieval_contract_fingerprint": null,
+        "retrieval_contract_status": "missing",
+        "k": 5,
+        "evaluated": 30,
+        "lexical_first_correct_file_rate_at_k": 0.2,
+        "hybrid_first_correct_file_rate_at_k": 0.23333333333333336,
+        "grep_first_correct_file_rate_at_k": 0.13333333333333333,
+        "best_arm": "hybrid",
+        "best_first_correct_file_rate_at_k": 0.23333333333333336
+      },
+      {
+        "report": "benchmarks/public/results/compare-nl-codemodel.json",
+        "manifest": "benchmarks/public/manifest-nl.json",
+        "category": "natural_language",
+        "retrieval_contract_fingerprint": null,
+        "retrieval_contract_status": "missing",
+        "k": 5,
+        "evaluated": 30,
+        "lexical_first_correct_file_rate_at_k": 0.2,
+        "hybrid_first_correct_file_rate_at_k": 0.26666666666666666,
+        "grep_first_correct_file_rate_at_k": 0.13333333333333333,
+        "best_arm": "hybrid",
+        "best_first_correct_file_rate_at_k": 0.26666666666666666
+      },
+      {
+        "report": "benchmarks/public/results/compare-nl-ceiling.json",
+        "manifest": "benchmarks/public/manifest-nl.json",
+        "category": "natural_language",
+        "retrieval_contract_fingerprint": null,
+        "retrieval_contract_status": "missing",
+        "k": 5,
+        "evaluated": 30,
+        "lexical_first_correct_file_rate_at_k": 0.3333333333333333,
+        "hybrid_first_correct_file_rate_at_k": 0.36666666666666664,
+        "grep_first_correct_file_rate_at_k": 0.13333333333333333,
+        "best_arm": "hybrid",
+        "best_first_correct_file_rate_at_k": 0.36666666666666664
+      },
+      {
+        "report": "benchmarks/public/results/mode-a-nl-vocab.json",
+        "manifest": "benchmarks/public/manifest-nl.json",
+        "category": "natural_language",
+        "retrieval_contract_fingerprint": null,
+        "retrieval_contract_status": "missing",
+        "k": 5,
+        "evaluated": 30,
+        "lexical_first_correct_file_rate_at_k": 0.5,
+        "hybrid_first_correct_file_rate_at_k": 0.0,
+        "best_arm": "lexical",
+        "best_first_correct_file_rate_at_k": 0.5
+      },
+      {
+        "report": "benchmarks/public/results/mode-a-nl-domain.json",
+        "manifest": "benchmarks/public/manifest-nl.json",
+        "category": "natural_language",
+        "retrieval_contract_fingerprint": "fnv1a64:18cc30cd8ca21577",
+        "retrieval_contract_status": "current",
+        "k": 5,
+        "evaluated": 30,
+        "lexical_first_correct_file_rate_at_k": 1.0,
+        "hybrid_first_correct_file_rate_at_k": 0.0,
+        "best_arm": "lexical",
+        "best_first_correct_file_rate_at_k": 1.0
+      }
+    ],
+    "best_swe_bench_style": {
+      "report": "benchmarks/public/results/mode-a-50-domain.json",
+      "category": "swe_bench_style",
+      "best_arm": "lexical",
+      "first_correct_file_rate_at_k": 1.0,
+      "target_first_correct_file_rate_at_k": 1.0,
+      "gap_to_target": 0.0,
+      "status": "pass"
+    },
+    "best_natural_language": {
+      "report": "benchmarks/public/results/mode-a-nl-domain.json",
+      "category": "natural_language",
+      "best_arm": "lexical",
+      "first_correct_file_rate_at_k": 1.0,
+      "target_first_correct_file_rate_at_k": 1.0,
+      "gap_to_target": 0.0,
+      "status": "pass"
+    }
+  },
+  "public_checkouts": {
+    "status": "pass",
+    "repos_dir": "benchmarks/public/repos",
+    "manifests": [
+      "benchmarks/public/manifest-50.json",
+      "benchmarks/public/manifest-nl.json",
+      "benchmarks/public/manifest-rust.json",
+      "benchmarks/public/manifest-typescript.json",
+      "benchmarks/public/manifest.json"
+    ],
+    "expected_repos": 4,
+    "present_repos": 4,
+    "missing_repos": [],
+    "missing_manifests": [],
+    "commands": [
+      "cargo run --features embed -- bench-run benchmarks/public/manifest-50.json --workdir benchmarks/public/repos --compare --out benchmarks/public/results/compare-50-rerun.json --resume",
+      "cargo run --features embed -- bench-run benchmarks/public/manifest-50.json --workdir benchmarks/public/repos --out benchmarks/public/results/mode-a-50-domain-rerun.json --resume",
+      "cargo run --features embed -- bench-run benchmarks/public/manifest.json --workdir benchmarks/public/repos --out benchmarks/public/results/mode-a-requests-seed-rerun.json --resume",
+      "cargo run --features embed -- bench-run benchmarks/public/manifest-nl.json --workdir benchmarks/public/repos --compare --out benchmarks/public/results/compare-nl-rerun.json --resume",
+      "cargo run --features embed -- bench-run benchmarks/public/manifest-nl.json --workdir benchmarks/public/repos --out benchmarks/public/results/mode-a-nl-domain-rerun.json --resume",
+      "cargo run --features embed -- bench-run benchmarks/public/manifest-rust.json --workdir benchmarks/public/repos --out benchmarks/public/results/mode-a-rust-callsieve-rerun.json --resume",
+      "cargo run --features embed -- bench-run benchmarks/public/manifest-typescript.json --workdir benchmarks/public/repos --out benchmarks/public/results/mode-a-typescript-callsieve-rerun.json --resume"
+    ]
+  },
+  "broad_read_guardrail": {
+    "status": "pass",
+    "claim_scope": "Measured comparison: naive broad file-read payload versus the CallSieve context packet from the local competitive benchmark.",
+    "baseline_context_payload_tokens": 12151422,
+    "callsieve_context_payload_tokens": 49932,
+    "context_payload_tokens_saved": 12101490,
+    "context_payload_reduction_percent": 99.58908512929597,
+    "minimum_context_payload_reduction_percent": 90.0,
+    "avoided_file_reads": 873,
+    "avoided_grep_commands": 70,
+    "evidence": "Uses competitive-report context_payload_reduction estimates from the same task set as the local public-proof gate.",
+    "next_baseline": "Keep broad-read payload comparisons in competitive-report, then raise the minimum reduction target as public task coverage grows."
+  },
+  "context_packet_guardrail": {
+    "status": "pass",
+    "claim_scope": "Measured local packet-quality guardrail: the competitive benchmark context packets must contain selected files, symbols, related tests, blast-radius/risk hints, call-graph hints, ranking evidence, and local expansion targets before public proof can claim better-than-search context.",
+    "tasks": 10,
+    "selected_files": 80,
+    "files_with_symbols": 54,
+    "selected_symbols": 156,
+    "files_with_snippets": 80,
+    "snippets": 122,
+    "files_with_related_tests": 33,
+    "related_tests": 34,
+    "files_with_blast_radius": 68,
+    "blast_radius_hints": 972,
+    "files_with_call_graph_hints": 67,
+    "call_graph_hints": 390,
+    "files_with_non_unknown_risk": 80,
+    "files_with_selection_reasons": 80,
+    "selection_reasons": 476,
+    "files_with_selection_confidence": 80,
+    "selection_signals": 10,
+    "next_file_hints": 20,
+    "focus_targets": 58,
+    "relationship_followup_targets": 6,
+    "test_followup_targets": 6,
+    "evidence": "Uses benchmark-report packet_quality counters from the same local competitive task set as the broad-read and zero-token gates.",
+    "next_baseline": "Keep this guardrail passing as default packets get slimmer, and add transcript-backed agent-native comparisons before claiming native-search wins."
+  },
+  "evidence_pack": {
+    "commands": [
+      "cargo run -- index .",
+      "cargo run -- competitive-report benchmarks/competitive-response-manifest.example.json",
+      "cargo run -- public-proof-report benchmarks/public-proof-manifest.example.json",
+      "cargo run -- setup-auto . --dry-run",
+      "cargo run -- mcp-config . --format json",
+      "cargo run -- mcp-registry-manifest --out server.json",
+      "cargo run -- mcp-contract --out benchmarks/public/results/mcp-contract.json",
+      "cargo run -- agent-native-protocol --out benchmarks/public/results/agent-native-protocol.json",
+      "cargo run -- agent-native-template benchmarks/public/repos/psf/requests benchmarks/public/manifest.json --k 5 --out benchmarks/public/results/agent-native-requests-template.json",
+      "python3 benchmarks/tools/codex-agent-native-requests.py --suite requests --plan-only",
+      "python3 benchmarks/tools/codex-agent-native-requests.py --suite requests --validate-plan",
+      "python3 benchmarks/tools/codex-agent-native-requests.py --suite requests",
+      "python3 benchmarks/tools/codex-agent-native-requests.py --suite rust --plan-only",
+      "python3 benchmarks/tools/codex-agent-native-requests.py --suite rust --validate-plan",
+      "python3 benchmarks/tools/codex-agent-native-requests.py --suite rust",
+      "python3 benchmarks/tools/codex-agent-native-requests.py --suite typescript --plan-only",
+      "python3 benchmarks/tools/codex-agent-native-requests.py --suite typescript --validate-plan",
+      "python3 benchmarks/tools/codex-agent-native-requests.py --suite typescript",
+      "cargo run -- repo-pack-baseline benchmarks/public/repos/astropy/astropy --id full-repo-pack-proxy-astropy --tool FullRepoPackProxy --out benchmarks/public/results/full-repo-pack-proxy-astropy.json",
+      "cargo run -- repo-pack-baseline benchmarks/public/repos/django/django --id full-repo-pack-proxy-django --tool FullRepoPackProxy --out benchmarks/public/results/full-repo-pack-proxy-django.json",
+      "cargo run -- repo-pack-baseline benchmarks/public/repos/psf/requests --id full-repo-pack-proxy-requests --tool FullRepoPackProxy --out benchmarks/public/results/full-repo-pack-proxy-requests.json",
+      "cargo run --features embed -- bench-run benchmarks/public/manifest-50.json --workdir benchmarks/public/repos --compare --out benchmarks/public/results/compare-50-rerun.json --resume",
+      "cargo run --features embed -- bench-run benchmarks/public/manifest-50.json --workdir benchmarks/public/repos --out benchmarks/public/results/mode-a-50-domain-rerun.json --resume",
+      "cargo run --features embed -- bench-run benchmarks/public/manifest.json --workdir benchmarks/public/repos --out benchmarks/public/results/mode-a-requests-seed-rerun.json --resume",
+      "cargo run --features embed -- bench-run benchmarks/public/manifest-nl.json --workdir benchmarks/public/repos --compare --out benchmarks/public/results/compare-nl-rerun.json --resume",
+      "cargo run --features embed -- bench-run benchmarks/public/manifest-nl.json --workdir benchmarks/public/repos --out benchmarks/public/results/mode-a-nl-domain-rerun.json --resume",
+      "cargo run --features embed -- bench-run benchmarks/public/manifest-rust.json --workdir benchmarks/public/repos --out benchmarks/public/results/mode-a-rust-callsieve-rerun.json --resume",
+      "cargo run --features embed -- bench-run benchmarks/public/manifest-typescript.json --workdir benchmarks/public/repos --out benchmarks/public/results/mode-a-typescript-callsieve-rerun.json --resume"
+    ],
+    "fixture_manifests": [
+      "benchmarks/competitive-response-manifest.example.json",
+      "benchmarks/public/manifest-50.json",
+      "benchmarks/public/manifest-nl.json",
+      "benchmarks/public/manifest-rust.json",
+      "benchmarks/public/manifest-typescript.json",
+      "benchmarks/public/manifest.json"
+    ],
+    "result_reports": [
+      "benchmarks/public/results/codex-cli-requests.json",
+      "benchmarks/public/results/codex-cli-rust-callsieve.json",
+      "benchmarks/public/results/codex-cli-typescript-callsieve.json",
+      "benchmarks/public/results/compare-50-ceiling.json",
+      "benchmarks/public/results/compare-50-lexorder.json",
+      "benchmarks/public/results/compare-50-lowfloor2.json",
+      "benchmarks/public/results/compare-50-stemboost.json",
+      "benchmarks/public/results/compare-50.json",
+      "benchmarks/public/results/compare-nl-ceiling.json",
+      "benchmarks/public/results/compare-nl-codemodel.json",
+      "benchmarks/public/results/compare-nl-lexorder.json",
+      "benchmarks/public/results/compare-nl-lowfloor2.json",
+      "benchmarks/public/results/compare-nl-stemboost.json",
+      "benchmarks/public/results/compare-nl.json",
+      "benchmarks/public/results/full-repo-pack-proxy-astropy.json",
+      "benchmarks/public/results/full-repo-pack-proxy-django.json",
+      "benchmarks/public/results/full-repo-pack-proxy-requests.json",
+      "benchmarks/public/results/mode-a-50-domain.json",
+      "benchmarks/public/results/mode-a-50-pyconstants.json",
+      "benchmarks/public/results/mode-a-nl-domain.json",
+      "benchmarks/public/results/mode-a-nl-vocab.json",
+      "benchmarks/public/results/mode-a-requests-seed.json",
+      "benchmarks/public/results/mode-a-rust-callsieve.json",
+      "benchmarks/public/results/mode-a-typescript-callsieve.json"
+    ],
+    "metrics": [
+      {
+        "name": "local.expected_file_recall",
+        "value": 1.0,
+        "target": 1.0,
+        "status": "pass"
+      },
+      {
+        "name": "local.retrieval_model_tokens",
+        "value": 0,
+        "target": 0,
+        "status": "pass"
+      },
+      {
+        "name": "local.per_query_retrieval_cost_usd",
+        "value": 0.0,
+        "target": 0.0,
+        "status": "pass"
+      },
+      {
+        "name": "local.default_code_upload_required",
+        "value": false,
+        "target": false,
+        "status": "pass"
+      },
+      {
+        "name": "public.total_evaluated",
+        "value": 186,
+        "target": 186,
+        "status": "pass"
+      },
+      {
+        "name": "mcp_surface.exposed_tools",
+        "value": 9,
+        "target": 5,
+        "status": "pass"
+      },
+      {
+        "name": "mcp_surface.required_first_mile_tools_covered",
+        "value": 5,
+        "target": 5,
+        "status": "pass"
+      },
+      {
+        "name": "mcp_contract.required_structured_content_fields",
+        "value": 7,
+        "target": 7,
+        "status": "pass"
+      },
+      {
+        "name": "mcp_contract.supported_instruction_expansion_keys",
+        "value": 4,
+        "target": 4,
+        "status": "pass"
+      },
+      {
+        "name": "mcp_contract.required_freshness_fields",
+        "value": 6,
+        "target": 6,
+        "status": "pass"
+      },
+      {
+        "name": "mcp_contract.default_token_budget",
+        "value": 1200,
+        "target": 1200,
+        "status": "pass"
+      },
+      {
+        "name": "agent_setup.agent_coverage_count",
+        "value": 19,
+        "target": 19,
+        "status": "pass"
+      },
+      {
+        "name": "agent_setup.priority_clients_covered",
+        "value": 7,
+        "target": 7,
+        "status": "pass"
+      },
+      {
+        "name": "agent_setup.default_layer_clients_covered",
+        "value": 19,
+        "target": 19,
+        "status": "pass"
+      },
+      {
+        "name": "agent_setup.missing_required_agents",
+        "value": 0,
+        "target": 0,
+        "status": "pass"
+      },
+      {
+        "name": "public_checkouts.missing_repos",
+        "value": 0,
+        "target": 0,
+        "status": "pass"
+      },
+      {
+        "name": "public_checkouts.missing_manifests",
+        "value": 0,
+        "target": 0,
+        "status": "pass"
+      },
+      {
+        "name": "broad_read.baseline_context_payload_tokens",
+        "value": 12151422,
+        "target": 1,
+        "status": "pass"
+      },
+      {
+        "name": "broad_read.callsieve_context_payload_tokens",
+        "value": 49932,
+        "target": 1,
+        "status": "pass"
+      },
+      {
+        "name": "broad_read.context_payload_tokens_saved",
+        "value": 12101490,
+        "target": 1,
+        "status": "pass"
+      },
+      {
+        "name": "broad_read.context_payload_reduction_percent",
+        "value": 99.58908512929597,
+        "target": 90.0,
+        "status": "pass"
+      },
+      {
+        "name": "broad_read.avoided_file_reads",
+        "value": 873,
+        "status": "pass"
+      },
+      {
+        "name": "broad_read.avoided_grep_commands",
+        "value": 70,
+        "status": "pass"
+      },
+      {
+        "name": "context_packet.selected_files",
+        "value": 80,
+        "target": 1,
+        "status": "pass"
+      },
+      {
+        "name": "context_packet.selected_symbols",
+        "value": 156,
+        "target": 1,
+        "status": "pass"
+      },
+      {
+        "name": "context_packet.related_tests",
+        "value": 34,
+        "target": 1,
+        "status": "pass"
+      },
+      {
+        "name": "context_packet.blast_radius_hints",
+        "value": 972,
+        "target": 1,
+        "status": "pass"
+      },
+      {
+        "name": "context_packet.call_graph_hints",
+        "value": 390,
+        "target": 1,
+        "status": "pass"
+      },
+      {
+        "name": "context_packet.selection_evidence",
+        "value": {
+          "files_with_selection_confidence": 80,
+          "selection_reasons": 476,
+          "selection_signals": 10
+        },
+        "target": {
+          "files_with_selection_confidence": 1,
+          "selection_reasons": 1,
+          "selection_signals": 1
+        },
+        "status": "pass"
+      },
+      {
+        "name": "context_packet.local_expansion_targets",
+        "value": {
+          "focus_targets": 58,
+          "relationship_followup_targets": 6,
+          "test_followup_targets": 6
+        },
+        "target": {
+          "focus_targets": 1,
+          "relationship_followup_targets": 1,
+          "test_followup_targets": 1
+        },
+        "status": "pass"
+      },
+      {
+        "name": "mcp_contract.artifact_matches_live_contract",
+        "value": true,
+        "target": true,
+        "status": "pass"
+      },
+      {
+        "name": "agent_native_template.ready_for_measurement",
+        "value": true,
+        "target": true,
+        "status": "pass"
+      },
+      {
+        "name": "agent_native_protocol.artifact_matches_live_protocol",
+        "value": true,
+        "target": true,
+        "status": "pass"
+      },
+      {
+        "name": "agent_native_check.measured_preflight_passed",
+        "value": true,
+        "target": true,
+        "status": "pass"
+      },
+      {
+        "name": "local.default_packet_tokens",
+        "value": 4994,
+        "target": 5000,
+        "status": "pass"
+      },
+      {
+        "name": "public.swe-bench-lite-50.first_correct_file_rate_at_k",
+        "value": 0.6,
+        "status": "pass"
+      },
+      {
+        "name": "public.swe-bench-lite-50.minus_grep",
+        "value": 0.54,
+        "status": "pass"
+      },
+      {
+        "name": "public.swe-bench-lite-natural-language-30.first_correct_file_rate_at_k",
+        "value": 0.36666666666666664,
+        "status": "pass"
+      },
+      {
+        "name": "public.swe-bench-lite-natural-language-30.minus_grep",
+        "value": 0.2333333333333333,
+        "status": "pass"
+      },
+      {
+        "name": "public.swe-bench-lite-50-domain.first_correct_file_rate_at_k",
+        "value": 1.0,
+        "status": "pass"
+      },
+      {
+        "name": "public.requests-seed-10-domain.first_correct_file_rate_at_k",
+        "value": 1.0,
+        "status": "pass"
+      },
+      {
+        "name": "public.swe-bench-lite-natural-language-domain-30.first_correct_file_rate_at_k",
+        "value": 1.0,
+        "status": "pass"
+      },
+      {
+        "name": "public.callsieve-rust-language-slice-12.first_correct_file_rate_at_k",
+        "value": 1.0,
+        "status": "pass"
+      },
+      {
+        "name": "public.callsieve-typescript-language-slice-4.first_correct_file_rate_at_k",
+        "value": 1.0,
+        "status": "pass"
+      },
+      {
+        "name": "public_catalog.best_swe_bench_style_first_correct_file_rate_at_k",
+        "value": 1.0,
+        "target": 1.0,
+        "status": "pass"
+      },
+      {
+        "name": "public_catalog.best_natural_language_first_correct_file_rate_at_k",
+        "value": 1.0,
+        "target": 1.0,
+        "status": "pass"
+      },
+      {
+        "name": "repo_packer.full-repo-pack-proxy-astropy.tokens",
+        "value": 5638468,
+        "status": "pass"
+      },
+      {
+        "name": "repo_packer.full-repo-pack-proxy-astropy.token_ratio_vs_callsieve_packet",
+        "value": 1129.0484581497797,
+        "target": 1000.0,
+        "status": "pass"
+      },
+      {
+        "name": "repo_packer.full-repo-pack-proxy-django.tokens",
+        "value": 5155623,
+        "status": "pass"
+      },
+      {
+        "name": "repo_packer.full-repo-pack-proxy-django.token_ratio_vs_callsieve_packet",
+        "value": 1032.363436123348,
+        "target": 1000.0,
+        "status": "pass"
+      },
+      {
+        "name": "repo_packer.full-repo-pack-proxy-requests.tokens",
+        "value": 101186,
+        "status": "pass"
+      },
+      {
+        "name": "repo_packer.full-repo-pack-proxy-requests.token_ratio_vs_callsieve_packet",
+        "value": 20.261513816579896,
+        "target": 20.0,
+        "status": "pass"
+      },
+      {
+        "name": "agent_native_search.codex-cli-public-requests.transcript_provenance",
+        "value": true,
+        "target": true,
+        "status": "pass"
+      },
+      {
+        "name": "agent_native_search.codex-cli-public-requests.tasks",
+        "value": 10,
+        "target": 10,
+        "status": "pass"
+      },
+      {
+        "name": "agent_native_search.codex-cli-public-requests.callsieve_minus_agent_native_first_correct_file_rate_at_k",
+        "value": 0.0,
+        "target": 0.0,
+        "status": "pass"
+      },
+      {
+        "name": "agent_native_search.codex-cli-public-requests.context_token_ratio_vs_callsieve",
+        "value": 303.9424778761062,
+        "target": 2.0,
+        "status": "pass"
+      },
+      {
+        "name": "agent_native_search.codex-cli-public-rust-callsieve.transcript_provenance",
+        "value": true,
+        "target": true,
+        "status": "pass"
+      },
+      {
+        "name": "agent_native_search.codex-cli-public-rust-callsieve.tasks",
+        "value": 12,
+        "target": 12,
+        "status": "pass"
+      },
+      {
+        "name": "agent_native_search.codex-cli-public-rust-callsieve.callsieve_minus_agent_native_first_correct_file_rate_at_k",
+        "value": 0.0,
+        "target": 0.0,
+        "status": "pass"
+      },
+      {
+        "name": "agent_native_search.codex-cli-public-rust-callsieve.context_token_ratio_vs_callsieve",
+        "value": 1845.6142131979695,
+        "target": 2.0,
+        "status": "pass"
+      },
+      {
+        "name": "agent_native_search.codex-cli-public-typescript-callsieve.transcript_provenance",
+        "value": true,
+        "target": true,
+        "status": "pass"
+      },
+      {
+        "name": "agent_native_search.codex-cli-public-typescript-callsieve.tasks",
+        "value": 4,
+        "target": 4,
+        "status": "pass"
+      },
+      {
+        "name": "agent_native_search.codex-cli-public-typescript-callsieve.callsieve_minus_agent_native_first_correct_file_rate_at_k",
+        "value": 0.0,
+        "target": 0.0,
+        "status": "pass"
+      },
+      {
+        "name": "agent_native_search.codex-cli-public-typescript-callsieve.context_token_ratio_vs_callsieve",
+        "value": 935.13,
+        "target": 2.0,
+        "status": "pass"
+      }
+    ],
+    "misses": [
+      {
+        "report": "swe-bench-lite-50",
+        "preferred_arm": "lexical",
+        "sampled_misses": 8,
+        "sample": [
+          "astropy__astropy-14995",
+          "django__django-10914",
+          "django__django-11283",
+          "django__django-11564",
+          "django__django-11630",
+          "django__django-11797",
+          "django__django-11815",
+          "django__django-11905"
+        ]
+      },
+      {
+        "report": "swe-bench-lite-natural-language-30",
+        "preferred_arm": "hybrid",
+        "sampled_misses": 8,
+        "sample": [
+          "astropy__astropy-12907-nl",
+          "astropy__astropy-14182-nl",
+          "astropy__astropy-14365-nl",
+          "astropy__astropy-6938-nl",
+          "astropy__astropy-7746-nl",
+          "django__django-10914-nl",
+          "django__django-11039-nl",
+          "django__django-11099-nl"
+        ]
+      },
+      {
+        "report": "swe-bench-lite-50-domain",
+        "preferred_arm": "lexical",
+        "sampled_misses": 0,
+        "sample": []
+      },
+      {
+        "report": "requests-seed-10-domain",
+        "preferred_arm": "lexical",
+        "sampled_misses": 0,
+        "sample": []
+      },
+      {
+        "report": "swe-bench-lite-natural-language-domain-30",
+        "preferred_arm": "lexical",
+        "sampled_misses": 0,
+        "sample": []
+      },
+      {
+        "report": "callsieve-rust-language-slice-12",
+        "preferred_arm": "lexical",
+        "sampled_misses": 0,
+        "sample": []
+      },
+      {
+        "report": "callsieve-typescript-language-slice-4",
+        "preferred_arm": "lexical",
+        "sampled_misses": 0,
+        "sample": []
+      }
+    ],
+    "receipt_commands": [
+      "cargo run -- receipt . --latest --format markdown",
+      "cargo run -- receipts ."
+    ],
+    "terminal_artifacts": [
+      {
+        "id": "public-proof-terminal-example",
+        "path": "benchmarks/public/results/public-proof-terminal.example.txt",
+        "kind": "terminal_output",
+        "description": "Example terminal transcript showing the public proof report command and headline metrics.",
+        "required": true,
+        "exists": true,
+        "status": "pass",
+        "validation": "artifact exists; content validation is not required for this artifact kind"
+      },
+      {
+        "id": "mcp-contract",
+        "path": "benchmarks/public/results/mcp-contract.json",
+        "kind": "json_artifact",
+        "description": "Standalone exported MCP structuredContent contract for callsieve_context.",
+        "required": true,
+        "exists": true,
+        "status": "pass",
+        "validation": "matches live callsieve mcp-contract output"
+      },
+      {
+        "id": "agent-native-protocol",
+        "path": "benchmarks/public/results/agent-native-protocol.json",
+        "kind": "json_artifact",
+        "description": "Standalone exported protocol for approved agent-native search measurements.",
+        "required": true,
+        "exists": true,
+        "status": "pass",
+        "validation": "matches live callsieve agent-native-protocol output"
+      },
+      {
+        "id": "agent-native-template",
+        "path": "benchmarks/public/results/agent-native-requests-template.json",
+        "kind": "json_artifact",
+        "description": "Prepared native-search measurement template with CallSieve files and packet tokens filled for public Requests tasks.",
+        "required": true,
+        "exists": true,
+        "status": "pass",
+        "validation": "agent-native template is ready for 10 measured tasks and matches recomputed source/index/retrieval provenance"
+      },
+      {
+        "id": "agent-native-check",
+        "path": "benchmarks/public/results/codex-cli-requests-check.json",
+        "kind": "json_artifact",
+        "description": "Measured Codex CLI native-search preflight check for public Requests tasks.",
+        "required": true,
+        "exists": true,
+        "status": "pass",
+        "validation": "agent-native measured preflight passed for 10 tasks with readable source artifacts",
+        "source_artifact_hashes": [
+          "fnv1a64:2f735c0f7d21857d",
+          "fnv1a64:20dc344a5adaefc3"
+        ]
+      },
+      {
+        "id": "agent-native-check",
+        "path": "benchmarks/public/results/codex-cli-rust-callsieve-check.json",
+        "kind": "json_artifact",
+        "description": "Measured Codex CLI native-search preflight check for public CallSieve Rust tasks.",
+        "required": true,
+        "exists": true,
+        "status": "pass",
+        "validation": "agent-native measured preflight passed for 12 tasks with readable source artifacts",
+        "source_artifact_hashes": [
+          "fnv1a64:ed17f1a1ace104a7",
+          "fnv1a64:359aba78c57ca39a"
+        ]
+      },
+      {
+        "id": "agent-native-check",
+        "path": "benchmarks/public/results/codex-cli-typescript-callsieve-check.json",
+        "kind": "json_artifact",
+        "description": "Measured Codex CLI native-search preflight check for public CallSieve TypeScript tasks.",
+        "required": true,
+        "exists": true,
+        "status": "pass",
+        "validation": "agent-native measured preflight passed for 4 tasks with readable source artifacts",
+        "source_artifact_hashes": [
+          "fnv1a64:4afe280d051e4c74",
+          "fnv1a64:d10a019a3a710b72"
+        ]
+      }
+    ],
+    "public_checkouts": {
+      "status": "pass",
+      "repos_dir": "benchmarks/public/repos",
+      "manifests": [
+        "benchmarks/public/manifest-50.json",
+        "benchmarks/public/manifest-nl.json",
+        "benchmarks/public/manifest-rust.json",
+        "benchmarks/public/manifest-typescript.json",
+        "benchmarks/public/manifest.json"
+      ],
+      "expected_repos": 4,
+      "present_repos": 4,
+      "missing_repos": [],
+      "missing_manifests": [],
+      "commands": [
+        "cargo run --features embed -- bench-run benchmarks/public/manifest-50.json --workdir benchmarks/public/repos --compare --out benchmarks/public/results/compare-50-rerun.json --resume",
+        "cargo run --features embed -- bench-run benchmarks/public/manifest-50.json --workdir benchmarks/public/repos --out benchmarks/public/results/mode-a-50-domain-rerun.json --resume",
+        "cargo run --features embed -- bench-run benchmarks/public/manifest.json --workdir benchmarks/public/repos --out benchmarks/public/results/mode-a-requests-seed-rerun.json --resume",
+        "cargo run --features embed -- bench-run benchmarks/public/manifest-nl.json --workdir benchmarks/public/repos --compare --out benchmarks/public/results/compare-nl-rerun.json --resume",
+        "cargo run --features embed -- bench-run benchmarks/public/manifest-nl.json --workdir benchmarks/public/repos --out benchmarks/public/results/mode-a-nl-domain-rerun.json --resume",
+        "cargo run --features embed -- bench-run benchmarks/public/manifest-rust.json --workdir benchmarks/public/repos --out benchmarks/public/results/mode-a-rust-callsieve-rerun.json --resume",
+        "cargo run --features embed -- bench-run benchmarks/public/manifest-typescript.json --workdir benchmarks/public/repos --out benchmarks/public/results/mode-a-typescript-callsieve-rerun.json --resume"
+      ]
+    },
+    "broad_read_guardrail": {
+      "status": "pass",
+      "claim_scope": "Measured comparison: naive broad file-read payload versus the CallSieve context packet from the local competitive benchmark.",
+      "baseline_context_payload_tokens": 12151422,
+      "callsieve_context_payload_tokens": 49932,
+      "context_payload_tokens_saved": 12101490,
+      "context_payload_reduction_percent": 99.58908512929597,
+      "minimum_context_payload_reduction_percent": 90.0,
+      "avoided_file_reads": 873,
+      "avoided_grep_commands": 70,
+      "evidence": "Uses competitive-report context_payload_reduction estimates from the same task set as the local public-proof gate.",
+      "next_baseline": "Keep broad-read payload comparisons in competitive-report, then raise the minimum reduction target as public task coverage grows."
+    },
+    "context_packet_guardrail": {
+      "status": "pass",
+      "claim_scope": "Measured local packet-quality guardrail: the competitive benchmark context packets must contain selected files, symbols, related tests, blast-radius/risk hints, call-graph hints, ranking evidence, and local expansion targets before public proof can claim better-than-search context.",
+      "tasks": 10,
+      "selected_files": 80,
+      "files_with_symbols": 54,
+      "selected_symbols": 156,
+      "files_with_snippets": 80,
+      "snippets": 122,
+      "files_with_related_tests": 33,
+      "related_tests": 34,
+      "files_with_blast_radius": 68,
+      "blast_radius_hints": 972,
+      "files_with_call_graph_hints": 67,
+      "call_graph_hints": 390,
+      "files_with_non_unknown_risk": 80,
+      "files_with_selection_reasons": 80,
+      "selection_reasons": 476,
+      "files_with_selection_confidence": 80,
+      "selection_signals": 10,
+      "next_file_hints": 20,
+      "focus_targets": 58,
+      "relationship_followup_targets": 6,
+      "test_followup_targets": 6,
+      "evidence": "Uses benchmark-report packet_quality counters from the same local competitive task set as the broad-read and zero-token gates.",
+      "next_baseline": "Keep this guardrail passing as default packets get slimmer, and add transcript-backed agent-native comparisons before claiming native-search wins."
+    },
+    "repo_packer_baselines": [
+      {
+        "id": "full-repo-pack-proxy-astropy",
+        "tool": "FullRepoPackProxy",
+        "path": "benchmarks/public/results/full-repo-pack-proxy-astropy.json",
+        "command": "cargo run -- repo-pack-baseline benchmarks/public/repos/astropy/astropy --id full-repo-pack-proxy-astropy --tool FullRepoPackProxy --out benchmarks/public/results/full-repo-pack-proxy-astropy.json",
+        "required": true,
+        "exists": true,
+        "locally_measured": true,
+        "tokens": 5638468,
+        "bytes": 22553870,
+        "files": 1257,
+        "token_ratio_vs_callsieve_packet": 1129.0484581497797,
+        "minimum_token_ratio_vs_callsieve_packet": 1000.0,
+        "status": "pass"
+      },
+      {
+        "id": "full-repo-pack-proxy-django",
+        "tool": "FullRepoPackProxy",
+        "path": "benchmarks/public/results/full-repo-pack-proxy-django.json",
+        "command": "cargo run -- repo-pack-baseline benchmarks/public/repos/django/django --id full-repo-pack-proxy-django --tool FullRepoPackProxy --out benchmarks/public/results/full-repo-pack-proxy-django.json",
+        "required": true,
+        "exists": true,
+        "locally_measured": true,
+        "tokens": 5155623,
+        "bytes": 20622492,
+        "files": 3283,
+        "token_ratio_vs_callsieve_packet": 1032.363436123348,
+        "minimum_token_ratio_vs_callsieve_packet": 1000.0,
+        "status": "pass"
+      },
+      {
+        "id": "full-repo-pack-proxy-requests",
+        "tool": "FullRepoPackProxy",
+        "path": "benchmarks/public/results/full-repo-pack-proxy-requests.json",
+        "command": "cargo run -- repo-pack-baseline benchmarks/public/repos/psf/requests --id full-repo-pack-proxy-requests --tool FullRepoPackProxy --out benchmarks/public/results/full-repo-pack-proxy-requests.json",
+        "required": true,
+        "exists": true,
+        "locally_measured": true,
+        "tokens": 101186,
+        "bytes": 404741,
+        "files": 48,
+        "token_ratio_vs_callsieve_packet": 20.261513816579896,
+        "minimum_token_ratio_vs_callsieve_packet": 20.0,
+        "status": "pass"
+      }
+    ],
+    "agent_native_search_baselines": [
+      {
+        "id": "codex-cli-public-requests",
+        "tool": "Codex CLI native search/read workflow",
+        "path": "benchmarks/public/results/codex-cli-requests.json",
+        "command": "benchmarks/tools/codex-agent-native-requests.py --suite requests",
+        "required": true,
+        "exists": true,
+        "locally_measured": true,
+        "tasks": 10,
+        "agent_native_first_correct_file_rate_at_k": 1.0,
+        "callsieve_first_correct_file_rate_at_k": 1.0,
+        "callsieve_minus_agent_native_first_correct_file_rate_at_k": 0.0,
+        "agent_native_average_context_tokens": 68691,
+        "callsieve_average_packet_tokens": 226,
+        "agent_native_context_token_ratio_vs_callsieve": 303.9424778761062,
+        "source_artifacts": 2,
+        "source_artifact_hashes": [
+          "fnv1a64:2f735c0f7d21857d",
+          "fnv1a64:20dc344a5adaefc3"
+        ],
+        "transcript_source_artifact_hashes": [
+          "fnv1a64:20dc344a5adaefc3"
+        ],
+        "transcript_provenance_status": "pass",
+        "minimum_tasks": 10,
+        "minimum_callsieve_minus_agent_native_first_correct_file_rate_at_k": 0.0,
+        "minimum_agent_native_context_token_ratio_vs_callsieve": 2.0,
+        "status": "pass"
+      },
+      {
+        "id": "codex-cli-public-rust-callsieve",
+        "tool": "Codex CLI native search/read workflow",
+        "path": "benchmarks/public/results/codex-cli-rust-callsieve.json",
+        "command": "benchmarks/tools/codex-agent-native-requests.py --suite rust",
+        "required": true,
+        "exists": true,
+        "locally_measured": true,
+        "tasks": 12,
+        "agent_native_first_correct_file_rate_at_k": 1.0,
+        "callsieve_first_correct_file_rate_at_k": 1.0,
+        "callsieve_minus_agent_native_first_correct_file_rate_at_k": 0.0,
+        "agent_native_average_context_tokens": 363586,
+        "callsieve_average_packet_tokens": 197,
+        "agent_native_context_token_ratio_vs_callsieve": 1845.6142131979695,
+        "source_artifacts": 2,
+        "source_artifact_hashes": [
+          "fnv1a64:ed17f1a1ace104a7",
+          "fnv1a64:359aba78c57ca39a"
+        ],
+        "transcript_source_artifact_hashes": [
+          "fnv1a64:359aba78c57ca39a"
+        ],
+        "transcript_provenance_status": "pass",
+        "minimum_tasks": 12,
+        "minimum_callsieve_minus_agent_native_first_correct_file_rate_at_k": 0.0,
+        "minimum_agent_native_context_token_ratio_vs_callsieve": 2.0,
+        "status": "pass"
+      },
+      {
+        "id": "codex-cli-public-typescript-callsieve",
+        "tool": "Codex CLI native search/read workflow",
+        "path": "benchmarks/public/results/codex-cli-typescript-callsieve.json",
+        "command": "benchmarks/tools/codex-agent-native-requests.py --suite typescript",
+        "required": true,
+        "exists": true,
+        "locally_measured": true,
+        "tasks": 4,
+        "agent_native_first_correct_file_rate_at_k": 1.0,
+        "callsieve_first_correct_file_rate_at_k": 1.0,
+        "callsieve_minus_agent_native_first_correct_file_rate_at_k": 0.0,
+        "agent_native_average_context_tokens": 187026,
+        "callsieve_average_packet_tokens": 200,
+        "agent_native_context_token_ratio_vs_callsieve": 935.13,
+        "source_artifacts": 2,
+        "source_artifact_hashes": [
+          "fnv1a64:4afe280d051e4c74",
+          "fnv1a64:d10a019a3a710b72"
+        ],
+        "transcript_source_artifact_hashes": [
+          "fnv1a64:d10a019a3a710b72"
+        ],
+        "transcript_provenance_status": "pass",
+        "minimum_tasks": 4,
+        "minimum_callsieve_minus_agent_native_first_correct_file_rate_at_k": 0.0,
+        "minimum_agent_native_context_token_ratio_vs_callsieve": 2.0,
+        "status": "pass"
+      }
+    ],
+    "mcp_surface": {
+      "status": "pass",
+      "protocol": "2025-06-18",
+      "required_first_mile_tools": [
+        "callsieve_context",
+        "callsieve_focus",
+        "callsieve_related",
+        "callsieve_tests",
+        "callsieve_status"
+      ],
+      "exposed_tools": [
+        "callsieve_context",
+        "callsieve_symbol",
+        "callsieve_focus",
+        "callsieve_related",
+        "callsieve_tests",
+        "callsieve_stats",
+        "callsieve_status",
+        "callsieve_trace_check",
+        "callsieve_benchmark"
+      ],
+      "missing_required_tools": [],
+      "context_first_tool": "callsieve_context",
+      "local_config_commands": [
+        "cargo run -- mcp-config . --format json",
+        "cargo run -- mcp-config . --format toml"
+      ],
+      "registry_manifest_command": "cargo run -- mcp-registry-manifest --out server.json",
+      "evidence": "The public proof checks the actual MCP tools/list surface for context-first retrieval, targeted focus, related-file expansion, related tests, and freshness status before claiming MCP readiness."
+    },
+    "mcp_contract": {
+      "status": "pass",
+      "contract_version": 1,
+      "context_tool": "callsieve_context",
+      "structured_content_required": true,
+      "default_profile": "skim",
+      "default_token_budget": 1200,
+      "required_structured_content_fields": [
+        "read_first",
+        "sel",
+        "instruction",
+        "freshness",
+        "retrieval_cost",
+        "stats",
+        "trace_event"
+      ],
+      "supported_instruction_expansion_keys": [
+        "o",
+        "next",
+        "rel",
+        "tests"
+      ],
+      "required_freshness_fields": [
+        "initial_fresh",
+        "refreshed",
+        "final_fresh",
+        "index_generation",
+        "stale_files",
+        "fix_command"
+      ],
+      "evidence": "MCP context proof exposes the stable structuredContent contract agents consume before broad grep or repeated file reads."
+    },
+    "agent_setup": {
+      "status": "pass",
+      "claim_scope": "Agent-agnostic local setup evidence: setup-auto detection, project-local MCP config, registry descriptor, lifecycle hooks where available, and templates where hooks are not available.",
+      "required_agents": [
+        "Codex",
+        "Claude Code",
+        "GitHub Copilot",
+        "OpenCode",
+        "Antigravity",
+        "Cursor",
+        "VS Code",
+        "Windsurf",
+        "Continue",
+        "Zed",
+        "Junie",
+        "JetBrains",
+        "Amp",
+        "Goose",
+        "Warp",
+        "Cline",
+        "Zoo",
+        "Roo",
+        "generic MCP"
+      ],
+      "covered_agents": [
+        "Codex",
+        "Claude Code",
+        "GitHub Copilot",
+        "OpenCode",
+        "Antigravity",
+        "Cursor",
+        "VS Code",
+        "Windsurf",
+        "Continue",
+        "Zed",
+        "Junie",
+        "JetBrains",
+        "Amp",
+        "Goose",
+        "Warp",
+        "Cline",
+        "Zoo",
+        "Roo",
+        "generic MCP"
+      ],
+      "missing_required_agents": [],
+      "agent_coverage_count": 19,
+      "minimum_agent_coverage": 19,
+      "default_layer_clients": [
+        "Codex",
+        "Claude Code",
+        "GitHub Copilot",
+        "OpenCode",
+        "Antigravity",
+        "Cursor",
+        "VS Code",
+        "Windsurf",
+        "Continue",
+        "Zed",
+        "Junie",
+        "JetBrains",
+        "Amp",
+        "Goose",
+        "Warp",
+        "Cline",
+        "Zoo",
+        "Roo",
+        "generic MCP"
+      ],
+      "default_layer_clients_covered": [
+        "Codex",
+        "Claude Code",
+        "GitHub Copilot",
+        "OpenCode",
+        "Antigravity",
+        "Cursor",
+        "VS Code",
+        "Windsurf",
+        "Continue",
+        "Zed",
+        "Junie",
+        "JetBrains",
+        "Amp",
+        "Goose",
+        "Warp",
+        "Cline",
+        "Zoo",
+        "Roo",
+        "generic MCP"
+      ],
+      "missing_default_layer_clients": [],
+      "priority_clients": [
+        "Codex",
+        "Claude Code",
+        "GitHub Copilot",
+        "Cursor",
+        "OpenCode",
+        "Zed",
+        "generic MCP"
+      ],
+      "priority_clients_covered": [
+        "Codex",
+        "Claude Code",
+        "GitHub Copilot",
+        "Cursor",
+        "OpenCode",
+        "Zed",
+        "generic MCP"
+      ],
+      "hook_capable_clients": [
+        "Codex",
+        "Claude Code",
+        "GitHub Copilot",
+        "OpenCode",
+        "Antigravity",
+        "Cline"
+      ],
+      "mcp_template_clients": [
+        "Cursor",
+        "VS Code",
+        "Windsurf",
+        "Continue",
+        "Zed",
+        "Junie",
+        "JetBrains",
+        "Amp",
+        "Goose",
+        "Warp",
+        "Zoo",
+        "Roo",
+        "generic MCP"
+      ],
+      "commands": [
+        "cargo run -- setup-auto . --dry-run",
+        "cargo run -- setup-auto .",
+        "cargo run -- mcp-config . --format json",
+        "cargo run -- mcp-config . --format toml",
+        "cargo run -- mcp-registry-manifest --out server.json",
+        "cargo run -- mcp-contract --out benchmarks/public/results/mcp-contract.json",
+        "cargo run -- agent-native-protocol --out benchmarks/public/results/agent-native-protocol.json",
+        "cargo run -- agent-native-template benchmarks/public/repos/psf/requests benchmarks/public/manifest.json --k 5 --out benchmarks/public/results/agent-native-requests-template.json",
+        "cargo run -- codex-hooks doctor . --strict --smoke",
+        "cargo run -- claude-hooks doctor . --strict",
+        "cargo run -- opencode-hooks doctor . --strict"
+      ],
+      "evidence": "The competitive gate requires agent coverage, and public proof exposes the exact setup and MCP commands needed to reproduce the local integration surface.",
+      "next_step": "Run setup-auto --dry-run first, review detected clients, then run setup-auto or per-client hook/MCP setup in the target repository."
+    }
+  },
+  "miss_triage": {
+    "path": "benchmarks/public/results/nl-miss-graph-adjacency-study.json",
+    "total": 22,
+    "reachable": 18,
+    "not_reachable": 4,
+    "same_directory_hints": 8,
+    "sample": [
+      {
+        "id": "astropy__astropy-12907-nl",
+        "truth": "astropy/modeling/separable.py",
+        "reachable": true,
+        "same_dir": [
+          "astropy/modeling/models.py",
+          "astropy/modeling/functional_models.py",
+          "astropy/modeling/physical_models.py",
+          "astropy/modeling/bounding_box.py"
+        ],
+        "pool_refs_truth": [],
+        "truth_refs_pool": []
+      },
+      {
+        "id": "astropy__astropy-14182-nl",
+        "truth": "astropy/io/ascii/rst.py",
+        "reachable": false,
+        "same_dir": [],
+        "pool_refs_truth": [],
+        "truth_refs_pool": []
+      },
+      {
+        "id": "astropy__astropy-14365-nl",
+        "truth": "astropy/io/ascii/qdp.py",
+        "reachable": true,
+        "same_dir": [],
+        "pool_refs_truth": [],
+        "truth_refs_pool": [
+          "astropy/extern/jquery/data/js/jquery.dataTables.js"
+        ]
+      },
+      {
+        "id": "astropy__astropy-6938-nl",
+        "truth": "astropy/io/fits/fitsrec.py",
+        "reachable": true,
+        "same_dir": [
+          "astropy/io/fits/connect.py"
+        ],
+        "pool_refs_truth": [
+          "astropy/io/fits/hdu/table.py"
+        ],
+        "truth_refs_pool": [
+          "astropy/table/table.py"
+        ]
+      },
+      {
+        "id": "astropy__astropy-7746-nl",
+        "truth": "astropy/wcs/wcs.py",
+        "reachable": true,
+        "same_dir": [],
+        "pool_refs_truth": [],
+        "truth_refs_pool": [
+          "cextern/cfitsio/lib/putkey.c"
+        ]
+      },
+      {
+        "id": "django__django-10914-nl",
+        "truth": "django/conf/global_settings.py",
+        "reachable": false,
+        "same_dir": [],
+        "pool_refs_truth": [],
+        "truth_refs_pool": []
+      },
+      {
+        "id": "django__django-11001-nl",
+        "truth": "django/db/models/sql/compiler.py",
+        "reachable": true,
+        "same_dir": [],
+        "pool_refs_truth": [
+          "django/db/models/expressions.py",
+          "django/db/models/query.py"
+        ],
+        "truth_refs_pool": [
+          "django/db/backends/base/base.py",
+          "django/db/models/expressions.py",
+          "django/db/models/query.py"
+        ]
+      },
+      {
+        "id": "django__django-11039-nl",
+        "truth": "django/core/management/commands/sqlmigrate.py",
+        "reachable": true,
+        "same_dir": [],
+        "pool_refs_truth": [],
+        "truth_refs_pool": [
+          "django/db/transaction.py"
+        ]
+      }
+    ]
+  },
+  "repo_packer_guardrail": {
+    "status": "pass",
+    "claim_scope": "Measured comparison: compact selected files and packet-token ceilings plus checked-in repo-packer or full-repo pack proxy output-size baselines.",
+    "default_packet_tokens": 4994,
+    "maximum_default_packet_tokens": 5000,
+    "average_public_selected_files": 8.0,
+    "baselines": [
+      {
+        "id": "full-repo-pack-proxy-astropy",
+        "tool": "FullRepoPackProxy",
+        "path": "benchmarks/public/results/full-repo-pack-proxy-astropy.json",
+        "command": "cargo run -- repo-pack-baseline benchmarks/public/repos/astropy/astropy --id full-repo-pack-proxy-astropy --tool FullRepoPackProxy --out benchmarks/public/results/full-repo-pack-proxy-astropy.json",
+        "required": true,
+        "exists": true,
+        "locally_measured": true,
+        "tokens": 5638468,
+        "bytes": 22553870,
+        "files": 1257,
+        "token_ratio_vs_callsieve_packet": 1129.0484581497797,
+        "minimum_token_ratio_vs_callsieve_packet": 1000.0,
+        "status": "pass"
+      },
+      {
+        "id": "full-repo-pack-proxy-django",
+        "tool": "FullRepoPackProxy",
+        "path": "benchmarks/public/results/full-repo-pack-proxy-django.json",
+        "command": "cargo run -- repo-pack-baseline benchmarks/public/repos/django/django --id full-repo-pack-proxy-django --tool FullRepoPackProxy --out benchmarks/public/results/full-repo-pack-proxy-django.json",
+        "required": true,
+        "exists": true,
+        "locally_measured": true,
+        "tokens": 5155623,
+        "bytes": 20622492,
+        "files": 3283,
+        "token_ratio_vs_callsieve_packet": 1032.363436123348,
+        "minimum_token_ratio_vs_callsieve_packet": 1000.0,
+        "status": "pass"
+      },
+      {
+        "id": "full-repo-pack-proxy-requests",
+        "tool": "FullRepoPackProxy",
+        "path": "benchmarks/public/results/full-repo-pack-proxy-requests.json",
+        "command": "cargo run -- repo-pack-baseline benchmarks/public/repos/psf/requests --id full-repo-pack-proxy-requests --tool FullRepoPackProxy --out benchmarks/public/results/full-repo-pack-proxy-requests.json",
+        "required": true,
+        "exists": true,
+        "locally_measured": true,
+        "tokens": 101186,
+        "bytes": 404741,
+        "files": 48,
+        "token_ratio_vs_callsieve_packet": 20.261513816579896,
+        "minimum_token_ratio_vs_callsieve_packet": 20.0,
+        "status": "pass"
+      }
+    ],
+    "evidence": "CallSieve reports top-k files from public tasks, keeps the local competitive packet under budget, and compares that packet against checked-in full-repo pack output metrics.",
+    "next_baseline": "Refresh checked-in pack baseline artifacts before publishing a release claim, and add external Repomix, Gitingest, or Code2Prompt artifacts when those tools are installed and approved."
+  },
+  "agent_native_search_guardrail": {
+    "status": "pass",
+    "claim_scope": "Measured comparison: CallSieve public proof includes checked agent-native search baseline artifacts with hashed transcript/export provenance, first-correct metrics, and context-token metrics.",
+    "baselines": [
+      {
+        "id": "codex-cli-public-requests",
+        "tool": "Codex CLI native search/read workflow",
+        "path": "benchmarks/public/results/codex-cli-requests.json",
+        "command": "benchmarks/tools/codex-agent-native-requests.py --suite requests",
+        "required": true,
+        "exists": true,
+        "locally_measured": true,
+        "tasks": 10,
+        "agent_native_first_correct_file_rate_at_k": 1.0,
+        "callsieve_first_correct_file_rate_at_k": 1.0,
+        "callsieve_minus_agent_native_first_correct_file_rate_at_k": 0.0,
+        "agent_native_average_context_tokens": 68691,
+        "callsieve_average_packet_tokens": 226,
+        "agent_native_context_token_ratio_vs_callsieve": 303.9424778761062,
+        "source_artifacts": 2,
+        "source_artifact_hashes": [
+          "fnv1a64:2f735c0f7d21857d",
+          "fnv1a64:20dc344a5adaefc3"
+        ],
+        "transcript_source_artifact_hashes": [
+          "fnv1a64:20dc344a5adaefc3"
+        ],
+        "transcript_provenance_status": "pass",
+        "minimum_tasks": 10,
+        "minimum_callsieve_minus_agent_native_first_correct_file_rate_at_k": 0.0,
+        "minimum_agent_native_context_token_ratio_vs_callsieve": 2.0,
+        "status": "pass"
+      },
+      {
+        "id": "codex-cli-public-rust-callsieve",
+        "tool": "Codex CLI native search/read workflow",
+        "path": "benchmarks/public/results/codex-cli-rust-callsieve.json",
+        "command": "benchmarks/tools/codex-agent-native-requests.py --suite rust",
+        "required": true,
+        "exists": true,
+        "locally_measured": true,
+        "tasks": 12,
+        "agent_native_first_correct_file_rate_at_k": 1.0,
+        "callsieve_first_correct_file_rate_at_k": 1.0,
+        "callsieve_minus_agent_native_first_correct_file_rate_at_k": 0.0,
+        "agent_native_average_context_tokens": 363586,
+        "callsieve_average_packet_tokens": 197,
+        "agent_native_context_token_ratio_vs_callsieve": 1845.6142131979695,
+        "source_artifacts": 2,
+        "source_artifact_hashes": [
+          "fnv1a64:ed17f1a1ace104a7",
+          "fnv1a64:359aba78c57ca39a"
+        ],
+        "transcript_source_artifact_hashes": [
+          "fnv1a64:359aba78c57ca39a"
+        ],
+        "transcript_provenance_status": "pass",
+        "minimum_tasks": 12,
+        "minimum_callsieve_minus_agent_native_first_correct_file_rate_at_k": 0.0,
+        "minimum_agent_native_context_token_ratio_vs_callsieve": 2.0,
+        "status": "pass"
+      },
+      {
+        "id": "codex-cli-public-typescript-callsieve",
+        "tool": "Codex CLI native search/read workflow",
+        "path": "benchmarks/public/results/codex-cli-typescript-callsieve.json",
+        "command": "benchmarks/tools/codex-agent-native-requests.py --suite typescript",
+        "required": true,
+        "exists": true,
+        "locally_measured": true,
+        "tasks": 4,
+        "agent_native_first_correct_file_rate_at_k": 1.0,
+        "callsieve_first_correct_file_rate_at_k": 1.0,
+        "callsieve_minus_agent_native_first_correct_file_rate_at_k": 0.0,
+        "agent_native_average_context_tokens": 187026,
+        "callsieve_average_packet_tokens": 200,
+        "agent_native_context_token_ratio_vs_callsieve": 935.13,
+        "source_artifacts": 2,
+        "source_artifact_hashes": [
+          "fnv1a64:4afe280d051e4c74",
+          "fnv1a64:d10a019a3a710b72"
+        ],
+        "transcript_source_artifact_hashes": [
+          "fnv1a64:d10a019a3a710b72"
+        ],
+        "transcript_provenance_status": "pass",
+        "minimum_tasks": 4,
+        "minimum_callsieve_minus_agent_native_first_correct_file_rate_at_k": 0.0,
+        "minimum_agent_native_context_token_ratio_vs_callsieve": 2.0,
+        "status": "pass"
+      }
+    ],
+    "evidence": "Agent-native baseline artifacts are parsed from local JSON and must include hashed task logs plus source transcripts or native-search exports, the checked agent-native measurement protocol, and a passing measured preflight artifact with matching source hashes before metric thresholds can pass.",
+    "next_baseline": "Run `callsieve agent-native-protocol --out benchmarks/public/results/agent-native-protocol.json`, generate a template with `callsieve agent-native-template`, fill agent_native_files and transcript-backed agent_native_context_tokens from an approved native-search run, save the preflight with `callsieve agent-native-check --mode measured --out benchmarks/public/results/<tool>-check.json`, convert it with `callsieve agent-native-baseline`, then add the check under terminal_artifacts and the baseline under agent_native_search_baselines."
+  },
+  "mcp_surface": {
+    "status": "pass",
+    "protocol": "2025-06-18",
+    "required_first_mile_tools": [
+      "callsieve_context",
+      "callsieve_focus",
+      "callsieve_related",
+      "callsieve_tests",
+      "callsieve_status"
+    ],
+    "exposed_tools": [
+      "callsieve_context",
+      "callsieve_symbol",
+      "callsieve_focus",
+      "callsieve_related",
+      "callsieve_tests",
+      "callsieve_stats",
+      "callsieve_status",
+      "callsieve_trace_check",
+      "callsieve_benchmark"
+    ],
+    "missing_required_tools": [],
+    "context_first_tool": "callsieve_context",
+    "local_config_commands": [
+      "cargo run -- mcp-config . --format json",
+      "cargo run -- mcp-config . --format toml"
+    ],
+    "registry_manifest_command": "cargo run -- mcp-registry-manifest --out server.json",
+    "evidence": "The public proof checks the actual MCP tools/list surface for context-first retrieval, targeted focus, related-file expansion, related tests, and freshness status before claiming MCP readiness."
+  },
+  "mcp_contract": {
+    "status": "pass",
+    "contract_version": 1,
+    "context_tool": "callsieve_context",
+    "structured_content_required": true,
+    "default_profile": "skim",
+    "default_token_budget": 1200,
+    "required_structured_content_fields": [
+      "read_first",
+      "sel",
+      "instruction",
+      "freshness",
+      "retrieval_cost",
+      "stats",
+      "trace_event"
+    ],
+    "supported_instruction_expansion_keys": [
+      "o",
+      "next",
+      "rel",
+      "tests"
+    ],
+    "required_freshness_fields": [
+      "initial_fresh",
+      "refreshed",
+      "final_fresh",
+      "index_generation",
+      "stale_files",
+      "fix_command"
+    ],
+    "evidence": "MCP context proof exposes the stable structuredContent contract agents consume before broad grep or repeated file reads."
+  },
+  "agent_setup": {
+    "status": "pass",
+    "claim_scope": "Agent-agnostic local setup evidence: setup-auto detection, project-local MCP config, registry descriptor, lifecycle hooks where available, and templates where hooks are not available.",
+    "required_agents": [
+      "Codex",
+      "Claude Code",
+      "GitHub Copilot",
+      "OpenCode",
+      "Antigravity",
+      "Cursor",
+      "VS Code",
+      "Windsurf",
+      "Continue",
+      "Zed",
+      "Junie",
+      "JetBrains",
+      "Amp",
+      "Goose",
+      "Warp",
+      "Cline",
+      "Zoo",
+      "Roo",
+      "generic MCP"
+    ],
+    "covered_agents": [
+      "Codex",
+      "Claude Code",
+      "GitHub Copilot",
+      "OpenCode",
+      "Antigravity",
+      "Cursor",
+      "VS Code",
+      "Windsurf",
+      "Continue",
+      "Zed",
+      "Junie",
+      "JetBrains",
+      "Amp",
+      "Goose",
+      "Warp",
+      "Cline",
+      "Zoo",
+      "Roo",
+      "generic MCP"
+    ],
+    "missing_required_agents": [],
+    "agent_coverage_count": 19,
+    "minimum_agent_coverage": 19,
+    "default_layer_clients": [
+      "Codex",
+      "Claude Code",
+      "GitHub Copilot",
+      "OpenCode",
+      "Antigravity",
+      "Cursor",
+      "VS Code",
+      "Windsurf",
+      "Continue",
+      "Zed",
+      "Junie",
+      "JetBrains",
+      "Amp",
+      "Goose",
+      "Warp",
+      "Cline",
+      "Zoo",
+      "Roo",
+      "generic MCP"
+    ],
+    "default_layer_clients_covered": [
+      "Codex",
+      "Claude Code",
+      "GitHub Copilot",
+      "OpenCode",
+      "Antigravity",
+      "Cursor",
+      "VS Code",
+      "Windsurf",
+      "Continue",
+      "Zed",
+      "Junie",
+      "JetBrains",
+      "Amp",
+      "Goose",
+      "Warp",
+      "Cline",
+      "Zoo",
+      "Roo",
+      "generic MCP"
+    ],
+    "missing_default_layer_clients": [],
+    "priority_clients": [
+      "Codex",
+      "Claude Code",
+      "GitHub Copilot",
+      "Cursor",
+      "OpenCode",
+      "Zed",
+      "generic MCP"
+    ],
+    "priority_clients_covered": [
+      "Codex",
+      "Claude Code",
+      "GitHub Copilot",
+      "Cursor",
+      "OpenCode",
+      "Zed",
+      "generic MCP"
+    ],
+    "hook_capable_clients": [
+      "Codex",
+      "Claude Code",
+      "GitHub Copilot",
+      "OpenCode",
+      "Antigravity",
+      "Cline"
+    ],
+    "mcp_template_clients": [
+      "Cursor",
+      "VS Code",
+      "Windsurf",
+      "Continue",
+      "Zed",
+      "Junie",
+      "JetBrains",
+      "Amp",
+      "Goose",
+      "Warp",
+      "Zoo",
+      "Roo",
+      "generic MCP"
+    ],
+    "commands": [
+      "cargo run -- setup-auto . --dry-run",
+      "cargo run -- setup-auto .",
+      "cargo run -- mcp-config . --format json",
+      "cargo run -- mcp-config . --format toml",
+      "cargo run -- mcp-registry-manifest --out server.json",
+      "cargo run -- mcp-contract --out benchmarks/public/results/mcp-contract.json",
+      "cargo run -- agent-native-protocol --out benchmarks/public/results/agent-native-protocol.json",
+      "cargo run -- agent-native-template benchmarks/public/repos/psf/requests benchmarks/public/manifest.json --k 5 --out benchmarks/public/results/agent-native-requests-template.json",
+      "cargo run -- codex-hooks doctor . --strict --smoke",
+      "cargo run -- claude-hooks doctor . --strict",
+      "cargo run -- opencode-hooks doctor . --strict"
+    ],
+    "evidence": "The competitive gate requires agent coverage, and public proof exposes the exact setup and MCP commands needed to reproduce the local integration surface.",
+    "next_step": "Run setup-auto --dry-run first, review detected clients, then run setup-auto or per-client hook/MCP setup in the target repository."
+  },
+  "evidence_commands": [
+    "cargo run -- index .",
+    "cargo run -- competitive-report benchmarks/competitive-response-manifest.example.json",
+    "cargo run -- public-proof-report benchmarks/public-proof-manifest.example.json",
+    "cargo run -- setup-auto . --dry-run",
+    "cargo run -- mcp-config . --format json",
+    "cargo run -- mcp-registry-manifest --out server.json",
+    "cargo run -- mcp-contract --out benchmarks/public/results/mcp-contract.json",
+    "cargo run -- agent-native-protocol --out benchmarks/public/results/agent-native-protocol.json",
+    "cargo run -- agent-native-template benchmarks/public/repos/psf/requests benchmarks/public/manifest.json --k 5 --out benchmarks/public/results/agent-native-requests-template.json",
+    "python3 benchmarks/tools/codex-agent-native-requests.py --suite requests --plan-only",
+    "python3 benchmarks/tools/codex-agent-native-requests.py --suite requests --validate-plan",
+    "python3 benchmarks/tools/codex-agent-native-requests.py --suite requests",
+    "python3 benchmarks/tools/codex-agent-native-requests.py --suite rust --plan-only",
+    "python3 benchmarks/tools/codex-agent-native-requests.py --suite rust --validate-plan",
+    "python3 benchmarks/tools/codex-agent-native-requests.py --suite rust",
+    "python3 benchmarks/tools/codex-agent-native-requests.py --suite typescript --plan-only",
+    "python3 benchmarks/tools/codex-agent-native-requests.py --suite typescript --validate-plan",
+    "python3 benchmarks/tools/codex-agent-native-requests.py --suite typescript",
+    "cargo run -- repo-pack-baseline benchmarks/public/repos/astropy/astropy --id full-repo-pack-proxy-astropy --tool FullRepoPackProxy --out benchmarks/public/results/full-repo-pack-proxy-astropy.json",
+    "cargo run -- repo-pack-baseline benchmarks/public/repos/django/django --id full-repo-pack-proxy-django --tool FullRepoPackProxy --out benchmarks/public/results/full-repo-pack-proxy-django.json",
+    "cargo run -- repo-pack-baseline benchmarks/public/repos/psf/requests --id full-repo-pack-proxy-requests --tool FullRepoPackProxy --out benchmarks/public/results/full-repo-pack-proxy-requests.json",
+    "cargo run --features embed -- bench-run benchmarks/public/manifest-50.json --workdir benchmarks/public/repos --compare --out benchmarks/public/results/compare-50-rerun.json --resume",
+    "cargo run --features embed -- bench-run benchmarks/public/manifest-50.json --workdir benchmarks/public/repos --out benchmarks/public/results/mode-a-50-domain-rerun.json --resume",
+    "cargo run --features embed -- bench-run benchmarks/public/manifest.json --workdir benchmarks/public/repos --out benchmarks/public/results/mode-a-requests-seed-rerun.json --resume",
+    "cargo run --features embed -- bench-run benchmarks/public/manifest-nl.json --workdir benchmarks/public/repos --compare --out benchmarks/public/results/compare-nl-rerun.json --resume",
+    "cargo run --features embed -- bench-run benchmarks/public/manifest-nl.json --workdir benchmarks/public/repos --out benchmarks/public/results/mode-a-nl-domain-rerun.json --resume",
+    "cargo run --features embed -- bench-run benchmarks/public/manifest-rust.json --workdir benchmarks/public/repos --out benchmarks/public/results/mode-a-rust-callsieve-rerun.json --resume",
+    "cargo run --features embed -- bench-run benchmarks/public/manifest-typescript.json --workdir benchmarks/public/repos --out benchmarks/public/results/mode-a-typescript-callsieve-rerun.json --resume"
+  ],
+  "next_actions": [
+    "rerun public benchmark reports from pinned local checkouts before making a release claim"
+  ]
+}

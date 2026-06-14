@@ -1,0 +1,444 @@
+{
+  "tool": "Claude Code",
+  "tool_version": "2.1.175 (Claude Code)",
+  "model": "sonnet",
+  "suite": "rust",
+  "repo": "benchmarks/public/repos/PhilipJohnBasile/callsieve",
+  "template": "benchmarks/public/results/agent-native-rust-callsieve-template.json",
+  "public_manifest": "benchmarks/public/manifest-rust.json",
+  "raw_task_transcripts": "benchmarks/public/results/claude-code-rust-callsieve-raw",
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "task_id": {
+        "type": "string"
+      },
+      "files_selected_or_read": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "minItems": 1
+      },
+      "rationale": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "task_id",
+      "files_selected_or_read",
+      "rationale"
+    ],
+    "additionalProperties": false
+  },
+  "constraints": [
+    "Do not use CallSieve, callsieve commands, callsieve MCP tools, or precomputed CallSieve context.",
+    "Do not expose ground-truth files in Claude prompts.",
+    "Do not edit files.",
+    "Check out each task's pinned base_commit before running Claude.",
+    "Use only Claude Code native Glob, Grep, and Read tools.",
+    "Record repo, base_commit, and checked_out_commit in every raw task envelope.",
+    "Record files_selected_or_read from Claude's JSON result.",
+    "Record agent_native_context_tokens from Claude Code JSON usage fields."
+  ],
+  "post_run_artifacts": {
+    "protocol": "benchmarks/public/results/agent-native-protocol.json",
+    "task_log": "benchmarks/public/results/claude-code-rust-callsieve-task-log.json",
+    "transcript": "benchmarks/public/results/claude-code-rust-callsieve-transcript.json",
+    "check": "benchmarks/public/results/claude-code-rust-callsieve-check.json",
+    "baseline": "benchmarks/public/results/claude-code-rust-callsieve.json",
+    "overlay_manifest": "benchmarks/public-proof-manifest.claude-code-rust-callsieve.json",
+    "proof": "benchmarks/public/results/claude-code-rust-callsieve-public-proof.json"
+  },
+  "token_accounting": "agent_native_context_tokens = input_tokens + cache_creation_input_tokens + cache_read_input_tokens from each Claude Code JSON envelope",
+  "template_source_tasks_hash": "fnv1a64:0cad873a8c1bd1c1",
+  "template_index_fingerprint": "fnv1a64:3eda2108fd7b1d53",
+  "template_retrieval_contract_fingerprint": "fnv1a64:18cc30cd8ca21577",
+  "task_count": 12,
+  "tasks": [
+    {
+      "task_id": "callsieve-rust-ranker",
+      "repo": "PhilipJohnBasile/callsieve",
+      "base_commit": "11c7ef19bd2250c74f76b5c6409de7b2d2f07394",
+      "task": "rank files for natural language codebase questions with explainable deterministic scoring",
+      "prompt": "Measurement task for CallSieve public proof.\nDo not use CallSieve, callsieve commands, callsieve MCP tools, or any repo-specific precomputed CallSieve context.\nDo not edit files.\nUse only Claude Code native Glob, Grep, and Read tools made available in this run inside this CallSieve Rust checkout.\nInspect the repository as needed. You must Read every file you rely on.\nReturn JSON only, matching the provided schema.\n\nTask id: callsieve-rust-ranker\nRepository task: rank files for natural language codebase questions with explainable deterministic scoring\n\nReturn files_selected_or_read as repo-relative paths ordered by first use.",
+      "command": [
+        "claude",
+        "-p",
+        "Measurement task for CallSieve public proof.\nDo not use CallSieve, callsieve commands, callsieve MCP tools, or any repo-specific precomputed CallSieve context.\nDo not edit files.\nUse only Claude Code native Glob, Grep, and Read tools made available in this run inside this CallSieve Rust checkout.\nInspect the repository as needed. You must Read every file you rely on.\nReturn JSON only, matching the provided schema.\n\nTask id: callsieve-rust-ranker\nRepository task: rank files for natural language codebase questions with explainable deterministic scoring\n\nReturn files_selected_or_read as repo-relative paths ordered by first use.",
+        "--output-format",
+        "json",
+        "--json-schema",
+        "{\"type\":\"object\",\"properties\":{\"task_id\":{\"type\":\"string\"},\"files_selected_or_read\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"minItems\":1},\"rationale\":{\"type\":\"string\"}},\"required\":[\"task_id\",\"files_selected_or_read\",\"rationale\"],\"additionalProperties\":false}",
+        "--tools",
+        "Glob,Grep,Read",
+        "--permission-mode",
+        "dontAsk",
+        "--max-budget-usd",
+        "0.25",
+        "--model",
+        "sonnet",
+        "--no-session-persistence"
+      ],
+      "checkout_command": [
+        "git",
+        "checkout",
+        "-f",
+        "11c7ef19bd2250c74f76b5c6409de7b2d2f07394"
+      ],
+      "raw_transcript": "benchmarks/public/results/claude-code-rust-callsieve-raw/callsieve-rust-ranker.json"
+    },
+    {
+      "task_id": "callsieve-rust-agent-context",
+      "repo": "PhilipJohnBasile/callsieve",
+      "base_commit": "11c7ef19bd2250c74f76b5c6409de7b2d2f07394",
+      "task": "build compact agent context packets with read first files references tests and blast radius hints",
+      "prompt": "Measurement task for CallSieve public proof.\nDo not use CallSieve, callsieve commands, callsieve MCP tools, or any repo-specific precomputed CallSieve context.\nDo not edit files.\nUse only Claude Code native Glob, Grep, and Read tools made available in this run inside this CallSieve Rust checkout.\nInspect the repository as needed. You must Read every file you rely on.\nReturn JSON only, matching the provided schema.\n\nTask id: callsieve-rust-agent-context\nRepository task: build compact agent context packets with read first files references tests and blast radius hints\n\nReturn files_selected_or_read as repo-relative paths ordered by first use.",
+      "command": [
+        "claude",
+        "-p",
+        "Measurement task for CallSieve public proof.\nDo not use CallSieve, callsieve commands, callsieve MCP tools, or any repo-specific precomputed CallSieve context.\nDo not edit files.\nUse only Claude Code native Glob, Grep, and Read tools made available in this run inside this CallSieve Rust checkout.\nInspect the repository as needed. You must Read every file you rely on.\nReturn JSON only, matching the provided schema.\n\nTask id: callsieve-rust-agent-context\nRepository task: build compact agent context packets with read first files references tests and blast radius hints\n\nReturn files_selected_or_read as repo-relative paths ordered by first use.",
+        "--output-format",
+        "json",
+        "--json-schema",
+        "{\"type\":\"object\",\"properties\":{\"task_id\":{\"type\":\"string\"},\"files_selected_or_read\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"minItems\":1},\"rationale\":{\"type\":\"string\"}},\"required\":[\"task_id\",\"files_selected_or_read\",\"rationale\"],\"additionalProperties\":false}",
+        "--tools",
+        "Glob,Grep,Read",
+        "--permission-mode",
+        "dontAsk",
+        "--max-budget-usd",
+        "0.25",
+        "--model",
+        "sonnet",
+        "--no-session-persistence"
+      ],
+      "checkout_command": [
+        "git",
+        "checkout",
+        "-f",
+        "11c7ef19bd2250c74f76b5c6409de7b2d2f07394"
+      ],
+      "raw_transcript": "benchmarks/public/results/claude-code-rust-callsieve-raw/callsieve-rust-agent-context.json"
+    },
+    {
+      "task_id": "callsieve-rust-tree-sitter-symbols",
+      "repo": "PhilipJohnBasile/callsieve",
+      "base_commit": "11c7ef19bd2250c74f76b5c6409de7b2d2f07394",
+      "task": "parse Python TypeScript JavaScript and Rust symbols with tree sitter into symbol spans",
+      "prompt": "Measurement task for CallSieve public proof.\nDo not use CallSieve, callsieve commands, callsieve MCP tools, or any repo-specific precomputed CallSieve context.\nDo not edit files.\nUse only Claude Code native Glob, Grep, and Read tools made available in this run inside this CallSieve Rust checkout.\nInspect the repository as needed. You must Read every file you rely on.\nReturn JSON only, matching the provided schema.\n\nTask id: callsieve-rust-tree-sitter-symbols\nRepository task: parse Python TypeScript JavaScript and Rust symbols with tree sitter into symbol spans\n\nReturn files_selected_or_read as repo-relative paths ordered by first use.",
+      "command": [
+        "claude",
+        "-p",
+        "Measurement task for CallSieve public proof.\nDo not use CallSieve, callsieve commands, callsieve MCP tools, or any repo-specific precomputed CallSieve context.\nDo not edit files.\nUse only Claude Code native Glob, Grep, and Read tools made available in this run inside this CallSieve Rust checkout.\nInspect the repository as needed. You must Read every file you rely on.\nReturn JSON only, matching the provided schema.\n\nTask id: callsieve-rust-tree-sitter-symbols\nRepository task: parse Python TypeScript JavaScript and Rust symbols with tree sitter into symbol spans\n\nReturn files_selected_or_read as repo-relative paths ordered by first use.",
+        "--output-format",
+        "json",
+        "--json-schema",
+        "{\"type\":\"object\",\"properties\":{\"task_id\":{\"type\":\"string\"},\"files_selected_or_read\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"minItems\":1},\"rationale\":{\"type\":\"string\"}},\"required\":[\"task_id\",\"files_selected_or_read\",\"rationale\"],\"additionalProperties\":false}",
+        "--tools",
+        "Glob,Grep,Read",
+        "--permission-mode",
+        "dontAsk",
+        "--max-budget-usd",
+        "0.25",
+        "--model",
+        "sonnet",
+        "--no-session-persistence"
+      ],
+      "checkout_command": [
+        "git",
+        "checkout",
+        "-f",
+        "11c7ef19bd2250c74f76b5c6409de7b2d2f07394"
+      ],
+      "raw_transcript": "benchmarks/public/results/claude-code-rust-callsieve-raw/callsieve-rust-tree-sitter-symbols.json"
+    },
+    {
+      "task_id": "callsieve-rust-fallback-symbols",
+      "repo": "PhilipJohnBasile/callsieve",
+      "base_commit": "11c7ef19bd2250c74f76b5c6409de7b2d2f07394",
+      "task": "fallback source scanner extracts functions classes structs enums and constants when tree sitter is unavailable",
+      "prompt": "Measurement task for CallSieve public proof.\nDo not use CallSieve, callsieve commands, callsieve MCP tools, or any repo-specific precomputed CallSieve context.\nDo not edit files.\nUse only Claude Code native Glob, Grep, and Read tools made available in this run inside this CallSieve Rust checkout.\nInspect the repository as needed. You must Read every file you rely on.\nReturn JSON only, matching the provided schema.\n\nTask id: callsieve-rust-fallback-symbols\nRepository task: fallback source scanner extracts functions classes structs enums and constants when tree sitter is unavailable\n\nReturn files_selected_or_read as repo-relative paths ordered by first use.",
+      "command": [
+        "claude",
+        "-p",
+        "Measurement task for CallSieve public proof.\nDo not use CallSieve, callsieve commands, callsieve MCP tools, or any repo-specific precomputed CallSieve context.\nDo not edit files.\nUse only Claude Code native Glob, Grep, and Read tools made available in this run inside this CallSieve Rust checkout.\nInspect the repository as needed. You must Read every file you rely on.\nReturn JSON only, matching the provided schema.\n\nTask id: callsieve-rust-fallback-symbols\nRepository task: fallback source scanner extracts functions classes structs enums and constants when tree sitter is unavailable\n\nReturn files_selected_or_read as repo-relative paths ordered by first use.",
+        "--output-format",
+        "json",
+        "--json-schema",
+        "{\"type\":\"object\",\"properties\":{\"task_id\":{\"type\":\"string\"},\"files_selected_or_read\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"minItems\":1},\"rationale\":{\"type\":\"string\"}},\"required\":[\"task_id\",\"files_selected_or_read\",\"rationale\"],\"additionalProperties\":false}",
+        "--tools",
+        "Glob,Grep,Read",
+        "--permission-mode",
+        "dontAsk",
+        "--max-budget-usd",
+        "0.25",
+        "--model",
+        "sonnet",
+        "--no-session-persistence"
+      ],
+      "checkout_command": [
+        "git",
+        "checkout",
+        "-f",
+        "11c7ef19bd2250c74f76b5c6409de7b2d2f07394"
+      ],
+      "raw_transcript": "benchmarks/public/results/claude-code-rust-callsieve-raw/callsieve-rust-fallback-symbols.json"
+    },
+    {
+      "task_id": "callsieve-rust-public-bench",
+      "repo": "PhilipJohnBasile/callsieve",
+      "base_commit": "11c7ef19bd2250c74f76b5c6409de7b2d2f07394",
+      "task": "run public benchmark manifests against pinned local repositories and score first correct file rate",
+      "prompt": "Measurement task for CallSieve public proof.\nDo not use CallSieve, callsieve commands, callsieve MCP tools, or any repo-specific precomputed CallSieve context.\nDo not edit files.\nUse only Claude Code native Glob, Grep, and Read tools made available in this run inside this CallSieve Rust checkout.\nInspect the repository as needed. You must Read every file you rely on.\nReturn JSON only, matching the provided schema.\n\nTask id: callsieve-rust-public-bench\nRepository task: run public benchmark manifests against pinned local repositories and score first correct file rate\n\nReturn files_selected_or_read as repo-relative paths ordered by first use.",
+      "command": [
+        "claude",
+        "-p",
+        "Measurement task for CallSieve public proof.\nDo not use CallSieve, callsieve commands, callsieve MCP tools, or any repo-specific precomputed CallSieve context.\nDo not edit files.\nUse only Claude Code native Glob, Grep, and Read tools made available in this run inside this CallSieve Rust checkout.\nInspect the repository as needed. You must Read every file you rely on.\nReturn JSON only, matching the provided schema.\n\nTask id: callsieve-rust-public-bench\nRepository task: run public benchmark manifests against pinned local repositories and score first correct file rate\n\nReturn files_selected_or_read as repo-relative paths ordered by first use.",
+        "--output-format",
+        "json",
+        "--json-schema",
+        "{\"type\":\"object\",\"properties\":{\"task_id\":{\"type\":\"string\"},\"files_selected_or_read\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"minItems\":1},\"rationale\":{\"type\":\"string\"}},\"required\":[\"task_id\",\"files_selected_or_read\",\"rationale\"],\"additionalProperties\":false}",
+        "--tools",
+        "Glob,Grep,Read",
+        "--permission-mode",
+        "dontAsk",
+        "--max-budget-usd",
+        "0.25",
+        "--model",
+        "sonnet",
+        "--no-session-persistence"
+      ],
+      "checkout_command": [
+        "git",
+        "checkout",
+        "-f",
+        "11c7ef19bd2250c74f76b5c6409de7b2d2f07394"
+      ],
+      "raw_transcript": "benchmarks/public/results/claude-code-rust-callsieve-raw/callsieve-rust-public-bench.json"
+    },
+    {
+      "task_id": "callsieve-rust-public-proof-cli",
+      "repo": "PhilipJohnBasile/callsieve",
+      "base_commit": "11c7ef19bd2250c74f76b5c6409de7b2d2f07394",
+      "task": "generate public proof reports competitive reports evidence packs and CLI command outputs",
+      "prompt": "Measurement task for CallSieve public proof.\nDo not use CallSieve, callsieve commands, callsieve MCP tools, or any repo-specific precomputed CallSieve context.\nDo not edit files.\nUse only Claude Code native Glob, Grep, and Read tools made available in this run inside this CallSieve Rust checkout.\nInspect the repository as needed. You must Read every file you rely on.\nReturn JSON only, matching the provided schema.\n\nTask id: callsieve-rust-public-proof-cli\nRepository task: generate public proof reports competitive reports evidence packs and CLI command outputs\n\nReturn files_selected_or_read as repo-relative paths ordered by first use.",
+      "command": [
+        "claude",
+        "-p",
+        "Measurement task for CallSieve public proof.\nDo not use CallSieve, callsieve commands, callsieve MCP tools, or any repo-specific precomputed CallSieve context.\nDo not edit files.\nUse only Claude Code native Glob, Grep, and Read tools made available in this run inside this CallSieve Rust checkout.\nInspect the repository as needed. You must Read every file you rely on.\nReturn JSON only, matching the provided schema.\n\nTask id: callsieve-rust-public-proof-cli\nRepository task: generate public proof reports competitive reports evidence packs and CLI command outputs\n\nReturn files_selected_or_read as repo-relative paths ordered by first use.",
+        "--output-format",
+        "json",
+        "--json-schema",
+        "{\"type\":\"object\",\"properties\":{\"task_id\":{\"type\":\"string\"},\"files_selected_or_read\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"minItems\":1},\"rationale\":{\"type\":\"string\"}},\"required\":[\"task_id\",\"files_selected_or_read\",\"rationale\"],\"additionalProperties\":false}",
+        "--tools",
+        "Glob,Grep,Read",
+        "--permission-mode",
+        "dontAsk",
+        "--max-budget-usd",
+        "0.25",
+        "--model",
+        "sonnet",
+        "--no-session-persistence"
+      ],
+      "checkout_command": [
+        "git",
+        "checkout",
+        "-f",
+        "11c7ef19bd2250c74f76b5c6409de7b2d2f07394"
+      ],
+      "raw_transcript": "benchmarks/public/results/claude-code-rust-callsieve-raw/callsieve-rust-public-proof-cli.json"
+    },
+    {
+      "task_id": "callsieve-rust-mcp-server",
+      "repo": "PhilipJohnBasile/callsieve",
+      "base_commit": "11c7ef19bd2250c74f76b5c6409de7b2d2f07394",
+      "task": "serve CallSieve context through MCP tools and JSON requests for agent integrations",
+      "prompt": "Measurement task for CallSieve public proof.\nDo not use CallSieve, callsieve commands, callsieve MCP tools, or any repo-specific precomputed CallSieve context.\nDo not edit files.\nUse only Claude Code native Glob, Grep, and Read tools made available in this run inside this CallSieve Rust checkout.\nInspect the repository as needed. You must Read every file you rely on.\nReturn JSON only, matching the provided schema.\n\nTask id: callsieve-rust-mcp-server\nRepository task: serve CallSieve context through MCP tools and JSON requests for agent integrations\n\nReturn files_selected_or_read as repo-relative paths ordered by first use.",
+      "command": [
+        "claude",
+        "-p",
+        "Measurement task for CallSieve public proof.\nDo not use CallSieve, callsieve commands, callsieve MCP tools, or any repo-specific precomputed CallSieve context.\nDo not edit files.\nUse only Claude Code native Glob, Grep, and Read tools made available in this run inside this CallSieve Rust checkout.\nInspect the repository as needed. You must Read every file you rely on.\nReturn JSON only, matching the provided schema.\n\nTask id: callsieve-rust-mcp-server\nRepository task: serve CallSieve context through MCP tools and JSON requests for agent integrations\n\nReturn files_selected_or_read as repo-relative paths ordered by first use.",
+        "--output-format",
+        "json",
+        "--json-schema",
+        "{\"type\":\"object\",\"properties\":{\"task_id\":{\"type\":\"string\"},\"files_selected_or_read\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"minItems\":1},\"rationale\":{\"type\":\"string\"}},\"required\":[\"task_id\",\"files_selected_or_read\",\"rationale\"],\"additionalProperties\":false}",
+        "--tools",
+        "Glob,Grep,Read",
+        "--permission-mode",
+        "dontAsk",
+        "--max-budget-usd",
+        "0.25",
+        "--model",
+        "sonnet",
+        "--no-session-persistence"
+      ],
+      "checkout_command": [
+        "git",
+        "checkout",
+        "-f",
+        "11c7ef19bd2250c74f76b5c6409de7b2d2f07394"
+      ],
+      "raw_transcript": "benchmarks/public/results/claude-code-rust-callsieve-raw/callsieve-rust-mcp-server.json"
+    },
+    {
+      "task_id": "callsieve-rust-repo-walker",
+      "repo": "PhilipJohnBasile/callsieve",
+      "base_commit": "11c7ef19bd2250c74f76b5c6409de7b2d2f07394",
+      "task": "walk repository files while respecting gitignore rules and skipping generated folders",
+      "prompt": "Measurement task for CallSieve public proof.\nDo not use CallSieve, callsieve commands, callsieve MCP tools, or any repo-specific precomputed CallSieve context.\nDo not edit files.\nUse only Claude Code native Glob, Grep, and Read tools made available in this run inside this CallSieve Rust checkout.\nInspect the repository as needed. You must Read every file you rely on.\nReturn JSON only, matching the provided schema.\n\nTask id: callsieve-rust-repo-walker\nRepository task: walk repository files while respecting gitignore rules and skipping generated folders\n\nReturn files_selected_or_read as repo-relative paths ordered by first use.",
+      "command": [
+        "claude",
+        "-p",
+        "Measurement task for CallSieve public proof.\nDo not use CallSieve, callsieve commands, callsieve MCP tools, or any repo-specific precomputed CallSieve context.\nDo not edit files.\nUse only Claude Code native Glob, Grep, and Read tools made available in this run inside this CallSieve Rust checkout.\nInspect the repository as needed. You must Read every file you rely on.\nReturn JSON only, matching the provided schema.\n\nTask id: callsieve-rust-repo-walker\nRepository task: walk repository files while respecting gitignore rules and skipping generated folders\n\nReturn files_selected_or_read as repo-relative paths ordered by first use.",
+        "--output-format",
+        "json",
+        "--json-schema",
+        "{\"type\":\"object\",\"properties\":{\"task_id\":{\"type\":\"string\"},\"files_selected_or_read\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"minItems\":1},\"rationale\":{\"type\":\"string\"}},\"required\":[\"task_id\",\"files_selected_or_read\",\"rationale\"],\"additionalProperties\":false}",
+        "--tools",
+        "Glob,Grep,Read",
+        "--permission-mode",
+        "dontAsk",
+        "--max-budget-usd",
+        "0.25",
+        "--model",
+        "sonnet",
+        "--no-session-persistence"
+      ],
+      "checkout_command": [
+        "git",
+        "checkout",
+        "-f",
+        "11c7ef19bd2250c74f76b5c6409de7b2d2f07394"
+      ],
+      "raw_transcript": "benchmarks/public/results/claude-code-rust-callsieve-raw/callsieve-rust-repo-walker.json"
+    },
+    {
+      "task_id": "callsieve-rust-json-store",
+      "repo": "PhilipJohnBasile/callsieve",
+      "base_commit": "11c7ef19bd2250c74f76b5c6409de7b2d2f07394",
+      "task": "persist and load the local JSON code index for a repository",
+      "prompt": "Measurement task for CallSieve public proof.\nDo not use CallSieve, callsieve commands, callsieve MCP tools, or any repo-specific precomputed CallSieve context.\nDo not edit files.\nUse only Claude Code native Glob, Grep, and Read tools made available in this run inside this CallSieve Rust checkout.\nInspect the repository as needed. You must Read every file you rely on.\nReturn JSON only, matching the provided schema.\n\nTask id: callsieve-rust-json-store\nRepository task: persist and load the local JSON code index for a repository\n\nReturn files_selected_or_read as repo-relative paths ordered by first use.",
+      "command": [
+        "claude",
+        "-p",
+        "Measurement task for CallSieve public proof.\nDo not use CallSieve, callsieve commands, callsieve MCP tools, or any repo-specific precomputed CallSieve context.\nDo not edit files.\nUse only Claude Code native Glob, Grep, and Read tools made available in this run inside this CallSieve Rust checkout.\nInspect the repository as needed. You must Read every file you rely on.\nReturn JSON only, matching the provided schema.\n\nTask id: callsieve-rust-json-store\nRepository task: persist and load the local JSON code index for a repository\n\nReturn files_selected_or_read as repo-relative paths ordered by first use.",
+        "--output-format",
+        "json",
+        "--json-schema",
+        "{\"type\":\"object\",\"properties\":{\"task_id\":{\"type\":\"string\"},\"files_selected_or_read\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"minItems\":1},\"rationale\":{\"type\":\"string\"}},\"required\":[\"task_id\",\"files_selected_or_read\",\"rationale\"],\"additionalProperties\":false}",
+        "--tools",
+        "Glob,Grep,Read",
+        "--permission-mode",
+        "dontAsk",
+        "--max-budget-usd",
+        "0.25",
+        "--model",
+        "sonnet",
+        "--no-session-persistence"
+      ],
+      "checkout_command": [
+        "git",
+        "checkout",
+        "-f",
+        "11c7ef19bd2250c74f76b5c6409de7b2d2f07394"
+      ],
+      "raw_transcript": "benchmarks/public/results/claude-code-rust-callsieve-raw/callsieve-rust-json-store.json"
+    },
+    {
+      "task_id": "callsieve-rust-import-extraction",
+      "repo": "PhilipJohnBasile/callsieve",
+      "base_commit": "11c7ef19bd2250c74f76b5c6409de7b2d2f07394",
+      "task": "extract imports and module dependency edges from source files",
+      "prompt": "Measurement task for CallSieve public proof.\nDo not use CallSieve, callsieve commands, callsieve MCP tools, or any repo-specific precomputed CallSieve context.\nDo not edit files.\nUse only Claude Code native Glob, Grep, and Read tools made available in this run inside this CallSieve Rust checkout.\nInspect the repository as needed. You must Read every file you rely on.\nReturn JSON only, matching the provided schema.\n\nTask id: callsieve-rust-import-extraction\nRepository task: extract imports and module dependency edges from source files\n\nReturn files_selected_or_read as repo-relative paths ordered by first use.",
+      "command": [
+        "claude",
+        "-p",
+        "Measurement task for CallSieve public proof.\nDo not use CallSieve, callsieve commands, callsieve MCP tools, or any repo-specific precomputed CallSieve context.\nDo not edit files.\nUse only Claude Code native Glob, Grep, and Read tools made available in this run inside this CallSieve Rust checkout.\nInspect the repository as needed. You must Read every file you rely on.\nReturn JSON only, matching the provided schema.\n\nTask id: callsieve-rust-import-extraction\nRepository task: extract imports and module dependency edges from source files\n\nReturn files_selected_or_read as repo-relative paths ordered by first use.",
+        "--output-format",
+        "json",
+        "--json-schema",
+        "{\"type\":\"object\",\"properties\":{\"task_id\":{\"type\":\"string\"},\"files_selected_or_read\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"minItems\":1},\"rationale\":{\"type\":\"string\"}},\"required\":[\"task_id\",\"files_selected_or_read\",\"rationale\"],\"additionalProperties\":false}",
+        "--tools",
+        "Glob,Grep,Read",
+        "--permission-mode",
+        "dontAsk",
+        "--max-budget-usd",
+        "0.25",
+        "--model",
+        "sonnet",
+        "--no-session-persistence"
+      ],
+      "checkout_command": [
+        "git",
+        "checkout",
+        "-f",
+        "11c7ef19bd2250c74f76b5c6409de7b2d2f07394"
+      ],
+      "raw_transcript": "benchmarks/public/results/claude-code-rust-callsieve-raw/callsieve-rust-import-extraction.json"
+    },
+    {
+      "task_id": "callsieve-rust-stacktrace",
+      "repo": "PhilipJohnBasile/callsieve",
+      "base_commit": "11c7ef19bd2250c74f76b5c6409de7b2d2f07394",
+      "task": "summarize stack traces into relevant source files and frames",
+      "prompt": "Measurement task for CallSieve public proof.\nDo not use CallSieve, callsieve commands, callsieve MCP tools, or any repo-specific precomputed CallSieve context.\nDo not edit files.\nUse only Claude Code native Glob, Grep, and Read tools made available in this run inside this CallSieve Rust checkout.\nInspect the repository as needed. You must Read every file you rely on.\nReturn JSON only, matching the provided schema.\n\nTask id: callsieve-rust-stacktrace\nRepository task: summarize stack traces into relevant source files and frames\n\nReturn files_selected_or_read as repo-relative paths ordered by first use.",
+      "command": [
+        "claude",
+        "-p",
+        "Measurement task for CallSieve public proof.\nDo not use CallSieve, callsieve commands, callsieve MCP tools, or any repo-specific precomputed CallSieve context.\nDo not edit files.\nUse only Claude Code native Glob, Grep, and Read tools made available in this run inside this CallSieve Rust checkout.\nInspect the repository as needed. You must Read every file you rely on.\nReturn JSON only, matching the provided schema.\n\nTask id: callsieve-rust-stacktrace\nRepository task: summarize stack traces into relevant source files and frames\n\nReturn files_selected_or_read as repo-relative paths ordered by first use.",
+        "--output-format",
+        "json",
+        "--json-schema",
+        "{\"type\":\"object\",\"properties\":{\"task_id\":{\"type\":\"string\"},\"files_selected_or_read\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"minItems\":1},\"rationale\":{\"type\":\"string\"}},\"required\":[\"task_id\",\"files_selected_or_read\",\"rationale\"],\"additionalProperties\":false}",
+        "--tools",
+        "Glob,Grep,Read",
+        "--permission-mode",
+        "dontAsk",
+        "--max-budget-usd",
+        "0.25",
+        "--model",
+        "sonnet",
+        "--no-session-persistence"
+      ],
+      "checkout_command": [
+        "git",
+        "checkout",
+        "-f",
+        "11c7ef19bd2250c74f76b5c6409de7b2d2f07394"
+      ],
+      "raw_transcript": "benchmarks/public/results/claude-code-rust-callsieve-raw/callsieve-rust-stacktrace.json"
+    },
+    {
+      "task_id": "callsieve-rust-reference-graph",
+      "repo": "PhilipJohnBasile/callsieve",
+      "base_commit": "11c7ef19bd2250c74f76b5c6409de7b2d2f07394",
+      "task": "find references calls and related symbols between indexed files",
+      "prompt": "Measurement task for CallSieve public proof.\nDo not use CallSieve, callsieve commands, callsieve MCP tools, or any repo-specific precomputed CallSieve context.\nDo not edit files.\nUse only Claude Code native Glob, Grep, and Read tools made available in this run inside this CallSieve Rust checkout.\nInspect the repository as needed. You must Read every file you rely on.\nReturn JSON only, matching the provided schema.\n\nTask id: callsieve-rust-reference-graph\nRepository task: find references calls and related symbols between indexed files\n\nReturn files_selected_or_read as repo-relative paths ordered by first use.",
+      "command": [
+        "claude",
+        "-p",
+        "Measurement task for CallSieve public proof.\nDo not use CallSieve, callsieve commands, callsieve MCP tools, or any repo-specific precomputed CallSieve context.\nDo not edit files.\nUse only Claude Code native Glob, Grep, and Read tools made available in this run inside this CallSieve Rust checkout.\nInspect the repository as needed. You must Read every file you rely on.\nReturn JSON only, matching the provided schema.\n\nTask id: callsieve-rust-reference-graph\nRepository task: find references calls and related symbols between indexed files\n\nReturn files_selected_or_read as repo-relative paths ordered by first use.",
+        "--output-format",
+        "json",
+        "--json-schema",
+        "{\"type\":\"object\",\"properties\":{\"task_id\":{\"type\":\"string\"},\"files_selected_or_read\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"minItems\":1},\"rationale\":{\"type\":\"string\"}},\"required\":[\"task_id\",\"files_selected_or_read\",\"rationale\"],\"additionalProperties\":false}",
+        "--tools",
+        "Glob,Grep,Read",
+        "--permission-mode",
+        "dontAsk",
+        "--max-budget-usd",
+        "0.25",
+        "--model",
+        "sonnet",
+        "--no-session-persistence"
+      ],
+      "checkout_command": [
+        "git",
+        "checkout",
+        "-f",
+        "11c7ef19bd2250c74f76b5c6409de7b2d2f07394"
+      ],
+      "raw_transcript": "benchmarks/public/results/claude-code-rust-callsieve-raw/callsieve-rust-reference-graph.json"
+    }
+  ]
+}

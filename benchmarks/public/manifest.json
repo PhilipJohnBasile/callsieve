@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "description": "CallSieve public benchmark - Mode A (retrieval-only) seed manifest. Five issues drawn from SWE-bench Lite for psf/requests. Each entry pins a base commit and the resolving PR's patched-file list so a third party can reproduce the recall@K result deterministically without invoking any LLM.",
+  "description": "CallSieve public benchmark - Mode A (retrieval-only) seed manifest. Ten public psf/requests PR tasks pin each base commit and the resolving PR's patched source-file list so a third party can reproduce the recall@K result deterministically without invoking any LLM.",
   "mode": "A",
   "default_k": 5,
   "issues": [
@@ -48,12 +48,63 @@
     {
       "id": "psf__requests-5414",
       "repo": "psf/requests",
-      "base_commit": "4f6c0187150af09d085e3c7bfa3675fde1b03b00",
+      "base_commit": "2b06a952a9e6e23e9eda2c8759adb62739730a75",
       "task": "Getting http://.example.com raises UnicodeError",
       "ground_truth_files": [
         "requests/models.py"
       ],
       "resolving_pr": 5435
+    },
+    {
+      "id": "psf__requests-6017",
+      "repo": "psf/requests",
+      "base_commit": "e2064a2c0512d0a93cf0162bf8936cf76e898ffc",
+      "task": "Fix erroneous use of 'schema' instead of 'scheme'",
+      "ground_truth_files": [
+        "requests/exceptions.py",
+        "requests/models.py"
+      ],
+      "resolving_pr": 6017
+    },
+    {
+      "id": "psf__requests-5391",
+      "repo": "psf/requests",
+      "base_commit": "2d2447e210cf0b9e8c7484bfc6f158de9b24c171",
+      "task": "Send only one Host header in chunked request",
+      "ground_truth_files": [
+        "requests/adapters.py"
+      ],
+      "resolving_pr": 5391
+    },
+    {
+      "id": "psf__requests-5496",
+      "repo": "psf/requests",
+      "base_commit": "737dd0c3c6b9c090d1d525ffc0c7449d2cdca0ac",
+      "task": "Avoid unnecessary computation of data length for non-stream requests when preparing request bodies",
+      "ground_truth_files": [
+        "requests/models.py"
+      ],
+      "resolving_pr": 5496
+    },
+    {
+      "id": "psf__requests-5492",
+      "repo": "psf/requests",
+      "base_commit": "9ed5db8ed28e816b597dafd328b342ec95466afa",
+      "task": "Avoid calling resolve_redirects when not following redirects while creating request history",
+      "ground_truth_files": [
+        "requests/sessions.py"
+      ],
+      "resolving_pr": 5492
+    },
+    {
+      "id": "psf__requests-5643",
+      "repo": "psf/requests",
+      "base_commit": "143150233162d609330941ec2aacde5ed4caa510",
+      "task": "Respect the NETRC environment variable",
+      "ground_truth_files": [
+        "requests/utils.py"
+      ],
+      "resolving_pr": 5643
     }
   ]
 }

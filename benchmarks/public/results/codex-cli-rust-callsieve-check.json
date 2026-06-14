@@ -1,0 +1,30 @@
+{
+  "command": "agent-native-check",
+  "schema_version": 1,
+  "status": "pass",
+  "mode": "measured",
+  "tasks_path": "benchmarks/public/results/codex-cli-rust-callsieve-task-log.json",
+  "task_count": 12,
+  "tasks_with_expected_files": 12,
+  "tasks_with_callsieve_files": 12,
+  "tasks_with_callsieve_packet_tokens": 12,
+  "tasks_with_agent_native_files": 12,
+  "tasks_with_agent_native_context_tokens": 12,
+  "tasks_ready_for_mode": 12,
+  "source_artifact_evidence": [
+    {
+      "path": "benchmarks/public/results/codex-cli-rust-callsieve-task-log.json",
+      "role": "task_log",
+      "bytes": 13744,
+      "hash": "fnv1a64:ed17f1a1ace104a7"
+    },
+    {
+      "path": "benchmarks/public/results/codex-cli-rust-callsieve-transcript.json",
+      "role": "agent_native_transcript_or_export",
+      "bytes": 3344778,
+      "hash": "fnv1a64:359aba78c57ca39a"
+    }
+  ],
+  "issues": [],
+  "next_step": "Run agent-native-baseline with the same task log and source artifacts, then add the generated artifact to agent_native_search_baselines."
+}

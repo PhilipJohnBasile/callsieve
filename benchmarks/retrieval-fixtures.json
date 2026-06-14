@@ -5,7 +5,7 @@
       "id": "code-edit-agent-context",
       "category": "code_edit",
       "task": "change agent-context read-first context generation timing and debug output",
-      "expected_files": ["src/query/mod.rs", "src/cli.rs"],
+      "expected_files": ["src/query/mod.rs", "src/cli/mod.rs"],
       "critical_files": ["src/query/mod.rs"]
     },
     {
@@ -58,8 +58,8 @@
       "id": "cli-agent-setup",
       "category": "cli",
       "task": "harden agent setup enforce grep shim and first command CLI workflow",
-      "expected_files": ["src/cli.rs", "README.md", "docs/MCP.md"],
-      "critical_files": ["src/cli.rs"]
+      "expected_files": ["src/cli/mod.rs", "docs/AGENT_CLI.md"],
+      "critical_files": ["src/cli/mod.rs"]
     },
     {
       "id": "refactor-lookup-cache",

@@ -1,0 +1,653 @@
+{
+  "mode": "A",
+  "schema_version": 1,
+  "generated_at_unix": 1781370128,
+  "generated_at_iso_date": "2026-06-13",
+  "manifest": {
+    "path": "benchmarks/public/manifest-nl.json",
+    "schema_version": 1,
+    "mode": "A/B",
+    "description": "CallSieve public benchmark - natural-language retrieval slice. Thirty issues are derived from the public SWE-bench Lite subset with prompts rewritten to avoid direct file paths, symbol names, and code snippets; ground_truth_files remain the original gold patch files.",
+    "issue_count": 30
+  },
+  "k": 5,
+  "aggregate": {
+    "evaluated": 30,
+    "skipped": 0,
+    "total": 30,
+    "first_correct_file_rate_at_k": 0.5,
+    "hits": 15
+  },
+  "issues": [
+    {
+      "id": "astropy__astropy-12907-nl",
+      "repo": "astropy/astropy",
+      "base_commit": "d16bfe05a744909de4b27f5875fe0d4ed41ce607",
+      "task": "fix incorrect independence reporting for nested combined models",
+      "ground_truth_files": [
+        "astropy/modeling/separable.py"
+      ],
+      "k": 5,
+      "top_k_files": [
+        "astropy/modeling/models.py",
+        "astropy/extern/jquery/data/js/jquery.dataTables.js",
+        "astropy/modeling/core.py",
+        "astropy/modeling/physical_models.py",
+        "astropy/modeling/polynomial.py"
+      ],
+      "selected_files_count": 8,
+      "first_correct_file_rate_at_k": 0.0,
+      "matched_files": []
+    },
+    {
+      "id": "astropy__astropy-14182-nl",
+      "repo": "astropy/astropy",
+      "base_commit": "a5917978be39d13cd90b517e1de4e7a539ffaa48",
+      "task": "support table output that includes header rows in restructured text",
+      "ground_truth_files": [
+        "astropy/io/ascii/rst.py"
+      ],
+      "k": 5,
+      "top_k_files": [
+        "astropy/io/ascii/rst.py",
+        "astropy/io/fits/scripts/fitsheader.py",
+        "astropy/io/fits/header.py",
+        "astropy/table/table.py",
+        "cextern/cfitsio/lib/fitscore.c"
+      ],
+      "selected_files_count": 8,
+      "first_correct_file_rate_at_k": 1.0,
+      "matched_files": [
+        "astropy/io/ascii/rst.py"
+      ]
+    },
+    {
+      "id": "astropy__astropy-14365-nl",
+      "repo": "astropy/astropy",
+      "base_commit": "7269fa3e33e8d02485a647da91a5a2a60a06af61",
+      "task": "accept lower case commands when reading plotting data tables",
+      "ground_truth_files": [
+        "astropy/io/ascii/qdp.py"
+      ],
+      "k": 5,
+      "top_k_files": [
+        "astropy/extern/jquery/data/js/jquery.dataTables.js",
+        "astropy/extern/jquery/data/js/jquery.dataTables.min.js",
+        "astropy/io/votable/tree.py",
+        "astropy/extern/jquery/data/js/jquery-3.6.0.js",
+        "astropy/io/votable/exceptions.py"
+      ],
+      "selected_files_count": 8,
+      "first_correct_file_rate_at_k": 0.0,
+      "matched_files": []
+    },
+    {
+      "id": "astropy__astropy-14995-nl",
+      "repo": "astropy/astropy",
+      "base_commit": "b16c7d12ccbc7b2d20364b89fb44285bcbfede54",
+      "task": "keep mask handling correct when arithmetic uses an operand without a mask",
+      "ground_truth_files": [
+        "astropy/nddata/mixins/ndarithmetic.py"
+      ],
+      "k": 5,
+      "top_k_files": [
+        "astropy/nddata/mixins/ndarithmetic.py",
+        "astropy/nddata/compat.py",
+        "astropy/nddata/nduncertainty.py",
+        "astropy/nddata/__init__.py",
+        "astropy/extern/jquery/data/js/jquery-3.6.0.js"
+      ],
+      "selected_files_count": 8,
+      "first_correct_file_rate_at_k": 1.0,
+      "matched_files": [
+        "astropy/nddata/mixins/ndarithmetic.py"
+      ]
+    },
+    {
+      "id": "astropy__astropy-6938-nl",
+      "repo": "astropy/astropy",
+      "base_commit": "c76af9ed6bb89bfba45b9f5bc1e635188278e2fa",
+      "task": "read floating point table values that use nonstandard exponent letters",
+      "ground_truth_files": [
+        "astropy/io/fits/fitsrec.py"
+      ],
+      "k": 5,
+      "top_k_files": [
+        "astropy/io/votable/converters.py",
+        "astropy/table/table.py",
+        "astropy/extern/js/jquery.dataTables.js",
+        "astropy/extern/ply/yacc.py",
+        "astropy/io/fits/connect.py"
+      ],
+      "selected_files_count": 8,
+      "first_correct_file_rate_at_k": 0.0,
+      "matched_files": []
+    },
+    {
+      "id": "astropy__astropy-7746-nl",
+      "repo": "astropy/astropy",
+      "base_commit": "d5bd3f68bb6d5ce3a61bdce9883ee750d1afade5",
+      "task": "return empty coordinate results instead of failing on empty coordinate inputs",
+      "ground_truth_files": [
+        "astropy/wcs/wcs.py"
+      ],
+      "k": 5,
+      "top_k_files": [
+        "cextern/cfitsio/lib/putkey.c",
+        "astropy/visualization/tests/test_stretch.py",
+        "cextern/cfitsio/docs/changes.txt",
+        "cextern/cfitsio/zlib/inflate.c",
+        "astropy/_erfa/erfa_generator.py"
+      ],
+      "selected_files_count": 8,
+      "first_correct_file_rate_at_k": 0.0,
+      "matched_files": []
+    },
+    {
+      "id": "django__django-10914-nl",
+      "repo": "django/django",
+      "base_commit": "e7fd69d051eaa67cb17f172a39b57253e9cb831a",
+      "task": "set safer default permissions for uploaded files",
+      "ground_truth_files": [
+        "django/conf/global_settings.py"
+      ],
+      "k": 5,
+      "top_k_files": [
+        "django/core/files/uploadedfile.py",
+        "tests/file_storage/tests.py",
+        "django/conf/global_settings.py",
+        "django/core/files/storage.py",
+        "django/db/models/fields/files.py"
+      ],
+      "selected_files_count": 8,
+      "first_correct_file_rate_at_k": 1.0,
+      "matched_files": [
+        "django/conf/global_settings.py"
+      ]
+    },
+    {
+      "id": "django__django-10924-nl",
+      "repo": "django/django",
+      "base_commit": "bceadd2788dc2dad53eba0caae172bd8522fd483",
+      "task": "allow a file path setting on a model field to be provided lazily",
+      "ground_truth_files": [
+        "django/db/models/fields/__init__.py"
+      ],
+      "k": 5,
+      "top_k_files": [
+        "django/forms/fields.py",
+        "django/forms/models.py",
+        "js_tests/qunit/qunit.js",
+        "django/db/models/fields/__init__.py",
+        "docs/ref/files/file.txt"
+      ],
+      "selected_files_count": 8,
+      "first_correct_file_rate_at_k": 1.0,
+      "matched_files": [
+        "django/db/models/fields/__init__.py"
+      ]
+    },
+    {
+      "id": "django__django-11001-nl",
+      "repo": "django/django",
+      "base_commit": "ef082ebb84f00e38af4e8880d04e8365c2766d34",
+      "task": "preserve multiline raw ordering clauses when compiling database queries",
+      "ground_truth_files": [
+        "django/db/models/sql/compiler.py"
+      ],
+      "k": 5,
+      "top_k_files": [
+        "django/db/models/sql/compiler.py",
+        "django/db/backends/mysql/compiler.py",
+        "django/db/models/query.py",
+        "django/db/backends/base/operations.py",
+        "django/db/models/expressions.py"
+      ],
+      "selected_files_count": 8,
+      "first_correct_file_rate_at_k": 1.0,
+      "matched_files": [
+        "django/db/models/sql/compiler.py"
+      ]
+    },
+    {
+      "id": "django__django-11019-nl",
+      "repo": "django/django",
+      "base_commit": "93e892bb645b16ebaf287beb5fe7f3ffe8d10408",
+      "task": "avoid unnecessary media ordering warnings when several form assets are combined",
+      "ground_truth_files": [
+        "django/forms/widgets.py"
+      ],
+      "k": 5,
+      "top_k_files": [
+        "django/contrib/admin/widgets.py",
+        "django/forms/widgets.py",
+        "django/conf/__init__.py",
+        "tests/forms_tests/tests/test_formsets.py",
+        "django/contrib/admin/utils.py"
+      ],
+      "selected_files_count": 8,
+      "first_correct_file_rate_at_k": 1.0,
+      "matched_files": [
+        "django/forms/widgets.py"
+      ]
+    },
+    {
+      "id": "django__django-11039-nl",
+      "repo": "django/django",
+      "base_commit": "d5276398046ce4a102776a1e67dcac2884d80dfe",
+      "task": "avoid wrapping migration output in a transaction when the database cannot use one",
+      "ground_truth_files": [
+        "django/core/management/commands/sqlmigrate.py"
+      ],
+      "k": 5,
+      "top_k_files": [
+        "django/db/transaction.py",
+        "django/db/migrations/migration.py",
+        "django/utils/html.py",
+        "docs/ref/models/querysets.txt",
+        "docs/releases/1.10.txt"
+      ],
+      "selected_files_count": 8,
+      "first_correct_file_rate_at_k": 0.0,
+      "matched_files": []
+    },
+    {
+      "id": "django__django-11049-nl",
+      "repo": "django/django",
+      "base_commit": "17455e924e243e7a55e8a38f45966d8cbb27c273",
+      "task": "show the correct accepted format when duration input is invalid",
+      "ground_truth_files": [
+        "django/db/models/fields/__init__.py"
+      ],
+      "k": 5,
+      "top_k_files": [
+        "django/utils/duration.py",
+        "django/db/models/fields/__init__.py",
+        "django/db/backends/sqlite3/operations.py",
+        "django/contrib/admin/static/admin/js/inlines.js",
+        "js_tests/qunit/qunit.js"
+      ],
+      "selected_files_count": 8,
+      "first_correct_file_rate_at_k": 1.0,
+      "matched_files": [
+        "django/db/models/fields/__init__.py"
+      ]
+    },
+    {
+      "id": "django__django-11099-nl",
+      "repo": "django/django",
+      "base_commit": "d26b2424437dabeeca94d7900b37d2df4410da0c",
+      "task": "reject usernames that sneak in a trailing newline",
+      "ground_truth_files": [
+        "django/contrib/auth/validators.py"
+      ],
+      "k": 5,
+      "top_k_files": [
+        "django/middleware/csrf.py",
+        "django/contrib/auth/__init__.py",
+        "tests/auth_tests/test_management.py",
+        "django/core/handlers/wsgi.py",
+        "django/http/request.py"
+      ],
+      "selected_files_count": 8,
+      "first_correct_file_rate_at_k": 0.0,
+      "matched_files": []
+    },
+    {
+      "id": "django__django-11133-nl",
+      "repo": "django/django",
+      "base_commit": "879cc3da6249e920b8d54518a0ae06de835d7373",
+      "task": "allow binary memory views to be written into responses",
+      "ground_truth_files": [
+        "django/http/response.py"
+      ],
+      "k": 5,
+      "top_k_files": [
+        "django/contrib/admindocs/views.py",
+        "django/contrib/auth/views.py",
+        "django/http/response.py",
+        "django/http/__init__.py",
+        "django/core/exceptions.py"
+      ],
+      "selected_files_count": 8,
+      "first_correct_file_rate_at_k": 1.0,
+      "matched_files": [
+        "django/http/response.py"
+      ]
+    },
+    {
+      "id": "django__django-11179-nl",
+      "repo": "django/django",
+      "base_commit": "19fc6376ce67d01ca37a91ef2f55ef769f50513a",
+      "task": "clear the primary key after deleting an object with no related dependencies",
+      "ground_truth_files": [
+        "django/db/models/deletion.py"
+      ],
+      "k": 5,
+      "top_k_files": [
+        "django/contrib/admin/static/admin/js/admin/RelatedObjectLookups.js",
+        "tests/schema/tests.py",
+        "django/db/backends/base/schema.py",
+        "django/db/models/fields/related_descriptors.py",
+        "django/contrib/postgres/fields/jsonb.py"
+      ],
+      "selected_files_count": 8,
+      "first_correct_file_rate_at_k": 0.0,
+      "matched_files": []
+    },
+    {
+      "id": "django__django-11283-nl",
+      "repo": "django/django",
+      "base_commit": "08a4ee06510ae45562c228eefbdcaac84bd38c7a",
+      "task": "make the proxy permission migration tolerate models that were recreated",
+      "ground_truth_files": [
+        "django/contrib/auth/migrations/0011_update_proxy_permissions.py"
+      ],
+      "k": 5,
+      "top_k_files": [
+        "django/contrib/gis/db/models/proxy.py",
+        "django/db/models/fields/proxy.py",
+        "django/contrib/auth/migrations/0011_update_proxy_permissions.py",
+        "django/db/migrations/migration.py",
+        "django/contrib/auth/checks.py"
+      ],
+      "selected_files_count": 8,
+      "first_correct_file_rate_at_k": 1.0,
+      "matched_files": [
+        "django/contrib/auth/migrations/0011_update_proxy_permissions.py"
+      ]
+    },
+    {
+      "id": "django__django-11422-nl",
+      "repo": "django/django",
+      "base_commit": "df46b329e0900e9e4dc1d60816c1dce6dfc1094e",
+      "task": "track changes to the main management script during automatic reloads",
+      "ground_truth_files": [
+        "django/utils/autoreload.py"
+      ],
+      "k": 5,
+      "top_k_files": [
+        "django/contrib/admin/views/main.py",
+        "django/conf/__init__.py",
+        "js_tests/qunit/qunit.js",
+        "docs/ref/contrib/admin/index.txt",
+        "django/conf/global_settings.py"
+      ],
+      "selected_files_count": 8,
+      "first_correct_file_rate_at_k": 0.0,
+      "matched_files": []
+    },
+    {
+      "id": "django__django-11564-nl",
+      "repo": "django/django",
+      "base_commit": "580e644f24f1c5ae5b94784fb73a9953a178fd26",
+      "task": "include the configured script prefix when building static and media urls",
+      "ground_truth_files": [
+        "django/conf/__init__.py"
+      ],
+      "k": 5,
+      "top_k_files": [
+        "django/conf/urls/static.py",
+        "django/templatetags/static.py",
+        "django/conf/__init__.py",
+        "django/core/handlers/asgi.py",
+        "django/core/exceptions.py"
+      ],
+      "selected_files_count": 8,
+      "first_correct_file_rate_at_k": 1.0,
+      "matched_files": [
+        "django/conf/__init__.py"
+      ]
+    },
+    {
+      "id": "django__django-11583-nl",
+      "repo": "django/django",
+      "base_commit": "60dc957a825232fdda9138e2f8878b2ca407a7c9",
+      "task": "avoid intermittent reload crashes caused by invalid null bytes",
+      "ground_truth_files": [
+        "django/utils/autoreload.py"
+      ],
+      "k": 5,
+      "top_k_files": [
+        "django/conf/global_settings.py",
+        "django/contrib/gis/db/models/functions.py",
+        "django/core/exceptions.py",
+        "django/db/__init__.py",
+        "django/db/models/fields/__init__.py"
+      ],
+      "selected_files_count": 8,
+      "first_correct_file_rate_at_k": 0.0,
+      "matched_files": []
+    },
+    {
+      "id": "django__django-11620-nl",
+      "repo": "django/django",
+      "base_commit": "514efa3129792ec2abb2444f3e7aeb3f21a38386",
+      "task": "show a technical debug response when a route converter raises a missing page error",
+      "ground_truth_files": [
+        "django/views/debug.py"
+      ],
+      "k": 5,
+      "top_k_files": [
+        "django/views/debug.py",
+        "django/conf/global_settings.py",
+        "js_tests/qunit/qunit.js",
+        "django/http/response.py",
+        "tests/view_tests/views.py"
+      ],
+      "selected_files_count": 8,
+      "first_correct_file_rate_at_k": 1.0,
+      "matched_files": [
+        "django/views/debug.py"
+      ]
+    },
+    {
+      "id": "django__django-11630-nl",
+      "repo": "django/django",
+      "base_commit": "65e86948b80262574058a94ccaae3a9b59c3faea",
+      "task": "report duplicate database table names only when they come from conflicting models",
+      "ground_truth_files": [
+        "django/core/checks/model_checks.py"
+      ],
+      "k": 5,
+      "top_k_files": [
+        "django/db/migrations/operations/models.py",
+        "django/contrib/gis/db/backends/base/models.py",
+        "django/db/models/base.py",
+        "django/db/models/sql/query.py",
+        "tests/reserved_names/models.py"
+      ],
+      "selected_files_count": 8,
+      "first_correct_file_rate_at_k": 0.0,
+      "matched_files": []
+    },
+    {
+      "id": "django__django-11742-nl",
+      "repo": "django/django",
+      "base_commit": "fee75d2aed4e58ada6567c464cfd22e89dc65f4a",
+      "task": "check that stored text can fit the longest configured choice",
+      "ground_truth_files": [
+        "django/db/models/fields/__init__.py"
+      ],
+      "k": 5,
+      "top_k_files": [
+        "django/db/models/functions/text.py",
+        "django/db/models/fields/__init__.py",
+        "docs/ref/databases.txt",
+        "django/utils/text.py",
+        "js_tests/qunit/qunit.js"
+      ],
+      "selected_files_count": 8,
+      "first_correct_file_rate_at_k": 1.0,
+      "matched_files": [
+        "django/db/models/fields/__init__.py"
+      ]
+    },
+    {
+      "id": "django__django-11797-nl",
+      "repo": "django/django",
+      "base_commit": "3346b78a8a872286a245d1e77ef4718fc5e6be1a",
+      "task": "keep grouping rules correct when filtering against the result of another query",
+      "ground_truth_files": [
+        "django/db/models/lookups.py"
+      ],
+      "k": 5,
+      "top_k_files": [
+        "django/db/models/query.py",
+        "django/contrib/admin/static/admin/js/core.js",
+        "django/db/models/expressions.py",
+        "django/core/exceptions.py",
+        "django/db/models/aggregates.py"
+      ],
+      "selected_files_count": 8,
+      "first_correct_file_rate_at_k": 0.0,
+      "matched_files": []
+    },
+    {
+      "id": "django__django-11815-nl",
+      "repo": "django/django",
+      "base_commit": "e02f67ef2d03d48128e7a118bf75f0418e24e8ac",
+      "task": "serialize enumeration defaults by their member names instead of stored values",
+      "ground_truth_files": [
+        "django/db/migrations/serializer.py"
+      ],
+      "k": 5,
+      "top_k_files": [
+        "django/views/defaults.py",
+        "django/http/response.py",
+        "tests/queries/tests.py",
+        "django/db/migrations/serializer.py",
+        "django/utils/datastructures.py"
+      ],
+      "selected_files_count": 8,
+      "first_correct_file_rate_at_k": 1.0,
+      "matched_files": [
+        "django/db/migrations/serializer.py"
+      ]
+    },
+    {
+      "id": "django__django-11848-nl",
+      "repo": "django/django",
+      "base_commit": "f0adf3b9b7a19cdee05368ff0c0c2d087f011180",
+      "task": "interpret two digit years in parsed internet dates using the right century",
+      "ground_truth_files": [
+        "django/utils/http.py"
+      ],
+      "k": 5,
+      "top_k_files": [
+        "django/views/generic/dates.py",
+        "django/utils/dates.py",
+        "django/utils/http.py",
+        "django/views/decorators/http.py",
+        "django/db/models/query.py"
+      ],
+      "selected_files_count": 8,
+      "first_correct_file_rate_at_k": 1.0,
+      "matched_files": [
+        "django/utils/http.py"
+      ]
+    },
+    {
+      "id": "django__django-11905-nl",
+      "repo": "django/django",
+      "base_commit": "2f72480fbd27896c986c45193e1603e35c0b19a7",
+      "task": "reject truthiness filters that use values other than true or false",
+      "ground_truth_files": [
+        "django/db/models/lookups.py"
+      ],
+      "k": 5,
+      "top_k_files": [
+        "django/contrib/admin/filters.py",
+        "django/contrib/admin/options.py",
+        "django/core/exceptions.py",
+        "django/db/backends/base/base.py",
+        "docs/ref/contrib/admin/index.txt"
+      ],
+      "selected_files_count": 8,
+      "first_correct_file_rate_at_k": 0.0,
+      "matched_files": []
+    },
+    {
+      "id": "django__django-11910-nl",
+      "repo": "django/django",
+      "base_commit": "d232fd76a85870daf345fd8f8d617fe7802ae194",
+      "task": "keep renamed primary key targets correct when detecting migration changes",
+      "ground_truth_files": [
+        "django/db/migrations/autodetector.py"
+      ],
+      "k": 5,
+      "top_k_files": [
+        "django/db/backends/base/schema.py",
+        "js_tests/qunit/qunit.js",
+        "tests/migrations/test_migrations_no_changes/0003_third.py",
+        "django/db/models/query.py",
+        "django/db/models/base.py"
+      ],
+      "selected_files_count": 8,
+      "first_correct_file_rate_at_k": 0.0,
+      "matched_files": []
+    },
+    {
+      "id": "django__django-11964-nl",
+      "repo": "django/django",
+      "base_commit": "fc2b1cc926e34041953738e58fa6ad3053059b22",
+      "task": "return choice field values with the same type after loading a saved object",
+      "ground_truth_files": [
+        "django/db/models/enums.py"
+      ],
+      "k": 5,
+      "top_k_files": [
+        "django/forms/fields.py",
+        "django/contrib/admin/options.py",
+        "django/db/models/fields/__init__.py",
+        "django/core/exceptions.py",
+        "django/forms/boundfield.py"
+      ],
+      "selected_files_count": 8,
+      "first_correct_file_rate_at_k": 0.0,
+      "matched_files": []
+    },
+    {
+      "id": "django__django-11999-nl",
+      "repo": "django/django",
+      "base_commit": "84633905273fc916e3d17883810d9969c03f73c2",
+      "task": "let applications customize the display text for fields with configured choices",
+      "ground_truth_files": [
+        "django/db/models/fields/__init__.py"
+      ],
+      "k": 5,
+      "top_k_files": [
+        "django/utils/text.py",
+        "js_tests/qunit/qunit.js",
+        "django/db/models/options.py",
+        "django/db/models/fields/__init__.py",
+        "django/forms/models.py"
+      ],
+      "selected_files_count": 8,
+      "first_correct_file_rate_at_k": 1.0,
+      "matched_files": [
+        "django/db/models/fields/__init__.py"
+      ]
+    },
+    {
+      "id": "django__django-12113-nl",
+      "repo": "django/django",
+      "base_commit": "62254c5202e80a68f4fe6572a2be46a3d953de1a",
+      "task": "make repeated test database setup work when the temporary sqlite database is kept",
+      "ground_truth_files": [
+        "django/db/backends/sqlite3/creation.py"
+      ],
+      "k": 5,
+      "top_k_files": [
+        "tests/test_utils/tests.py",
+        "tests/multiple_database/tests.py",
+        "tests/generic_views/test_base.py",
+        "tests/backends/sqlite/tests.py",
+        "tests/migrations/test_base.py"
+      ],
+      "selected_files_count": 8,
+      "first_correct_file_rate_at_k": 0.0,
+      "matched_files": []
+    }
+  ]
+}

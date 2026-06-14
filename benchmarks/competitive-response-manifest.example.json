@@ -1,0 +1,160 @@
+{
+  "goal": "Make CallSieve the default local-first context layer an agent uses before it searches, reads, edits, or reviews a repository.",
+  "targets": {
+    "minimum_first_correct_file_rate_at_k": 1.0,
+    "minimum_expected_file_recall": 1.0,
+    "minimum_natural_language_first_correct_file_rate_at_k": 1.0,
+    "minimum_natural_language_expected_file_recall": 1.0,
+    "maximum_first_query_p95_ms": 1000,
+    "maximum_default_packet_tokens": 5000,
+    "require_natural_language_benchmark": true,
+    "require_trace_or_receipt_proof": true,
+    "require_zero_retrieval_model_tokens": true,
+    "require_zero_per_query_retrieval_cost": true,
+    "require_no_default_code_upload": true,
+    "minimum_agent_coverage": 19,
+    "required_agents": [
+      "Codex",
+      "Claude Code",
+      "GitHub Copilot",
+      "OpenCode",
+      "Antigravity",
+      "Cursor",
+      "VS Code",
+      "Windsurf",
+      "Continue",
+      "Zed",
+      "Junie",
+      "JetBrains",
+      "Amp",
+      "Goose",
+      "Warp",
+      "Cline",
+      "Zoo",
+      "Roo",
+      "generic MCP"
+    ]
+  },
+  "performance": {
+    "path": ".",
+    "iterations": 1
+  },
+  "benchmark": {
+    "repos": [
+      {
+        "label": "callsieve-local",
+        "path": ".",
+        "languages": ["rust", "markdown"],
+        "clients": ["codex", "claude", "copilot", "cursor", "generic-mcp"],
+        "task_categories": ["code_edit", "bug_fix", "tests", "docs", "proof"],
+        "suite_path": "benchmarks/retrieval-fixtures.json",
+        "trace_path": "benchmarks/session-trace.example.json",
+        "policy_trace_path": "benchmarks/session-trace.example.json"
+      }
+    ]
+  },
+  "natural_language_benchmark": {
+    "repos": [
+      {
+        "label": "callsieve-local-natural-language",
+        "path": ".",
+        "languages": ["rust", "markdown", "typescript"],
+        "clients": ["codex", "claude", "copilot", "cursor", "generic-mcp"],
+        "task_categories": ["natural_language", "code_edit", "docs", "proof"],
+        "suite_path": "benchmarks/natural-language-fixtures.json"
+      }
+    ]
+  },
+  "competitors": [
+    {
+      "name": "Augment Context Engine / Auggie",
+      "category": "enterprise context engine",
+      "source": "https://docs.augmentcode.com/context-services/mcp/overview",
+      "install_friction": "account and MCP/client configuration",
+      "first_query_time": "source claims local real-time indexing and remote hosted context; not locally measured",
+      "code_upload_requirement": "local MCP indexes working directory; remote mode uses hosted Context Engine and GitHub App",
+      "retrieval_model_token_cost": "MCP queries are billed as LLM tokens plus service fee per Augment docs",
+      "per_query_retrieval_cost": "Augment docs report roughly $0.03-$0.06 average per MCP query",
+      "packet_compactness": "claims smart curation and compression",
+      "explainability": "semantic and relationship-aware retrieval claims; ranking internals are not local JSON",
+      "agent_coverage": "MCP quickstarts for Claude Code, Codex, Cursor, GitHub Copilot, OpenCode, Roo Code, Zed, Gemini CLI, and others",
+      "trace_or_receipt_proof": "not a local CallSieve-style receipt",
+      "where_callsieve_should_win": "no signup, no auth, no API key, no per-query retrieval bill, no default code upload, deterministic local packet"
+    },
+    {
+      "name": "Tabnine Enterprise Context Engine",
+      "category": "enterprise context engine",
+      "source": "https://www.tabnine.com/enterprise-context-engine/",
+      "install_friction": "enterprise platform adoption and deployment choice",
+      "first_query_time": "not locally measurable from public docs",
+      "code_upload_requirement": "supports SaaS, private VPC, on-prem, and air-gapped deployments",
+      "retrieval_model_token_cost": "not locally measurable from public docs",
+      "per_query_retrieval_cost": "not locally measurable from public docs",
+      "packet_compactness": "claims reduced token usage through enterprise context",
+      "explainability": "claims hybrid graph plus vector context and dependency reasoning",
+      "agent_coverage": "positions as agent-agnostic across Tabnine, Cursor, GitHub Copilot, Claude Code, and internal agents",
+      "trace_or_receipt_proof": "not a local CallSieve-style receipt",
+      "where_callsieve_should_win": "open-source local CLI, inspectable JSON index, simpler setup, deterministic packets, evidence before enterprise purchase"
+    },
+    {
+      "name": "Serena",
+      "category": "semantic MCP toolkit",
+      "source": "https://github.com/oraios/serena",
+      "install_friction": "uv install, MCP configuration, and language-server health",
+      "first_query_time": "depends on local language-server startup and project indexing; not locally measured here",
+      "code_upload_requirement": "local MCP server by default",
+      "retrieval_model_token_cost": "not a retrieval model-token product claim",
+      "per_query_retrieval_cost": "no cloud retrieval fee for local use",
+      "packet_compactness": "semantic tools return focused symbol/reference results",
+      "explainability": "IDE/LSP semantic operations rather than task-ranked score reasons",
+      "agent_coverage": "MCP clients including Claude Code, Codex, OpenCode, Gemini CLI, VS Code, Cursor, JetBrains, and web clients",
+      "trace_or_receipt_proof": "memory exists, but not a CallSieve-style grep/read receipt pipeline",
+      "where_callsieve_should_win": "task-ranked read-first packets, related tests, ownership, risk, proof workflows, and setup without depending on every language server"
+    },
+    {
+      "name": "Repo packers: Repomix, Gitingest, Code2Prompt",
+      "category": "prompt packers",
+      "source": "https://repomix.com/ ; https://gitingest.com/ ; https://github.com/mufeedvh/code2prompt",
+      "install_friction": "low-friction CLI or web packing flow",
+      "first_query_time": "fast to start, but broad packing time and prompt upload size vary by repo",
+      "code_upload_requirement": "varies by tool and local versus hosted mode",
+      "retrieval_model_token_cost": "no retrieval model tokens, but packed output spends prompt tokens when read",
+      "per_query_retrieval_cost": "usually no retrieval fee for local CLI use",
+      "packet_compactness": "checked public proof includes full-repo prompt-pack proxy baselines over 1,000x larger than the default CallSieve packet; external packer CLI outputs are not locally measured yet",
+      "explainability": "simple file inclusion/exclusion, not task-ranked reasons",
+      "agent_coverage": "works with any LLM that accepts pasted or uploaded context",
+      "trace_or_receipt_proof": "no observed grep/read-loop proof pipeline",
+      "where_callsieve_should_win": "selection beats dumping: rank the few files, symbols, tests, and follow-ups first, then compare against full-repo pack payload size"
+    },
+    {
+      "name": "Qodo",
+      "category": "AI code review and governance",
+      "source": "https://www.qodo.ai/",
+      "install_friction": "IDE, Git, CLI, and enterprise workflow integration",
+      "first_query_time": "review workflow latency is not locally measurable from public docs",
+      "code_upload_requirement": "cloud, on-premise, and single-tenant deployment options",
+      "retrieval_model_token_cost": "not locally measurable from public docs",
+      "per_query_retrieval_cost": "not locally measurable from public docs",
+      "packet_compactness": "review-oriented context engine rather than pre-prompt packet",
+      "explainability": "review findings, rules, PR history, and context engine claims",
+      "agent_coverage": "IDE, pull request, CLI, and CI/CD review surfaces",
+      "trace_or_receipt_proof": "review evidence, not a local pre-search receipt",
+      "where_callsieve_should_win": "own upstream context before review starts and feed review agents callers, tests, ownership, and blast radius"
+    },
+    {
+      "name": "CodeRabbit",
+      "category": "AI code review",
+      "source": "https://www.coderabbit.ai/",
+      "install_friction": "two-click Git install plus optional IDE and CLI",
+      "first_query_time": "PR review latency is not locally measurable from public docs",
+      "code_upload_requirement": "hosted review service with enterprise security controls",
+      "retrieval_model_token_cost": "not locally measurable from public docs",
+      "per_query_retrieval_cost": "not locally measurable from public docs",
+      "packet_compactness": "review summaries, diagrams, and findings rather than pre-prompt packet",
+      "explainability": "codegraph, custom guidelines, linters, MCP context, and review comments",
+      "agent_coverage": "Git, IDE, and CLI review surfaces",
+      "trace_or_receipt_proof": "review workflow evidence, not a local pre-search receipt",
+      "where_callsieve_should_win": "stay pre-prompt and agent-neutral with local retrieval before tokens are spent"
+    }
+  ]
+}

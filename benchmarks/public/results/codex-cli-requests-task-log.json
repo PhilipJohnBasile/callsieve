@@ -1,0 +1,296 @@
+{
+  "command": "agent-native-template",
+  "schema_version": 1,
+  "root": "benchmarks/public/repos/psf/requests",
+  "pinned_base_commits": true,
+  "index_fingerprint": "fnv1a64:3b9445a7b6ca0140",
+  "retrieval_contract_fingerprint": "fnv1a64:18cc30cd8ca21577",
+  "source_tasks": "benchmarks/public/manifest.json",
+  "source_tasks_hash": "fnv1a64:b2e640584db64816",
+  "locally_measured": true,
+  "status": "measured",
+  "k": 5,
+  "limit": 5,
+  "snippets_per_file": 0,
+  "profile": "skim",
+  "token_budget": 1200,
+  "instructions": [
+    "Run the same tasks in the external agent using its native codebase search.",
+    "Record the actual first files or search results the agent used in agent_native_files.",
+    "Record transcript-backed context tokens in agent_native_context_tokens; do not estimate.",
+    "Then pass this filled file to callsieve agent-native-baseline."
+  ],
+  "warnings": [
+    "rebuilt missing or stale CallSieve index before templating",
+    "checked out pinned base_commit values while generating per-task CallSieve template"
+  ],
+  "tasks": [
+    {
+      "id": "psf__requests-1963",
+      "repo": "psf/requests",
+      "base_commit": "110048f9837f8441ea536804115e80b69f400277",
+      "task": "`Session.resolve_redirects` copies the original request for all subsequent requests, can cause incorrect method selection",
+      "expected_files": [
+        "requests/sessions.py"
+      ],
+      "agent_native_files": [
+        "requests/sessions.py"
+      ],
+      "callsieve_files": [
+        "requests/sessions.py",
+        "requests/packages/urllib3/request.py",
+        "test_requests.py",
+        "requests/models.py",
+        "requests/api.py"
+      ],
+      "agent_native_context_tokens": 10161,
+      "callsieve_packet_tokens": 205,
+      "callsieve_index_fingerprint": "fnv1a64:0f974ef5825a2b96",
+      "callsieve_first_correct_file_at_k": true,
+      "recording_status": "measured"
+    },
+    {
+      "id": "psf__requests-2317",
+      "repo": "psf/requests",
+      "base_commit": "091991be0da19de9108dbe5e3752917fea3d7fdc",
+      "task": "`method = builtin_str(method)` problem",
+      "expected_files": [
+        "requests/sessions.py"
+      ],
+      "agent_native_files": [
+        "requests/sessions.py"
+      ],
+      "callsieve_files": [
+        "requests/sessions.py",
+        "test_requests.py",
+        "requests/packages/urllib3/connectionpool.py",
+        "requests/packages/urllib3/util/retry.py",
+        "requests/auth.py"
+      ],
+      "agent_native_context_tokens": 10149,
+      "callsieve_packet_tokens": 210,
+      "callsieve_index_fingerprint": "fnv1a64:3c6529995ac42181",
+      "callsieve_first_correct_file_at_k": true,
+      "recording_status": "measured"
+    },
+    {
+      "id": "psf__requests-2674",
+      "repo": "psf/requests",
+      "base_commit": "0be38a0c37c59c4b66ce908731da15b401655113",
+      "task": "urllib3 exceptions passing through requests API",
+      "expected_files": [
+        "requests/adapters.py",
+        "requests/models.py"
+      ],
+      "agent_native_files": [
+        "requests/adapters.py",
+        "requests/exceptions.py",
+        "requests/models.py",
+        "requests/packages/urllib3/exceptions.py",
+        "requests/sessions.py",
+        "requests/api.py",
+        "test_requests.py"
+      ],
+      "callsieve_files": [
+        "requests/adapters.py",
+        "requests/exceptions.py",
+        "requests/packages/urllib3/exceptions.py",
+        "requests/api.py",
+        "requests/models.py"
+      ],
+      "agent_native_context_tokens": 173566,
+      "callsieve_packet_tokens": 216,
+      "callsieve_index_fingerprint": "fnv1a64:fd75bfee27604947",
+      "callsieve_first_correct_file_at_k": true,
+      "recording_status": "measured"
+    },
+    {
+      "id": "psf__requests-3362",
+      "repo": "psf/requests",
+      "base_commit": "36453b95b13079296776d11b09cab2567ea3e703",
+      "task": "Uncertain about content/text vs iter_content(decode_unicode=True)",
+      "expected_files": [
+        "requests/utils.py"
+      ],
+      "agent_native_files": [
+        "requests/models.py",
+        "tests/test_requests.py",
+        "requests/utils.py"
+      ],
+      "callsieve_files": [
+        "requests/models.py",
+        "requests/utils.py",
+        "requests/packages/urllib3/response.py",
+        "tests/test_requests.py",
+        "requests/packages/urllib3/fields.py"
+      ],
+      "agent_native_context_tokens": 75700,
+      "callsieve_packet_tokens": 247,
+      "callsieve_index_fingerprint": "fnv1a64:46537541e2e55bc6",
+      "callsieve_first_correct_file_at_k": true,
+      "recording_status": "measured"
+    },
+    {
+      "id": "psf__requests-5414",
+      "repo": "psf/requests",
+      "base_commit": "2b06a952a9e6e23e9eda2c8759adb62739730a75",
+      "task": "Getting http://.example.com raises UnicodeError",
+      "expected_files": [
+        "requests/models.py"
+      ],
+      "agent_native_files": [
+        "requests/models.py",
+        "tests/test_requests.py",
+        "requests/exceptions.py"
+      ],
+      "callsieve_files": [
+        "requests/exceptions.py",
+        "requests/utils.py",
+        "tests/test_requests.py",
+        "requests/models.py",
+        "requests/adapters.py"
+      ],
+      "agent_native_context_tokens": 68514,
+      "callsieve_packet_tokens": 245,
+      "callsieve_index_fingerprint": "fnv1a64:2f63b81118018b54",
+      "callsieve_first_correct_file_at_k": true,
+      "recording_status": "measured"
+    },
+    {
+      "id": "psf__requests-6017",
+      "repo": "psf/requests",
+      "base_commit": "e2064a2c0512d0a93cf0162bf8936cf76e898ffc",
+      "task": "Fix erroneous use of 'schema' instead of 'scheme'",
+      "expected_files": [
+        "requests/exceptions.py",
+        "requests/models.py"
+      ],
+      "agent_native_files": [
+        "requests/exceptions.py",
+        "requests/models.py",
+        "requests/sessions.py",
+        "tests/test_requests.py"
+      ],
+      "callsieve_files": [
+        "requests/utils.py",
+        "requests/exceptions.py",
+        "requests/adapters.py",
+        "requests/sessions.py",
+        "tests/test_requests.py"
+      ],
+      "agent_native_context_tokens": 55560,
+      "callsieve_packet_tokens": 219,
+      "callsieve_index_fingerprint": "fnv1a64:04a3f05b0334d360",
+      "callsieve_first_correct_file_at_k": true,
+      "recording_status": "measured"
+    },
+    {
+      "id": "psf__requests-5391",
+      "repo": "psf/requests",
+      "base_commit": "2d2447e210cf0b9e8c7484bfc6f158de9b24c171",
+      "task": "Send only one Host header in chunked request",
+      "expected_files": [
+        "requests/adapters.py"
+      ],
+      "agent_native_files": [
+        "requests/adapters.py",
+        "requests/models.py",
+        "tests/test_lowlevel.py",
+        "tests/test_requests.py",
+        "tests/testserver/server.py",
+        "tests/test_utils.py"
+      ],
+      "callsieve_files": [
+        "requests/__init__.py",
+        "requests/adapters.py",
+        "requests/sessions.py",
+        "requests/models.py",
+        "tests/test_requests.py"
+      ],
+      "agent_native_context_tokens": 140787,
+      "callsieve_packet_tokens": 221,
+      "callsieve_index_fingerprint": "fnv1a64:2481df52f06eef97",
+      "callsieve_first_correct_file_at_k": true,
+      "recording_status": "measured"
+    },
+    {
+      "id": "psf__requests-5496",
+      "repo": "psf/requests",
+      "base_commit": "737dd0c3c6b9c090d1d525ffc0c7449d2cdca0ac",
+      "task": "Avoid unnecessary computation of data length for non-stream requests when preparing request bodies",
+      "expected_files": [
+        "requests/models.py"
+      ],
+      "agent_native_files": [
+        "requests/models.py",
+        "requests/utils.py",
+        "tests/test_requests.py",
+        "tests/test_utils.py",
+        "requests/adapters.py"
+      ],
+      "callsieve_files": [
+        "requests/adapters.py",
+        "requests/models.py",
+        "requests/sessions.py",
+        "tests/test_requests.py",
+        "requests/auth.py"
+      ],
+      "agent_native_context_tokens": 132167,
+      "callsieve_packet_tokens": 231,
+      "callsieve_index_fingerprint": "fnv1a64:dbb8086e4a3bcf23",
+      "callsieve_first_correct_file_at_k": true,
+      "recording_status": "measured"
+    },
+    {
+      "id": "psf__requests-5492",
+      "repo": "psf/requests",
+      "base_commit": "9ed5db8ed28e816b597dafd328b342ec95466afa",
+      "task": "Avoid calling resolve_redirects when not following redirects while creating request history",
+      "expected_files": [
+        "requests/sessions.py"
+      ],
+      "agent_native_files": [
+        "requests/sessions.py"
+      ],
+      "callsieve_files": [
+        "requests/sessions.py",
+        "tests/test_requests.py",
+        "requests/models.py",
+        "requests/__init__.py",
+        "requests/api.py"
+      ],
+      "agent_native_context_tokens": 10154,
+      "callsieve_packet_tokens": 247,
+      "callsieve_index_fingerprint": "fnv1a64:1bb588c49bf36c30",
+      "callsieve_first_correct_file_at_k": true,
+      "recording_status": "measured"
+    },
+    {
+      "id": "psf__requests-5643",
+      "repo": "psf/requests",
+      "base_commit": "143150233162d609330941ec2aacde5ed4caa510",
+      "task": "Respect the NETRC environment variable",
+      "expected_files": [
+        "requests/utils.py"
+      ],
+      "agent_native_files": [
+        "requests/utils.py",
+        "tests/test_requests.py"
+      ],
+      "callsieve_files": [
+        "requests/utils.py",
+        "tests/test_requests.py",
+        "requests/adapters.py",
+        "requests/auth.py",
+        "requests/exceptions.py"
+      ],
+      "agent_native_context_tokens": 10147,
+      "callsieve_packet_tokens": 214,
+      "callsieve_index_fingerprint": "fnv1a64:320a8febda739e7f",
+      "callsieve_first_correct_file_at_k": true,
+      "recording_status": "measured"
+    }
+  ],
+  "measurement_tool": "Codex CLI native search/read workflow",
+  "measurement_note": "Filled by benchmarks/tools/codex-agent-native-requests.py from Codex CLI JSONL transcripts."
+}

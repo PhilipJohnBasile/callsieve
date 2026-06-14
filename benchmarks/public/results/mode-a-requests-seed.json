@@ -1,0 +1,257 @@
+{
+  "mode": "A",
+  "schema_version": 1,
+  "generated_at_unix": 1781411748,
+  "generated_at_iso_date": "2026-06-14",
+  "retrieval_contract_fingerprint": "fnv1a64:18cc30cd8ca21577",
+  "manifest": {
+    "path": "benchmarks/public/manifest.json",
+    "schema_version": 1,
+    "mode": "A",
+    "description": "CallSieve public benchmark - Mode A (retrieval-only) seed manifest. Ten public psf/requests PR tasks pin each base commit and the resolving PR's patched source-file list so a third party can reproduce the recall@K result deterministically without invoking any LLM.",
+    "issue_count": 10
+  },
+  "k": 5,
+  "aggregate": {
+    "evaluated": 10,
+    "skipped": 0,
+    "total": 10,
+    "first_correct_file_rate_at_k": 1.0,
+    "hits": 10
+  },
+  "issues": [
+    {
+      "id": "psf__requests-1963",
+      "repo": "psf/requests",
+      "base_commit": "110048f9837f8441ea536804115e80b69f400277",
+      "task": "`Session.resolve_redirects` copies the original request for all subsequent requests, can cause incorrect method selection",
+      "ground_truth_files": [
+        "requests/sessions.py"
+      ],
+      "resolving_pr": 1963,
+      "k": 5,
+      "top_k_files": [
+        "requests/sessions.py",
+        "requests/packages/urllib3/request.py",
+        "test_requests.py",
+        "requests/models.py",
+        "requests/api.py"
+      ],
+      "selected_files_count": 8,
+      "first_correct_file_rate_at_k": 1.0,
+      "matched_files": [
+        "requests/sessions.py"
+      ]
+    },
+    {
+      "id": "psf__requests-2317",
+      "repo": "psf/requests",
+      "base_commit": "091991be0da19de9108dbe5e3752917fea3d7fdc",
+      "task": "`method = builtin_str(method)` problem",
+      "ground_truth_files": [
+        "requests/sessions.py"
+      ],
+      "resolving_pr": 2326,
+      "k": 5,
+      "top_k_files": [
+        "requests/sessions.py",
+        "test_requests.py",
+        "requests/packages/urllib3/connectionpool.py",
+        "requests/packages/urllib3/util/retry.py",
+        "requests/auth.py"
+      ],
+      "selected_files_count": 8,
+      "first_correct_file_rate_at_k": 1.0,
+      "matched_files": [
+        "requests/sessions.py"
+      ]
+    },
+    {
+      "id": "psf__requests-2674",
+      "repo": "psf/requests",
+      "base_commit": "0be38a0c37c59c4b66ce908731da15b401655113",
+      "task": "urllib3 exceptions passing through requests API",
+      "ground_truth_files": [
+        "requests/adapters.py",
+        "requests/models.py"
+      ],
+      "resolving_pr": 2675,
+      "k": 5,
+      "top_k_files": [
+        "requests/adapters.py",
+        "requests/exceptions.py",
+        "requests/packages/urllib3/exceptions.py",
+        "requests/api.py",
+        "requests/models.py"
+      ],
+      "selected_files_count": 8,
+      "first_correct_file_rate_at_k": 1.0,
+      "matched_files": [
+        "requests/adapters.py",
+        "requests/models.py"
+      ]
+    },
+    {
+      "id": "psf__requests-3362",
+      "repo": "psf/requests",
+      "base_commit": "36453b95b13079296776d11b09cab2567ea3e703",
+      "task": "Uncertain about content/text vs iter_content(decode_unicode=True)",
+      "ground_truth_files": [
+        "requests/utils.py"
+      ],
+      "resolving_pr": 3366,
+      "k": 5,
+      "top_k_files": [
+        "requests/models.py",
+        "requests/utils.py",
+        "requests/packages/urllib3/response.py",
+        "tests/test_requests.py",
+        "requests/packages/urllib3/fields.py"
+      ],
+      "selected_files_count": 8,
+      "first_correct_file_rate_at_k": 1.0,
+      "matched_files": [
+        "requests/utils.py"
+      ]
+    },
+    {
+      "id": "psf__requests-5414",
+      "repo": "psf/requests",
+      "base_commit": "2b06a952a9e6e23e9eda2c8759adb62739730a75",
+      "task": "Getting http://.example.com raises UnicodeError",
+      "ground_truth_files": [
+        "requests/models.py"
+      ],
+      "resolving_pr": 5435,
+      "k": 5,
+      "top_k_files": [
+        "requests/exceptions.py",
+        "requests/utils.py",
+        "tests/test_requests.py",
+        "requests/models.py",
+        "requests/adapters.py"
+      ],
+      "selected_files_count": 8,
+      "first_correct_file_rate_at_k": 1.0,
+      "matched_files": [
+        "requests/models.py"
+      ]
+    },
+    {
+      "id": "psf__requests-6017",
+      "repo": "psf/requests",
+      "base_commit": "e2064a2c0512d0a93cf0162bf8936cf76e898ffc",
+      "task": "Fix erroneous use of 'schema' instead of 'scheme'",
+      "ground_truth_files": [
+        "requests/exceptions.py",
+        "requests/models.py"
+      ],
+      "resolving_pr": 6017,
+      "k": 5,
+      "top_k_files": [
+        "requests/utils.py",
+        "requests/exceptions.py",
+        "requests/adapters.py",
+        "requests/sessions.py",
+        "tests/test_requests.py"
+      ],
+      "selected_files_count": 8,
+      "first_correct_file_rate_at_k": 1.0,
+      "matched_files": [
+        "requests/exceptions.py"
+      ]
+    },
+    {
+      "id": "psf__requests-5391",
+      "repo": "psf/requests",
+      "base_commit": "2d2447e210cf0b9e8c7484bfc6f158de9b24c171",
+      "task": "Send only one Host header in chunked request",
+      "ground_truth_files": [
+        "requests/adapters.py"
+      ],
+      "resolving_pr": 5391,
+      "k": 5,
+      "top_k_files": [
+        "requests/__init__.py",
+        "requests/adapters.py",
+        "requests/sessions.py",
+        "requests/models.py",
+        "requests/exceptions.py"
+      ],
+      "selected_files_count": 8,
+      "first_correct_file_rate_at_k": 1.0,
+      "matched_files": [
+        "requests/adapters.py"
+      ]
+    },
+    {
+      "id": "psf__requests-5496",
+      "repo": "psf/requests",
+      "base_commit": "737dd0c3c6b9c090d1d525ffc0c7449d2cdca0ac",
+      "task": "Avoid unnecessary computation of data length for non-stream requests when preparing request bodies",
+      "ground_truth_files": [
+        "requests/models.py"
+      ],
+      "resolving_pr": 5496,
+      "k": 5,
+      "top_k_files": [
+        "requests/adapters.py",
+        "requests/models.py",
+        "requests/sessions.py",
+        "requests/structures.py",
+        "requests/auth.py"
+      ],
+      "selected_files_count": 8,
+      "first_correct_file_rate_at_k": 1.0,
+      "matched_files": [
+        "requests/models.py"
+      ]
+    },
+    {
+      "id": "psf__requests-5492",
+      "repo": "psf/requests",
+      "base_commit": "9ed5db8ed28e816b597dafd328b342ec95466afa",
+      "task": "Avoid calling resolve_redirects when not following redirects while creating request history",
+      "ground_truth_files": [
+        "requests/sessions.py"
+      ],
+      "resolving_pr": 5492,
+      "k": 5,
+      "top_k_files": [
+        "requests/sessions.py",
+        "tests/test_requests.py",
+        "requests/models.py",
+        "requests/__init__.py",
+        "requests/api.py"
+      ],
+      "selected_files_count": 8,
+      "first_correct_file_rate_at_k": 1.0,
+      "matched_files": [
+        "requests/sessions.py"
+      ]
+    },
+    {
+      "id": "psf__requests-5643",
+      "repo": "psf/requests",
+      "base_commit": "143150233162d609330941ec2aacde5ed4caa510",
+      "task": "Respect the NETRC environment variable",
+      "ground_truth_files": [
+        "requests/utils.py"
+      ],
+      "resolving_pr": 5643,
+      "k": 5,
+      "top_k_files": [
+        "requests/utils.py",
+        "tests/test_requests.py",
+        "requests/adapters.py",
+        "requests/auth.py",
+        "requests/exceptions.py"
+      ],
+      "selected_files_count": 8,
+      "first_correct_file_rate_at_k": 1.0,
+      "matched_files": [
+        "requests/utils.py"
+      ]
+    }
+  ]
+}
