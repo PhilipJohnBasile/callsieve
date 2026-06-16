@@ -4,7 +4,7 @@
 
 ### Changed
 
-- Documented `--pagerank` as experimental after measuring it: on small local benchmarks it helps some identifier/structural queries but can regress natural-language ones (it pulls toward popular hub files), and its value on large repos is not yet measured. It remains opt-in and off by default. (Gating PageRank to non-natural-language queries was tried and reverted — `QueryKind` could not separate the helpful from the harmful cases, so it only neutralized the signal.)
+- Documented `--pagerank` as experimental after measuring it. On the authoritative public Django natural-language slice (`manifest-nl`, 30 SWE-bench tasks) it is neutral — first-correct-file@5 `0.967`, identical to default and to `--bm25` — so it neither lifts nor regresses real-repo NL retrieval. On small local fixtures it is mixed (helps some identifier/structural queries, can shuffle natural-language ones). It remains opt-in and off by default; treat it as a lever to try, not a proven default. (Gating PageRank to non-natural-language queries was tried and reverted — `QueryKind` could not separate the helpful from the harmful cases, so it only neutralized the signal.)
 
 ## v0.4.0 - 2026-06-16
 
