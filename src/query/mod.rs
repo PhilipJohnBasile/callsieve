@@ -4405,10 +4405,29 @@ fn add_memory_confirmed_boost(
 pub fn merge_task_memory(root: &Path, imported: &str) -> Result<(usize, usize)> {
     let incoming: TaskMemoryStore =
         serde_json::from_str(imported).context("failed to parse exported task memory")?;
+    merge_task_memory_entries(root, incoming.entries)
+}
+
+/// Imports a vendor-neutral Memory Exchange Format (MXF) document, mapping its
+/// records back to local task-memory entries and merging them like a native
+/// import. This is what lets CallSieve round-trip task memory with any
+/// MXF-speaking tool instead of only its own export shape.
+pub fn merge_task_memory_mxf(root: &Path, imported: &str) -> Result<(usize, usize)> {
+    let document: MxfDocument =
+        serde_json::from_str(imported).context("failed to parse MXF memory document")?;
+    let entries = document
+        .memories
+        .into_iter()
+        .map(TaskMemoryEntry::from_mxf)
+        .collect();
+    merge_task_memory_entries(root, entries)
+}
+
+fn merge_task_memory_entries(root: &Path, incoming: Vec<TaskMemoryEntry>) -> Result<(usize, usize)> {
     let path = task_memory_path(root);
     let mut memory = load_task_memory(&path);
     let mut imported_count = 0usize;
-    for entry in incoming.entries {
+    for entry in incoming {
         if let Some(existing) = memory
             .entries
             .iter_mut()
@@ -4453,6 +4472,164 @@ pub fn export_task_memory(root: &Path) -> Result<(String, usize)> {
     Ok((serde_json::to_string_pretty(&memory)?, count))
 }
 
+/// Version of the vendor-neutral Memory Exchange Format CallSieve reads/writes.
+pub const MEMORY_EXCHANGE_FORMAT_VERSION: &str = "1.1";
+
+/// A portable memory-exchange document. Top-level fields stay vendor-neutral so
+/// any MXF-speaking tool can consume it; CallSieve-specific detail lives under
+/// each record's `attributes`, keeping the export interoperable without losing
+/// what task memory round-trips locally.
+#[derive(Debug, Serialize, Deserialize)]
+struct MxfDocument {
+    mxf_version: String,
+    source: String,
+    exported_at: u64,
+    memories: Vec<MxfMemory>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct MxfMemory {
+    id: String,
+    kind: String,
+    content: String,
+    created_at: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    tags: Vec<String>,
+    #[serde(default)]
+    attributes: MxfAttributes,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct MxfAttributes {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    read_first_files: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    symbols: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    tests: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    confirmed_files: Vec<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    client: String,
+}
+
+impl TaskMemoryEntry {
+    fn to_mxf(&self) -> MxfMemory {
+        MxfMemory {
+            id: mxf_memory_id(&self.task),
+            kind: "task_context".to_string(),
+            content: self.task.clone(),
+            created_at: self.created_at,
+            tags: self.task_terms.clone(),
+            attributes: MxfAttributes {
+                read_first_files: self.read_first_files.clone(),
+                symbols: self.symbols.clone(),
+                tests: self.tests.clone(),
+                confirmed_files: self.confirmed_files.clone(),
+                client: self.client.clone(),
+            },
+        }
+    }
+
+    fn from_mxf(memory: MxfMemory) -> Self {
+        // Recompute terms when the document omits them so foreign exports still
+        // match against local tasks.
+        let task_terms = if memory.tags.is_empty() {
+            task_memory_terms(&memory.content)
+        } else {
+            memory.tags
+        };
+        TaskMemoryEntry {
+            task: memory.content,
+            task_terms,
+            created_at: memory.created_at,
+            read_first_files: memory.attributes.read_first_files,
+            symbols: memory.attributes.symbols,
+            tests: memory.attributes.tests,
+            confirmed_files: memory.attributes.confirmed_files,
+            client: memory.attributes.client,
+        }
+    }
+}
+
+/// Deterministic, stable identifier for a memory record derived from its task
+/// text (FNV-1a), so re-exports keep the same id without storing one.
+fn mxf_memory_id(task: &str) -> String {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in task.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("task-{hash:016x}")
+}
+
+fn memory_now_seconds() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .unwrap_or(0)
+}
+
+/// Vendor-neutral MXF export of this repo's task memory for `memory-export
+/// --format mxf`.
+pub fn export_task_memory_mxf(root: &Path) -> Result<(String, usize)> {
+    let memory = load_task_memory(&task_memory_path(root));
+    let document = MxfDocument {
+        mxf_version: MEMORY_EXCHANGE_FORMAT_VERSION.to_string(),
+        source: "callsieve".to_string(),
+        exported_at: memory_now_seconds(),
+        memories: memory.entries.iter().map(TaskMemoryEntry::to_mxf).collect(),
+    };
+    Ok((serde_json::to_string_pretty(&document)?, memory.entries.len()))
+}
+
+/// Read-only recall of similar past tasks for `task`, without writing the
+/// current task into memory. Backs the MCP recall verb so a lookup never
+/// mutates the store.
+pub fn recall_task_memory(root: &Path, task: &str) -> Result<TaskMemoryOutput> {
+    let path = task_memory_path(root);
+    let memory = load_task_memory(&path);
+    let current_terms = task_memory_terms(task);
+    let similar = similar_task_memory_entries(&memory.entries, &current_terms);
+    let similar_tasks = similar_task_views(&similar);
+    let recommended_files = recommended_task_memory_files(&similar);
+    let recommended_symbols = recommended_task_memory_symbols(&similar);
+    Ok(TaskMemoryOutput {
+        cache_hit: !similar_tasks.is_empty(),
+        path: path.display().to_string(),
+        policy: "local_project_memory_only; use as hints, not proof",
+        similar_tasks,
+        recommended_files,
+        recommended_symbols,
+    })
+}
+
+/// Summary metrics for this repo's task memory, backing the MCP stats verb.
+pub fn task_memory_stats(root: &Path) -> Value {
+    let path = task_memory_path(root);
+    let memory = load_task_memory(&path);
+    let mut clients: Vec<String> = memory
+        .entries
+        .iter()
+        .map(|entry| entry.client.clone())
+        .filter(|client| !client.is_empty())
+        .collect();
+    clients.sort();
+    clients.dedup();
+    let last_task = memory
+        .entries
+        .iter()
+        .max_by_key(|entry| entry.created_at)
+        .map(|entry| entry.task.clone());
+    json!({
+        "entries": memory.entries.len(),
+        "clients": clients,
+        "last_task": last_task,
+        "path": path.display().to_string(),
+        "mxf_version": MEMORY_EXCHANGE_FORMAT_VERSION,
+    })
+}
+
 pub fn task_memory_path(root: &Path) -> PathBuf {
     root.join(store::json_store::INDEX_DIR)
         .join(TASK_MEMORY_FILE)
@@ -4485,32 +4662,7 @@ pub fn task_memory_for_context(
     let mut memory = load_task_memory(&path);
     let current_terms = task_memory_terms(&context.task);
     let similar = similar_task_memory_entries(&memory.entries, &current_terms);
-    let similar_tasks: Vec<TaskMemorySimilarTask> = similar
-        .iter()
-        .map(|scored| TaskMemorySimilarTask {
-            task: scored.entry.task.clone(),
-            score: rounded_score(scored.score),
-            client: scored.entry.client.clone(),
-            shared_terms: scored.shared_terms.clone(),
-            read_first_files: if scored.entry.read_first_files.is_empty() {
-                scored
-                    .entry
-                    .confirmed_files
-                    .iter()
-                    .take(MAX_TASK_MEMORY_RECOMMENDED_FILES)
-                    .cloned()
-                    .collect()
-            } else {
-                scored
-                    .entry
-                    .read_first_files
-                    .iter()
-                    .take(MAX_TASK_MEMORY_RECOMMENDED_FILES)
-                    .cloned()
-                    .collect()
-            },
-        })
-        .collect();
+    let similar_tasks = similar_task_views(&similar);
     let recommended_files = recommended_task_memory_files(&similar);
     let recommended_symbols = recommended_task_memory_symbols(&similar);
 
@@ -4545,6 +4697,37 @@ pub fn task_memory_for_context(
         recommended_files,
         recommended_symbols,
     })
+}
+
+/// Builds the recall view (similar tasks with their read-first files) shared by
+/// `task_memory_for_context` and the read-only `recall_task_memory`.
+fn similar_task_views(similar: &[ScoredTaskMemoryEntry<'_>]) -> Vec<TaskMemorySimilarTask> {
+    similar
+        .iter()
+        .map(|scored| TaskMemorySimilarTask {
+            task: scored.entry.task.clone(),
+            score: rounded_score(scored.score),
+            client: scored.entry.client.clone(),
+            shared_terms: scored.shared_terms.clone(),
+            read_first_files: if scored.entry.read_first_files.is_empty() {
+                scored
+                    .entry
+                    .confirmed_files
+                    .iter()
+                    .take(MAX_TASK_MEMORY_RECOMMENDED_FILES)
+                    .cloned()
+                    .collect()
+            } else {
+                scored
+                    .entry
+                    .read_first_files
+                    .iter()
+                    .take(MAX_TASK_MEMORY_RECOMMENDED_FILES)
+                    .cloned()
+                    .collect()
+            },
+        })
+        .collect()
 }
 
 fn load_task_memory(path: &Path) -> TaskMemoryStore {
@@ -9044,6 +9227,56 @@ mod tests {
         assert_eq!(merged.confirmed_files, vec!["a.ts", "b.ts"]);
         assert_eq!(merged.created_at, 200, "newer entry wins recency");
         assert_eq!(merged.client, "claude", "local provenance is kept");
+    }
+
+    #[test]
+    fn mxf_round_trips_task_memory_across_repos() {
+        let source = tempfile::tempdir().unwrap();
+        confirm_task_memory_reads(
+            source.path(),
+            "fix login token expiry handling in session module",
+            &["src/auth/session.ts".to_string()],
+            &["src/auth/session.ts".to_string()],
+            "claude",
+            100,
+        )
+        .unwrap();
+
+        // Export to the vendor-neutral format and confirm its shape.
+        let (mxf, exported) = export_task_memory_mxf(source.path()).unwrap();
+        assert_eq!(exported, 1);
+        let document: Value = serde_json::from_str(&mxf).unwrap();
+        assert_eq!(document["mxf_version"], json!(MEMORY_EXCHANGE_FORMAT_VERSION));
+        assert_eq!(document["source"], json!("callsieve"));
+        assert_eq!(document["memories"][0]["kind"], json!("task_context"));
+        assert_eq!(
+            document["memories"][0]["content"],
+            json!("fix login token expiry handling in session module")
+        );
+
+        // Import the MXF document into a fresh repo and confirm it round-trips.
+        let dest = tempfile::tempdir().unwrap();
+        let (imported, total) = merge_task_memory_mxf(dest.path(), &mxf).unwrap();
+        assert_eq!((imported, total), (1, 1));
+
+        let stats = task_memory_stats(dest.path());
+        assert_eq!(stats["entries"], json!(1));
+        assert_eq!(stats["clients"], json!(["claude"]));
+
+        // Read-only recall matches on shared terms without writing a new entry.
+        let recall = recall_task_memory(dest.path(), "change login token expiry behavior").unwrap();
+        let recall_value = serde_json::to_value(&recall).unwrap();
+        assert!(
+            recall_value["similar_tasks"]
+                .as_array()
+                .is_some_and(|tasks| !tasks.is_empty()),
+            "recall should surface the imported task via shared terms"
+        );
+        assert_eq!(
+            task_memory_stats(dest.path())["entries"],
+            json!(1),
+            "recall must not write a new entry"
+        );
     }
 
     #[test]

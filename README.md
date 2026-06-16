@@ -163,8 +163,8 @@ callsieve setup-agent <codex|claude|copilot|opencode|antigravity|cursor|vscode|w
 callsieve setup-auto <path> [--force] [--dry-run]
 callsieve index-export <path> --out <file>
 callsieve index-import <path> --from <file> [--allow-partial]
-callsieve memory-export <path> --out <file>
-callsieve memory-import <path> --from <file>
+callsieve memory-export <path> --out <file> [--format json|mxf]
+callsieve memory-import <path> --from <file> [--format json|mxf]
 callsieve receipt <path> [--session <id>] [--format json|markdown]
 callsieve receipts <path>
 callsieve bootstrap <path> --client <codex|claude|copilot|opencode|antigravity|cursor|vscode|windsurf|continue|zed|junie|jetbrains|amp|goose|warp|cline|zoo|roo|generic> [--strict] [--force] [--lsp]
@@ -768,6 +768,13 @@ If a server is missing or fails, CallSieve keeps the tree-sitter and heuristic g
 - `callsieve_status`: inspect freshness, watch, schema, and LSP enrichment state
 - `callsieve_trace_check`: audit whether a session grepped before CallSieve
 - `callsieve_benchmark`: estimate platform-neutral context payload reduction against a grep/read loop
+- `callsieve_memory_recall`: recall similar past tasks and their read-first files from local task memory (Agent Memory Protocol verb `amp.recall`; read-only)
+- `callsieve_memory_stats`: summarize local task memory: entry count, contributing clients, last task (`amp.stats`)
+- `callsieve_memory_export`: export task memory in the vendor-neutral Memory Exchange Format (mxf) or native json (`amp.export`)
+- `callsieve_memory_import`: merge an mxf or json memory document into local task memory (`amp.import`)
+- `callsieve_memory_forget`: clear this repo's local task memory (`amp.forget`)
+
+The memory verbs map CallSieve's local task-memory cache onto Agent Memory Protocol verb names and return Agent-Memory-Protocol-style error codes (`AMP_INVALID_ARGUMENT`, `AMP_INTERNAL`), and the Memory Exchange Format keeps export/import portable across agent-memory tools rather than CallSieve-proprietary.
 
 `callsieve_context` self-heals a missing or stale `.callsieve/index.json` by rebuilding the local index before returning context. The direct CLI context-first commands do the same for `agent-context`, `context`, `begin`, `guard`, `codex-session`, and `grep`. MCP responses include freshness and timing metadata. The MCP server does not install shims, mutate client config, start the daemon, or send code to a remote service.
 
