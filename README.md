@@ -93,7 +93,7 @@ target/debug/callsieve agent-context <repo> "<task>" --error <stacktrace.log>
 
 `--embeddings` requires a binary built with `--features embed`; the default build stays deterministic and dependency-light. `--git-boost` nudges recently changed or high-churn files only when requested and keeps compact `git` hints in skim output. `--error` parses stack traces and error logs, then promotes indexed files named in the frames. The integer displayed score remains lexical and explainable; normal/full packets also expose `selection_confidence` as `high`, `medium`, or `low` relative to the top selected file. Hybrid retrieval only changes ordering when explicitly enabled.
 
-JSON output is compact by default for agent token savings. Add global `--pretty` for human-readable formatting. Add global `--tokenizer o200k|cl100k` (requires a binary built with `--features tokenizers`) to count budget-enforcement and proof tokens with a real BPE tokenizer instead of the default `bytes/4` heuristic. Add global `--bm25` to enable opt-in BM25+ length normalization for the content-keyword ranking signal; like `--embeddings` and `--git-boost` it only changes ordering when explicitly enabled.
+JSON output is compact by default for agent token savings. Add global `--pretty` for human-readable formatting. Add global `--tokenizer o200k|cl100k` (requires a binary built with `--features tokenizers`) to count budget-enforcement and proof tokens with a real BPE tokenizer instead of the default `bytes/4` heuristic. Add global `--bm25` to enable opt-in BM25+ length normalization for the content-keyword ranking signal, and global `--pagerank` to add an opt-in PageRank graph-centrality boost so files the codebase structurally centers on rank higher; like `--embeddings` and `--git-boost` these only change ordering when explicitly enabled.
 
 ## Current CLI Surface
 
@@ -106,6 +106,7 @@ callsieve context <path> "<task>" [--limit <n>] [--snippets-per-file <n>] [--no-
 callsieve agent-context <path> "<task>" [--limit <n>] [--snippets-per-file <n>] [--profile skim|normal|full] [--token-budget <n>] [--why-debug] [--embeddings] [--error <file>] [--git-boost] [--format json|markdown]
 callsieve focus <path> --file <file> [--symbol <symbol>] [--line <line>] [--references] [--skeleton]
 callsieve related <path> --file <file>
+callsieve graph <path> --file <file> [--direction dependencies|dependents|both] [--depth <1-3>]
 callsieve tests <path> --file <file>
 callsieve demo <path> [--task "<task>"] [--lsp]
 callsieve memory-clear <path>
@@ -192,7 +193,7 @@ callsieve enforce <path> --client <codex|claude|copilot|opencode|antigravity|cur
 callsieve shim install <path> [--force] [--strict]
 callsieve shim doctor <path>
 callsieve shim uninstall <path>
-callsieve grep <path> "<query>" [--run-rg]
+callsieve grep <path> "<query>" [--run-rg] [--structural <ast-grep-pattern>] [--structural-lang <lang>]
 callsieve stats <path>
 ```
 
@@ -764,6 +765,7 @@ If a server is missing or fails, CallSieve keeps the tree-sitter and heuristic g
 - `callsieve_symbol`: find indexed symbols with import and reference hints
 - `callsieve_focus`: reveal targeted symbols and snippets for one selected file
 - `callsieve_related`: reveal imports, callers, callees, and blast-radius hints for one selected file
+- `callsieve_graph_neighbors`: walk the import/reference graph from a file up to 3 hops (dependencies, dependents, or both) to explore blast radius
 - `callsieve_tests`: reveal tests likely related to one selected file
 - `callsieve_stats`: inspect index coverage
 - `callsieve_status`: inspect freshness, watch, schema, and LSP enrichment state
