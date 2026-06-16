@@ -460,6 +460,29 @@ fn tools_list_result() -> Value {
                     },
                     "required": ["path"]
                 }
+            },
+            {
+                "name": "callsieve_memory_pin",
+                "description": "Pin (or unpin) remembered tasks so they survive the task-memory eviction cap (Agent Memory Protocol verb: amp.pin). Matches by exact task text, else case-insensitive substring.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Repository root containing .callsieve/."
+                        },
+                        "task": {
+                            "type": "string",
+                            "description": "Task text (or substring) identifying the memory to pin."
+                        },
+                        "pinned": {
+                            "type": "boolean",
+                            "default": true,
+                            "description": "true pins (default); false unpins."
+                        }
+                    },
+                    "required": ["path", "task"]
+                }
             }
         ]
     })
@@ -499,6 +522,7 @@ fn call_tool(params: Option<Value>) -> Result<Value> {
         "callsieve_memory_export" => Ok(memory_tool_result(execute_memory_export(&arguments))),
         "callsieve_memory_import" => Ok(memory_tool_result(execute_memory_import(&arguments))),
         "callsieve_memory_forget" => Ok(memory_tool_result(execute_memory_forget(&arguments))),
+        "callsieve_memory_pin" => Ok(memory_tool_result(execute_memory_pin(&arguments))),
         name => Err(anyhow!("unknown tool: {name}")),
     }
 }
@@ -1057,6 +1081,14 @@ fn execute_memory_forget(arguments: &Value) -> Result<Value> {
     let path = amp_repo_path(arguments)?;
     let cleared = query::clear_task_memory(&path)?;
     Ok(json!({ "cleared": cleared }))
+}
+
+fn execute_memory_pin(arguments: &Value) -> Result<Value> {
+    let path = amp_repo_path(arguments)?;
+    let task = required_str(arguments, "task").map_err(amp_invalid_argument)?;
+    let pinned = optional_bool(arguments, "pinned", true).map_err(amp_invalid_argument)?;
+    let updated = query::set_task_memory_pin(&path, task, pinned)?;
+    Ok(json!({ "pinned": pinned, "updated": updated }))
 }
 
 #[derive(Clone, Copy)]

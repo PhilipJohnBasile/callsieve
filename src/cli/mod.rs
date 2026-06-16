@@ -1814,6 +1814,20 @@ pub enum Command {
         format: MemoryFormat,
     },
 
+    /// Pin (or --unpin) remembered tasks so they survive the task-memory
+    /// eviction cap. Matches by exact task text, else case-insensitive substring.
+    #[command(name = "memory-pin")]
+    MemoryPin {
+        path: PathBuf,
+
+        #[arg(long)]
+        task: String,
+
+        /// Unpin instead of pin.
+        #[arg(long)]
+        unpin: bool,
+    },
+
     /// Emit a tamper-evident receipt for one observed agent session: packets
     /// served, context tokens, reads/greps, violations, edit impacts.
     Receipt {
@@ -5590,6 +5604,16 @@ pub fn run() -> Result<()> {
                 "format": format!("{format:?}").to_lowercase(),
                 "imported": imported,
                 "entries_total": total
+            }))?;
+        }
+        Command::MemoryPin { path, task, unpin } => {
+            let updated = query::set_task_memory_pin(&path, &task, !unpin)?;
+            output::json::print(&serde_json::json!({
+                "command": "memory-pin",
+                "root": root_label(&path),
+                "task": task,
+                "pinned": !unpin,
+                "updated": updated
             }))?;
         }
         Command::Receipt {
