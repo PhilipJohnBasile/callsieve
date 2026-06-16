@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Documented `--pagerank` as experimental after measuring it: on small local benchmarks it helps some identifier/structural queries but can regress natural-language ones (it pulls toward popular hub files), and its value on large repos is not yet measured. It remains opt-in and off by default. (Gating PageRank to non-natural-language queries was tried and reverted — `QueryKind` could not separate the helpful from the harmful cases, so it only neutralized the signal.)
+
 ## v0.4.0 - 2026-06-16
 
 ### Added
