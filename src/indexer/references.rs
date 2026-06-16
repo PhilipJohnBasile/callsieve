@@ -144,22 +144,7 @@ fn parser_language(language: Language) -> Option<tree_sitter::Language> {
         Language::TypeScript => Some(tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()),
         Language::Python => Some(tree_sitter_python::LANGUAGE.into()),
         Language::Rust => Some(tree_sitter_rust::LANGUAGE.into()),
-        Language::Php
-        | Language::Go
-        | Language::Java
-        | Language::CSharp
-        | Language::C
-        | Language::Cpp
-        | Language::Ruby
-        | Language::Kotlin
-        | Language::Swift
-        | Language::Scala
-        | Language::Dart
-        | Language::Lua
-        | Language::Shell => None,
-        Language::Markdown | Language::Json | Language::Toml | Language::Yaml | Language::Text => {
-            None
-        }
+        _ => None,
     }
 }
 
@@ -428,31 +413,62 @@ enum StripState {
 }
 
 fn line_comment_len(chars: &[char], index: usize, language: Language) -> Option<usize> {
-    match language {
-        Language::Python | Language::Ruby | Language::Shell if chars[index] == '#' => Some(1),
-        Language::Rust
-        | Language::TypeScript
-        | Language::JavaScript
-        | Language::Php
-        | Language::Go
-        | Language::Java
-        | Language::CSharp
-        | Language::C
-        | Language::Cpp
-        | Language::Kotlin
-        | Language::Swift
-        | Language::Scala
-        | Language::Dart
-        | Language::Lua => (chars[index] == '/' && chars.get(index + 1) == Some(&'/')).then_some(2),
-        Language::Markdown | Language::Json | Language::Toml | Language::Yaml | Language::Text => {
-            None
-        }
-        _ => None,
+    if hash_line_comment(language) && chars[index] == '#' {
+        return Some(1);
     }
+    if slash_line_comment(language) && chars[index] == '/' && chars.get(index + 1) == Some(&'/') {
+        return Some(2);
+    }
+    if dash_line_comment(language) && chars[index] == '-' && chars.get(index + 1) == Some(&'-') {
+        return Some(2);
+    }
+    if percent_line_comment(language) && chars[index] == '%' {
+        return Some(1);
+    }
+    if semicolon_line_comment(language) && chars[index] == ';' {
+        return Some(1);
+    }
+    if basic_line_comment(language) && chars[index] == '\'' {
+        return Some(1);
+    }
+    None
 }
 
 fn block_comment_len(chars: &[char], index: usize, language: Language) -> Option<usize> {
-    (matches!(
+    (slash_line_comment(language) && chars[index] == '/' && chars.get(index + 1) == Some(&'*'))
+        .then_some(2)
+}
+
+fn is_string_quote(character: char, language: Language) -> bool {
+    if matches!(
+        language,
+        Language::TypeScript
+            | Language::JavaScript
+            | Language::Go
+            | Language::Shell
+            | Language::PowerShell
+    ) {
+        return matches!(character, '\'' | '"' | '`');
+    }
+    language.is_code() && matches!(character, '\'' | '"')
+}
+
+fn hash_line_comment(language: Language) -> bool {
+    matches!(
+        language,
+        Language::Python
+            | Language::Ruby
+            | Language::Shell
+            | Language::R
+            | Language::Perl
+            | Language::Julia
+            | Language::PowerShell
+            | Language::Elixir
+    )
+}
+
+fn slash_line_comment(language: Language) -> bool {
+    matches!(
         language,
         Language::Rust
             | Language::TypeScript
@@ -463,38 +479,48 @@ fn block_comment_len(chars: &[char], index: usize, language: Language) -> Option
             | Language::CSharp
             | Language::C
             | Language::Cpp
+            | Language::ObjectiveC
             | Language::Kotlin
             | Language::Swift
             | Language::Scala
             | Language::Dart
             | Language::Lua
-    ) && chars[index] == '/'
-        && chars.get(index + 1) == Some(&'*'))
-    .then_some(2)
+            | Language::Gml
+            | Language::Zig
+            | Language::Xpp
+            | Language::D
+            | Language::Cfml
+    )
 }
 
-fn is_string_quote(character: char, language: Language) -> bool {
-    match language {
-        Language::TypeScript | Language::JavaScript | Language::Go | Language::Shell => {
-            matches!(character, '\'' | '"' | '`')
-        }
-        Language::Python
-        | Language::Rust
-        | Language::Php
-        | Language::Java
-        | Language::CSharp
-        | Language::C
-        | Language::Cpp
-        | Language::Ruby
-        | Language::Kotlin
-        | Language::Swift
-        | Language::Scala
-        | Language::Dart
-        | Language::Lua => matches!(character, '\'' | '"'),
-        Language::Markdown | Language::Json | Language::Toml | Language::Yaml | Language::Text => {
-            false
-        }
-    }
+fn dash_line_comment(language: Language) -> bool {
+    matches!(
+        language,
+        Language::Sql
+            | Language::PlSql
+            | Language::TransactSql
+            | Language::Ada
+            | Language::Haskell
+            | Language::Lua
+    )
+}
+
+fn percent_line_comment(language: Language) -> bool {
+    matches!(
+        language,
+        Language::Matlab | Language::Erlang | Language::Prolog
+    )
+}
+
+fn semicolon_line_comment(language: Language) -> bool {
+    matches!(language, Language::Assembly | Language::Lisp)
+}
+
+fn basic_line_comment(language: Language) -> bool {
+    matches!(
+        language,
+        Language::VisualBasic | Language::ClassicVisualBasic | Language::VbScript
+    )
 }
 
 #[cfg(test)]

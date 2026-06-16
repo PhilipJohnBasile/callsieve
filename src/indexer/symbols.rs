@@ -57,14 +57,44 @@ fn parse_line(line: &str, language: Language) -> Option<(String, String, String)
         Language::Python => parse_python_line(line),
         Language::Php => parse_php_line(line),
         Language::Go => parse_go_line(line),
+        Language::Sql | Language::PlSql | Language::TransactSql => parse_sql_line(line),
+        Language::R => parse_r_line(line),
         Language::Java => parse_java_line(line),
         Language::CSharp => parse_csharp_line(line),
+        Language::VisualBasic | Language::ClassicVisualBasic | Language::VbScript => {
+            parse_basic_line(line)
+        }
         Language::C => parse_c_line(line),
         Language::Cpp => parse_cpp_line(line),
+        Language::Delphi => parse_delphi_line(line),
+        Language::Scratch | Language::LabView => None,
+        Language::Ada => parse_ada_line(line),
+        Language::Fortran => parse_fortran_line(line),
+        Language::Perl => parse_perl_line(line),
+        Language::Assembly => parse_assembly_line(line),
+        Language::Matlab => parse_matlab_line(line),
+        Language::ObjectiveC => parse_objective_c_line(line),
+        Language::Cobol => parse_cobol_line(line),
+        Language::Sas => parse_sas_line(line),
+        Language::Julia => parse_julia_line(line),
+        Language::Gml => parse_gml_line(line),
+        Language::Prolog => parse_prolog_line(line),
         Language::Ruby => parse_ruby_line(line),
+        Language::ML | Language::OCaml | Language::Caml => parse_ml_line(line),
+        Language::Lisp => parse_lisp_line(line),
+        Language::Zig => parse_zig_line(line),
         Language::Kotlin => parse_kotlin_line(line),
         Language::Swift => parse_swift_line(line),
+        Language::Abap => parse_abap_line(line),
+        Language::LadderLogic => parse_ladder_line(line),
+        Language::Xpp => parse_xpp_line(line),
+        Language::D => parse_d_line(line),
+        Language::Erlang => parse_erlang_line(line),
+        Language::PowerShell => parse_powershell_line(line),
+        Language::Cfml => parse_cfml_line(line),
         Language::Scala => parse_scala_line(line),
+        Language::Elixir => parse_elixir_line(line),
+        Language::Haskell => parse_haskell_line(line),
         Language::Dart => parse_dart_line(line),
         Language::Lua => parse_lua_line(line),
         Language::Shell => parse_shell_line(line),
@@ -302,6 +332,83 @@ fn parse_go_line(line: &str) -> Option<(String, String, String)> {
     None
 }
 
+fn parse_sql_line(line: &str) -> Option<(String, String, String)> {
+    let rest = line.trim_start();
+    if rest.starts_with("--") {
+        return None;
+    }
+    let lower = rest.to_ascii_lowercase();
+    for (keyword, kind) in [
+        ("function", "function"),
+        ("procedure", "procedure"),
+        ("package body", "package"),
+        ("package", "package"),
+        ("trigger", "trigger"),
+        ("view", "view"),
+        ("table", "table"),
+        ("type", "type"),
+    ] {
+        for prefix in [
+            format!("create or replace {keyword} "),
+            format!("create {keyword} "),
+            format!("alter {keyword} "),
+        ] {
+            if lower.starts_with(&prefix) {
+                return Some((
+                    clean_sql_name(&rest[prefix.len()..])?,
+                    kind.to_string(),
+                    "public".to_string(),
+                ));
+            }
+        }
+    }
+    None
+}
+
+fn clean_sql_name(input: &str) -> Option<String> {
+    let name = input
+        .trim()
+        .trim_start_matches('[')
+        .chars()
+        .take_while(|character| {
+            !character.is_whitespace() && !matches!(*character, '(' | '[' | ']' | ';')
+        })
+        .collect::<String>();
+    let name = name
+        .trim_matches(['"', '`', '[', ']'])
+        .rsplit('.')
+        .next()
+        .unwrap_or_default()
+        .trim_matches(['"', '`', '[', ']'])
+        .to_string();
+    (!name.is_empty()).then_some(name)
+}
+
+fn parse_r_line(line: &str) -> Option<(String, String, String)> {
+    let rest = line.trim_start();
+    if rest.starts_with('#') {
+        return None;
+    }
+    for marker in ["<- function", "= function"] {
+        if let Some((name, _)) = rest.split_once(marker) {
+            let name = name.trim();
+            if is_identifier(name) {
+                return Some((
+                    name.to_string(),
+                    "function".to_string(),
+                    "public".to_string(),
+                ));
+            }
+        }
+    }
+    if let Some(after_prefix) = rest.strip_prefix("setClass(")
+        && let Some(name) = first_quoted_local(after_prefix)
+    {
+        return Some((name, "class".to_string(), "public".to_string()));
+    }
+    None
+}
+
 fn parse_java_line(line: &str) -> Option<(String, String, String)> {
     parse_c_style_line(
         line,
@@ -354,6 +461,49 @@ fn parse_csharp_line(line: &str) -> Option<(String, String, String)> {
     )
 }
 
+fn parse_basic_line(line: &str) -> Option<(String, String, String)> {
+    let trimmed = line.trim_start();
+    if trimmed.starts_with('\'') || trimmed.to_ascii_lowercase().starts_with("rem ") {
+        return None;
+    }
+    let rest = strip_leading_modifiers_ci(
+        trimmed,
+        &[
+            "public",
+            "private",
+            "protected",
+            "friend",
+            "shared",
+            "static",
+            "partial",
+            "async",
+            "overrides",
+            "overridable",
+            "notinheritable",
+            "mustinherit",
+        ],
+    );
+    for (prefix, kind) in [
+        ("class ", "class"),
+        ("module ", "module"),
+        ("interface ", "interface"),
+        ("enum ", "enum"),
+        ("structure ", "struct"),
+        ("sub ", "function"),
+        ("function ", "function"),
+        ("property ", "property"),
+    ] {
+        if let Some(after_prefix) = strip_prefix_ci(rest, prefix) {
+            return Some((
+                take_identifier(after_prefix)?,
+                kind.to_string(),
+                visibility_from_modifiers_ci(trimmed, "public").to_string(),
+            ));
+        }
+    }
+    None
+}
+
 fn parse_c_line(line: &str) -> Option<(String, String, String)> {
     parse_c_style_line(
         line,
@@ -391,6 +541,270 @@ fn parse_cpp_line(line: &str) -> Option<(String, String, String)> {
     )
 }
 
+fn parse_delphi_line(line: &str) -> Option<(String, String, String)> {
+    let rest = line.trim_start();
+    let lower = rest.to_ascii_lowercase();
+    if let Some(after_prefix) = strip_prefix_ci(rest, "unit ") {
+        return Some((
+            take_identifier(after_prefix.trim_end_matches(';'))?,
+            "module".to_string(),
+            "public".to_string(),
+        ));
+    }
+    if lower.starts_with("type ")
+        && let Some((name, right)) = rest[5..].split_once('=')
+        && right.to_ascii_lowercase().contains("class")
+    {
+        return Some((
+            take_identifier(name.trim())?,
+            "class".to_string(),
+            "public".to_string(),
+        ));
+    }
+    for (prefix, kind) in [
+        ("procedure ", "procedure"),
+        ("function ", "function"),
+        ("constructor ", "function"),
+        ("destructor ", "function"),
+    ] {
+        if let Some(after_prefix) = strip_prefix_ci(rest, prefix) {
+            return Some((
+                last_qualified_part(&take_qualified_identifier(after_prefix)?),
+                kind.to_string(),
+                "public".to_string(),
+            ));
+        }
+    }
+    None
+}
+
+fn parse_ada_line(line: &str) -> Option<(String, String, String)> {
+    let rest = strip_leading_modifiers_ci(line.trim_start(), &["private", "limited", "generic"]);
+    for (prefix, kind) in [
+        ("package body ", "package"),
+        ("package ", "package"),
+        ("procedure ", "procedure"),
+        ("function ", "function"),
+        ("task body ", "task"),
+        ("task ", "task"),
+        ("type ", "type"),
+    ] {
+        if let Some(after_prefix) = strip_prefix_ci(rest, prefix) {
+            return Some((
+                take_identifier(after_prefix)?,
+                kind.to_string(),
+                "public".to_string(),
+            ));
+        }
+    }
+    None
+}
+
+fn parse_fortran_line(line: &str) -> Option<(String, String, String)> {
+    let rest = strip_leading_modifiers_ci(
+        line.trim_start(),
+        &["recursive", "pure", "elemental", "module"],
+    );
+    for (prefix, kind) in [
+        ("program ", "program"),
+        ("module ", "module"),
+        ("subroutine ", "function"),
+        ("function ", "function"),
+        ("type ", "type"),
+    ] {
+        if let Some(after_prefix) = strip_prefix_ci(rest, prefix) {
+            return Some((
+                take_identifier(after_prefix.trim_start_matches("::").trim_start())?,
+                kind.to_string(),
+                "public".to_string(),
+            ));
+        }
+    }
+    None
+}
+
+fn parse_perl_line(line: &str) -> Option<(String, String, String)> {
+    let rest = line.trim_start();
+    if let Some(after_prefix) = rest.strip_prefix("package ") {
+        return Some((
+            last_qualified_part(&take_qualified_identifier(after_prefix)?),
+            "module".to_string(),
+            "public".to_string(),
+        ));
+    }
+    if let Some(after_prefix) = rest.strip_prefix("sub ") {
+        return Some((
+            take_identifier(after_prefix)?,
+            "function".to_string(),
+            "public".to_string(),
+        ));
+    }
+    None
+}
+
+fn parse_assembly_line(line: &str) -> Option<(String, String, String)> {
+    let rest = line.trim_start();
+    if rest.is_empty() || rest.starts_with([';', '#', '.']) {
+        return None;
+    }
+    let (label, _) = rest.split_once(':')?;
+    let label = label.trim();
+    if label.is_empty() || label.chars().all(|character| character.is_ascii_digit()) {
+        return None;
+    }
+    Some((label.to_string(), "label".to_string(), "local".to_string()))
+}
+
+fn parse_matlab_line(line: &str) -> Option<(String, String, String)> {
+    let rest = line.trim_start();
+    if let Some(after_prefix) = rest.strip_prefix("classdef ") {
+        return Some((
+            take_identifier(strip_leading_modifiers(
+                after_prefix,
+                &["abstract", "sealed"],
+            ))?,
+            "class".to_string(),
+            "public".to_string(),
+        ));
+    }
+    if let Some(after_prefix) = rest.strip_prefix("function ") {
+        let after_output = after_prefix
+            .split_once('=')
+            .map(|(_, after)| after.trim_start())
+            .unwrap_or(after_prefix);
+        return Some((
+            take_identifier(after_output)?,
+            "function".to_string(),
+            "public".to_string(),
+        ));
+    }
+    None
+}
+
+fn parse_objective_c_line(line: &str) -> Option<(String, String, String)> {
+    let rest = line.trim_start();
+    for (prefix, kind) in [
+        ("@interface ", "class"),
+        ("@implementation ", "class"),
+        ("@protocol ", "interface"),
+    ] {
+        if let Some(after_prefix) = rest.strip_prefix(prefix) {
+            return Some((
+                take_identifier(after_prefix)?,
+                kind.to_string(),
+                "public".to_string(),
+            ));
+        }
+    }
+    if (rest.starts_with("- ") || rest.starts_with("+ "))
+        && let Some(close_paren) = rest.find(')')
+    {
+        let selector = rest[close_paren + 1..].trim_start();
+        let name = selector
+            .split([':', ';', '{', ' '])
+            .next()
+            .unwrap_or_default()
+            .trim();
+        if is_identifier(name) {
+            return Some((name.to_string(), "method".to_string(), "public".to_string()));
+        }
+    }
+    None
+}
+
+fn parse_cobol_line(line: &str) -> Option<(String, String, String)> {
+    let rest = line.trim_start();
+    let upper = rest.to_ascii_uppercase();
+    if let Some(index) = upper.find("PROGRAM-ID.") {
+        return Some((
+            take_extended_identifier(rest[index + "PROGRAM-ID.".len()..].trim())?,
+            "program".to_string(),
+            "public".to_string(),
+        ));
+    }
+    if upper.ends_with(" SECTION.") {
+        return Some((
+            take_extended_identifier(rest.trim_end_matches('.'))?,
+            "section".to_string(),
+            "public".to_string(),
+        ));
+    }
+    None
+}
+
+fn parse_sas_line(line: &str) -> Option<(String, String, String)> {
+    let rest = line.trim_start();
+    for (prefix, kind) in [
+        ("%macro ", "macro"),
+        ("data ", "dataset"),
+        ("proc ", "procedure"),
+    ] {
+        if let Some(after_prefix) = strip_prefix_ci(rest, prefix) {
+            return Some((
+                take_extended_identifier(after_prefix)?,
+                kind.to_string(),
+                "public".to_string(),
+            ));
+        }
+    }
+    None
+}
+
+fn parse_julia_line(line: &str) -> Option<(String, String, String)> {
+    let rest = line.trim_start();
+    for (prefix, kind) in [
+        ("function ", "function"),
+        ("struct ", "struct"),
+        ("mutable struct ", "struct"),
+        ("module ", "module"),
+        ("macro ", "macro"),
+    ] {
+        if let Some(after_prefix) = rest.strip_prefix(prefix) {
+            return Some((
+                take_identifier(after_prefix)?,
+                kind.to_string(),
+                "public".to_string(),
+            ));
+        }
+    }
+    if let Some(name) = method_name_before_paren(rest)
+        && rest.contains('=')
+    {
+        return Some((name, "function".to_string(), "public".to_string()));
+    }
+    None
+}
+
+fn parse_gml_line(line: &str) -> Option<(String, String, String)> {
+    let rest = line.trim_start();
+    if let Some(after_prefix) = rest.strip_prefix("function ") {
+        return Some((
+            take_identifier(after_prefix)?,
+            "function".to_string(),
+            "public".to_string(),
+        ));
+    }
+    parse_js_line(line)
+}
+
+fn parse_prolog_line(line: &str) -> Option<(String, String, String)> {
+    let rest = line.trim_start();
+    if rest.starts_with('%') || rest.starts_with(":-") {
+        return None;
+    }
+    if let Some(paren_index) = rest.find('(') {
+        let name = &rest[..paren_index];
+        if is_identifier(name) && (rest.contains(":-") || rest.contains('.')) {
+            return Some((
+                name.to_string(),
+                "predicate".to_string(),
+                "public".to_string(),
+            ));
+        }
+    }
+    None
+}
+
 fn parse_ruby_line(line: &str) -> Option<(String, String, String)> {
     let rest = line.trim_start();
     for (prefix, kind) in [
@@ -409,6 +823,82 @@ fn parse_ruby_line(line: &str) -> Option<(String, String, String)> {
                 "public".to_string(),
             ));
         }
+    }
+    None
+}
+
+fn parse_ml_line(line: &str) -> Option<(String, String, String)> {
+    let rest = line.trim_start();
+    for (prefix, kind) in [
+        ("module ", "module"),
+        ("structure ", "module"),
+        ("signature ", "interface"),
+        ("functor ", "module"),
+        ("let rec ", "function"),
+        ("let ", "value"),
+        ("fun ", "function"),
+        ("val ", "value"),
+        ("type ", "type"),
+    ] {
+        if let Some(after_prefix) = rest.strip_prefix(prefix) {
+            return Some((
+                take_identifier(after_prefix)?,
+                kind.to_string(),
+                "public".to_string(),
+            ));
+        }
+    }
+    None
+}
+
+fn parse_lisp_line(line: &str) -> Option<(String, String, String)> {
+    let rest = line.trim_start().trim_start_matches('(');
+    for (prefix, kind) in [
+        ("defun ", "function"),
+        ("defmacro ", "macro"),
+        ("defclass ", "class"),
+        ("defstruct ", "struct"),
+        ("defvar ", "variable"),
+        ("defparameter ", "variable"),
+        ("define ", "function"),
+    ] {
+        if let Some(after_prefix) = strip_prefix_ci(rest, prefix) {
+            return Some((
+                take_extended_identifier(after_prefix)?,
+                kind.to_string(),
+                "public".to_string(),
+            ));
+        }
+    }
+    None
+}
+
+fn parse_zig_line(line: &str) -> Option<(String, String, String)> {
+    let rest = strip_leading_modifiers(line.trim_start(), &["pub", "export", "extern", "inline"]);
+    if let Some(after_prefix) = rest.strip_prefix("fn ") {
+        return Some((
+            take_identifier(after_prefix)?,
+            "function".to_string(),
+            visibility_from_modifiers(line.trim_start(), "private").to_string(),
+        ));
+    }
+    if let Some(after_prefix) = rest.strip_prefix("const ")
+        && let Some((name, right)) = after_prefix.split_once('=')
+    {
+        let kind = if right.contains("struct") {
+            "struct"
+        } else if right.contains("enum") {
+            "enum"
+        } else if right.contains("union") {
+            "union"
+        } else {
+            "constant"
+        };
+        return Some((
+            take_identifier(name.trim())?,
+            kind.to_string(),
+            visibility_from_modifiers(line.trim_start(), "private").to_string(),
+        ));
     }
     None
 }
@@ -488,6 +978,153 @@ fn parse_swift_line(line: &str) -> Option<(String, String, String)> {
     None
 }
 
+fn parse_abap_line(line: &str) -> Option<(String, String, String)> {
+    let rest = line.trim_start();
+    for (prefix, kind) in [
+        ("CLASS ", "class"),
+        ("METHOD ", "method"),
+        ("FORM ", "function"),
+        ("FUNCTION ", "function"),
+        ("MODULE ", "module"),
+    ] {
+        if let Some(after_prefix) = rest.strip_prefix(prefix) {
+            return Some((
+                take_extended_identifier(after_prefix)?,
+                kind.to_string(),
+                "public".to_string(),
+            ));
+        }
+    }
+    None
+}
+
+fn parse_ladder_line(line: &str) -> Option<(String, String, String)> {
+    let rest = line.trim_start();
+    for (prefix, kind) in [
+        ("PROGRAM ", "program"),
+        ("FUNCTION_BLOCK ", "function_block"),
+        ("FUNCTION ", "function"),
+        ("ROUTINE ", "routine"),
+        ("TASK ", "task"),
+    ] {
+        if let Some(after_prefix) = strip_prefix_ci(rest, prefix) {
+            return Some((
+                take_identifier(after_prefix)?,
+                kind.to_string(),
+                "public".to_string(),
+            ));
+        }
+    }
+    None
+}
+
+fn parse_xpp_line(line: &str) -> Option<(String, String, String)> {
+    parse_c_style_line(
+        line,
+        &[
+            "public",
+            "private",
+            "protected",
+            "static",
+            "final",
+            "abstract",
+            "server",
+            "client",
+        ],
+        &[
+            ("class ", "class"),
+            ("interface ", "interface"),
+            ("enum ", "enum"),
+        ],
+    )
+}
+
+fn parse_d_line(line: &str) -> Option<(String, String, String)> {
+    parse_c_style_line(
+        line,
+        &[
+            "public",
+            "private",
+            "protected",
+            "static",
+            "final",
+            "abstract",
+            "override",
+            "extern",
+            "immutable",
+        ],
+        &[
+            ("class ", "class"),
+            ("interface ", "interface"),
+            ("struct ", "struct"),
+            ("enum ", "enum"),
+            ("template ", "template"),
+        ],
+    )
+}
+
+fn parse_erlang_line(line: &str) -> Option<(String, String, String)> {
+    let rest = line.trim_start();
+    if let Some(after_prefix) = rest.strip_prefix("-module(")
+        && let Some(name) = after_prefix.split_once(')').map(|(name, _)| name.trim())
+    {
+        return Some((name.to_string(), "module".to_string(), "public".to_string()));
+    }
+    if let Some(paren_index) = rest.find('(') {
+        let name = &rest[..paren_index];
+        if is_identifier(name) && rest.contains("->") {
+            return Some((
+                name.to_string(),
+                "function".to_string(),
+                "public".to_string(),
+            ));
+        }
+    }
+    None
+}
+
+fn parse_powershell_line(line: &str) -> Option<(String, String, String)> {
+    let rest = line.trim_start();
+    if let Some(after_prefix) = strip_prefix_ci(rest, "function ") {
+        return Some((
+            take_extended_identifier(after_prefix)?,
+            "function".to_string(),
+            "public".to_string(),
+        ));
+    }
+    if let Some(after_prefix) = strip_prefix_ci(rest, "class ") {
+        return Some((
+            take_identifier(after_prefix)?,
+            "class".to_string(),
+            "public".to_string(),
+        ));
+    }
+    None
+}
+
+fn parse_cfml_line(line: &str) -> Option<(String, String, String)> {
+    let rest = line.trim_start();
+    if let Some(after_prefix) = rest.strip_prefix("component ") {
+        let name =
+            take_attribute_value(after_prefix, "name").or_else(|| take_identifier(after_prefix));
+        return name.map(|name| (name, "component".to_string(), "public".to_string()));
+    }
+    if let Some(after_prefix) = strip_prefix_ci(rest, "function ") {
+        return Some((
+            take_identifier(after_prefix)?,
+            "function".to_string(),
+            "public".to_string(),
+        ));
+    }
+    let lower = rest.to_ascii_lowercase();
+    if lower.starts_with("<cffunction")
+        && let Some(name) = take_attribute_value(rest, "name")
+    {
+        return Some((name, "function".to_string(), "public".to_string()));
+    }
+    None
+}
+
 fn parse_scala_line(line: &str) -> Option<(String, String, String)> {
     let rest = strip_leading_modifiers(
         line.trim_start(),
@@ -513,6 +1150,58 @@ fn parse_scala_line(line: &str) -> Option<(String, String, String)> {
                 take_identifier(after_prefix)?,
                 kind.to_string(),
                 visibility_from_modifiers(line.trim_start(), "public").to_string(),
+            ));
+        }
+    }
+    None
+}
+
+fn parse_elixir_line(line: &str) -> Option<(String, String, String)> {
+    let rest = line.trim_start();
+    for (prefix, kind, visibility) in [
+        ("defmodule ", "module", "public"),
+        ("defprotocol ", "interface", "public"),
+        ("defimpl ", "impl", "public"),
+        ("defmacro ", "macro", "public"),
+        ("defmacrop ", "macro", "private"),
+        ("defp ", "function", "private"),
+        ("def ", "function", "public"),
+    ] {
+        if let Some(after_prefix) = rest.strip_prefix(prefix) {
+            return Some((
+                take_qualified_identifier(after_prefix)?,
+                kind.to_string(),
+                visibility.to_string(),
+            ));
+        }
+    }
+    None
+}
+
+fn parse_haskell_line(line: &str) -> Option<(String, String, String)> {
+    let rest = line.trim_start();
+    for (prefix, kind) in [
+        ("module ", "module"),
+        ("data ", "type"),
+        ("newtype ", "type"),
+        ("type ", "type"),
+        ("class ", "class"),
+    ] {
+        if let Some(after_prefix) = rest.strip_prefix(prefix) {
+            return Some((
+                take_identifier(after_prefix)?,
+                kind.to_string(),
+                "public".to_string(),
+            ));
+        }
+    }
+    if let Some((name, _)) = rest.split_once("::") {
+        let name = name.trim();
+        if is_identifier(name) {
+            return Some((
+                name.to_string(),
+                "function".to_string(),
+                "public".to_string(),
             ));
         }
     }
@@ -574,6 +1263,97 @@ fn parse_shell_line(line: &str) -> Option<(String, String, String)> {
         ));
     }
     None
+}
+
+fn strip_prefix_ci<'a>(input: &'a str, prefix: &str) -> Option<&'a str> {
+    input
+        .get(..prefix.len())
+        .is_some_and(|candidate| candidate.eq_ignore_ascii_case(prefix))
+        .then(|| &input[prefix.len()..])
+}
+
+fn strip_leading_modifiers_ci<'a>(mut input: &'a str, modifiers: &[&str]) -> &'a str {
+    loop {
+        let mut stripped = false;
+        for modifier in modifiers {
+            if let Some(rest) = strip_prefix_ci(input, modifier)
+                && rest
+                    .chars()
+                    .next()
+                    .is_none_or(|character| !character.is_ascii_alphanumeric() && character != '_')
+            {
+                input = rest.trim_start();
+                stripped = true;
+                break;
+            }
+        }
+        if !stripped {
+            return input;
+        }
+    }
+}
+
+fn visibility_from_modifiers_ci(line: &str, default_visibility: &'static str) -> &'static str {
+    for part in line.split_whitespace() {
+        if part.eq_ignore_ascii_case("public") {
+            return "public";
+        }
+        if part.eq_ignore_ascii_case("private") {
+            return "private";
+        }
+        if part.eq_ignore_ascii_case("protected") {
+            return "protected";
+        }
+        if part.eq_ignore_ascii_case("friend") || part.eq_ignore_ascii_case("internal") {
+            return "internal";
+        }
+    }
+    default_visibility
+}
+
+fn take_extended_identifier(input: &str) -> Option<String> {
+    let identifier: String = input
+        .trim_start()
+        .chars()
+        .take_while(|character| {
+            character.is_ascii_alphanumeric()
+                || matches!(*character, '_' | '-' | '.' | ':' | '$' | '#')
+        })
+        .collect();
+    let identifier = identifier
+        .trim_end_matches(['.', ';', ':'])
+        .rsplit(['.', ':'])
+        .find(|part| !part.is_empty())
+        .unwrap_or_default()
+        .to_string();
+    (!identifier.is_empty()).then_some(identifier)
+}
+
+fn first_quoted_local(input: &str) -> Option<String> {
+    let quote_index = input.find(['\'', '"'])?;
+    let quote = input.as_bytes()[quote_index] as char;
+    let rest = &input[quote_index + 1..];
+    let end = rest.find(quote)?;
+    Some(rest[..end].to_string())
+}
+
+fn take_attribute_value(input: &str, name: &str) -> Option<String> {
+    let lower = input.to_ascii_lowercase();
+    let marker = format!("{}=", name.to_ascii_lowercase());
+    let start = lower.find(&marker)? + marker.len();
+    let rest = input[start..].trim_start();
+    let quote = rest.chars().next()?;
+    if matches!(quote, '\'' | '"') {
+        let value = &rest[quote.len_utf8()..];
+        let end = value.find(quote)?;
+        return Some(value[..end].to_string());
+    }
+    Some(
+        rest.chars()
+            .take_while(|character| !character.is_whitespace() && *character != '>')
+            .collect(),
+    )
+    .filter(|value: &String| !value.is_empty())
 }
 
 fn parse_c_style_line(
@@ -761,26 +1541,43 @@ fn assign_parents(symbols: &mut [RawSymbol]) {
 }
 
 fn estimate_end_line(lines: &[&str], start_index: usize, language: Language) -> usize {
-    match language {
-        Language::Python => estimate_python_end_line(lines, start_index),
-        Language::Rust
-        | Language::TypeScript
-        | Language::JavaScript
-        | Language::Php
-        | Language::Go
-        | Language::Java
-        | Language::CSharp
-        | Language::C
-        | Language::Cpp
-        | Language::Kotlin
-        | Language::Swift
-        | Language::Scala
-        | Language::Dart => estimate_curly_end_line(lines, start_index),
-        Language::Ruby | Language::Lua | Language::Shell => start_index + 1,
-        Language::Markdown | Language::Json | Language::Toml | Language::Yaml | Language::Text => {
-            start_index + 1
-        }
+    if language == Language::Python {
+        return estimate_python_end_line(lines, start_index);
     }
+
+    if uses_curly_end_estimate(language) {
+        return estimate_curly_end_line(lines, start_index);
+    }
+
+    start_index + 1
+}
+
+fn uses_curly_end_estimate(language: Language) -> bool {
+    matches!(
+        language,
+        Language::Rust
+            | Language::TypeScript
+            | Language::JavaScript
+            | Language::Php
+            | Language::Go
+            | Language::Java
+            | Language::CSharp
+            | Language::C
+            | Language::Cpp
+            | Language::ObjectiveC
+            | Language::Kotlin
+            | Language::Swift
+            | Language::Scala
+            | Language::Dart
+            | Language::R
+            | Language::Julia
+            | Language::Gml
+            | Language::Zig
+            | Language::Xpp
+            | Language::D
+            | Language::PowerShell
+            | Language::Cfml
+    )
 }
 
 fn estimate_python_end_line(lines: &[&str], start_index: usize) -> usize {
@@ -848,34 +1645,97 @@ fn previous_doc_comment(lines: &[&str], index: usize, language: Language) -> Opt
     }
 
     let previous = lines[index - 1].trim();
-    let doc = match language {
-        Language::Rust if previous.starts_with("///") => previous.trim_start_matches("///"),
-        Language::Python if previous.starts_with('#') => previous.trim_start_matches('#'),
-        Language::Ruby | Language::Shell if previous.starts_with('#') => {
-            previous.trim_start_matches('#')
-        }
-        Language::TypeScript
-        | Language::JavaScript
-        | Language::Php
-        | Language::Go
-        | Language::Java
-        | Language::CSharp
-        | Language::C
-        | Language::Cpp
-        | Language::Kotlin
-        | Language::Swift
-        | Language::Scala
-        | Language::Dart
-        | Language::Lua
-            if previous.starts_with("//") || previous.starts_with('*') =>
-        {
-            previous.trim_start_matches('/').trim_start_matches('*')
-        }
-        _ => return None,
+    let doc = if language == Language::Rust && previous.starts_with("///") {
+        previous.trim_start_matches("///")
+    } else if hash_doc_language(language) && previous.starts_with('#') {
+        previous.trim_start_matches('#')
+    } else if slash_doc_language(language)
+        && (previous.starts_with("//") || previous.starts_with('*'))
+    {
+        previous.trim_start_matches('/').trim_start_matches('*')
+    } else if dash_doc_language(language) && previous.starts_with("--") {
+        previous.trim_start_matches("--")
+    } else if percent_doc_language(language) && previous.starts_with('%') {
+        previous.trim_start_matches('%')
+    } else if semicolon_doc_language(language) && previous.starts_with(';') {
+        previous.trim_start_matches(';')
+    } else if basic_doc_language(language) && previous.starts_with('\'') {
+        previous.trim_start_matches('\'')
+    } else {
+        return None;
     };
 
     let doc = doc.trim();
     (!doc.is_empty()).then(|| doc.to_string())
+}
+
+fn hash_doc_language(language: Language) -> bool {
+    matches!(
+        language,
+        Language::Python
+            | Language::Ruby
+            | Language::Shell
+            | Language::R
+            | Language::Perl
+            | Language::Julia
+            | Language::PowerShell
+            | Language::Elixir
+    )
+}
+
+fn slash_doc_language(language: Language) -> bool {
+    matches!(
+        language,
+        Language::TypeScript
+            | Language::JavaScript
+            | Language::Php
+            | Language::Go
+            | Language::Java
+            | Language::CSharp
+            | Language::C
+            | Language::Cpp
+            | Language::ObjectiveC
+            | Language::Kotlin
+            | Language::Swift
+            | Language::Scala
+            | Language::Dart
+            | Language::Lua
+            | Language::Gml
+            | Language::Zig
+            | Language::Xpp
+            | Language::D
+            | Language::Cfml
+    )
+}
+
+fn dash_doc_language(language: Language) -> bool {
+    matches!(
+        language,
+        Language::Sql
+            | Language::PlSql
+            | Language::TransactSql
+            | Language::Ada
+            | Language::Haskell
+            | Language::Lua
+    )
+}
+
+fn percent_doc_language(language: Language) -> bool {
+    matches!(
+        language,
+        Language::Matlab | Language::Erlang | Language::Prolog
+    )
+}
+
+fn semicolon_doc_language(language: Language) -> bool {
+    matches!(language, Language::Assembly | Language::Lisp)
+}
+
+fn basic_doc_language(language: Language) -> bool {
+    matches!(
+        language,
+        Language::VisualBasic | Language::ClassicVisualBasic | Language::VbScript
+    )
 }
 
 #[cfg(test)]

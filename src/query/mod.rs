@@ -8647,30 +8647,7 @@ fn is_callsieve_context_command(command: &str) -> bool {
 }
 
 fn language_name(language: Language) -> &'static str {
-    match language {
-        Language::TypeScript => "typescript",
-        Language::JavaScript => "javascript",
-        Language::Python => "python",
-        Language::Rust => "rust",
-        Language::Php => "php",
-        Language::Go => "go",
-        Language::Java => "java",
-        Language::CSharp => "csharp",
-        Language::C => "c",
-        Language::Cpp => "cpp",
-        Language::Ruby => "ruby",
-        Language::Kotlin => "kotlin",
-        Language::Swift => "swift",
-        Language::Scala => "scala",
-        Language::Dart => "dart",
-        Language::Lua => "lua",
-        Language::Shell => "shell",
-        Language::Markdown => "markdown",
-        Language::Json => "json",
-        Language::Toml => "toml",
-        Language::Yaml => "yaml",
-        Language::Text => "text",
-    }
+    language.name()
 }
 
 fn push_path_check(checks: &mut Vec<BenchmarkDoctorCheck>, path: &str, check: &str, passed: bool) {

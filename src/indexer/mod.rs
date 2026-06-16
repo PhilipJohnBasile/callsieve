@@ -67,7 +67,6 @@ pub fn build_index_with_options(root: &Path, options: IndexOptions) -> Result<Co
     for relative_path in walker::source_files(&root)? {
         let absolute_path = root.join(&relative_path);
         let path_string = path_to_string(&relative_path);
-        let language = Language::from_path(&relative_path).expect("walker only returns languages");
         let bytes = match fs::read(&absolute_path) {
             Ok(bytes) => bytes,
             Err(error) => {
@@ -82,6 +81,8 @@ pub fn build_index_with_options(root: &Path, options: IndexOptions) -> Result<Co
                 continue;
             }
         };
+        let language = Language::from_path_with_content(&relative_path, &content)
+            .expect("walker only returns languages");
         let metadata = fs::metadata(&absolute_path)
             .with_context(|| format!("failed to stat {}", absolute_path.display()))?;
         let file_id = file_id(&path_string);
@@ -385,6 +386,15 @@ fn resolve_import(
         Language::Ruby => resolve_relative_import(root, source, imported, &["rb"]),
         Language::Dart => resolve_relative_import(root, source, imported, &["dart"]),
         Language::Shell => resolve_relative_import(root, source, imported, &["sh", "bash", "zsh"]),
+        Language::PowerShell => resolve_relative_import(root, source, imported, &["ps1", "psm1"]),
+        Language::R => resolve_relative_import(root, source, imported, &["r", "R"]),
+        Language::Julia => resolve_relative_import(root, source, imported, &["jl"]),
+        Language::Elixir => resolve_relative_import(root, source, imported, &["ex", "exs"]),
+        Language::Lua => resolve_relative_import(root, source, imported, &["lua"]),
+        Language::OCaml | Language::Caml | Language::ML => {
+            resolve_relative_import(root, source, imported, &["ml", "mli", "sml", "sig"])
+        }
+        Language::Haskell => resolve_relative_import(root, source, imported, &["hs", "lhs"]),
         Language::C => resolve_relative_import(root, source, imported, &["h", "c"]),
         Language::Cpp => resolve_relative_import(
             root,
@@ -392,16 +402,14 @@ fn resolve_import(
             imported,
             &["hpp", "hh", "hxx", "h", "cpp", "cc", "cxx"],
         ),
+        Language::ObjectiveC => resolve_relative_import(root, source, imported, &["h", "m", "mm"]),
         Language::Go
         | Language::Java
         | Language::CSharp
         | Language::Kotlin
         | Language::Swift
-        | Language::Scala
-        | Language::Lua => None,
-        Language::Markdown | Language::Json | Language::Toml | Language::Yaml | Language::Text => {
-            None
-        }
+        | Language::Scala => None,
+        _ => None,
     }
 }
 
@@ -918,6 +926,188 @@ mod tests {
             .unwrap();
         assert_eq!(readme.language, Language::Markdown);
         assert!(readme.content_terms.contains(&"session".to_string()));
+    }
+
+    #[test]
+    fn indexes_current_goal_language_set() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(temp.path().join("src/languages")).unwrap();
+
+        let cases = [
+            (
+                "python.py",
+                Language::Python,
+                "def py_symbol():\n    return True\n",
+                "py_symbol",
+            ),
+            (
+                "typescript.ts",
+                Language::TypeScript,
+                "export function tsSymbol() {}\n",
+                "tsSymbol",
+            ),
+            (
+                "javascript.js",
+                Language::JavaScript,
+                "function jsSymbol() {}\n",
+                "jsSymbol",
+            ),
+            (
+                "cplusplus.cpp",
+                Language::Cpp,
+                "class CppSymbol {};\n",
+                "CppSymbol",
+            ),
+            (
+                "java.java",
+                Language::Java,
+                "public class JavaSymbol {}\n",
+                "JavaSymbol",
+            ),
+            (
+                "csharp.cs",
+                Language::CSharp,
+                "public class CSharpSymbol {}\n",
+                "CSharpSymbol",
+            ),
+            ("go.go", Language::Go, "func GoSymbol() {}\n", "GoSymbol"),
+            (
+                "rust.rs",
+                Language::Rust,
+                "pub fn rust_symbol() {}\n",
+                "rust_symbol",
+            ),
+            (
+                "sql.sql",
+                Language::Sql,
+                "create procedure sql_symbol as select 1;\n",
+                "sql_symbol",
+            ),
+            (
+                "kotlin.kt",
+                Language::Kotlin,
+                "class KotlinSymbol\n",
+                "KotlinSymbol",
+            ),
+            (
+                "swift.swift",
+                Language::Swift,
+                "struct SwiftSymbol {}\n",
+                "SwiftSymbol",
+            ),
+            (
+                "dart.dart",
+                Language::Dart,
+                "class DartSymbol {}\n",
+                "DartSymbol",
+            ),
+            (
+                "php.php",
+                Language::Php,
+                "<?php function php_symbol() {}\n",
+                "php_symbol",
+            ),
+            (
+                "ruby.rb",
+                Language::Ruby,
+                "def ruby_symbol\nend\n",
+                "ruby_symbol",
+            ),
+            (
+                "bash.sh",
+                Language::Shell,
+                "bash_symbol() { :; }\n",
+                "bash_symbol",
+            ),
+            (
+                "powershell.ps1",
+                Language::PowerShell,
+                "function PowerShellSymbol {}\n",
+                "PowerShellSymbol",
+            ),
+            ("c.c", Language::C, "void c_symbol() {}\n", "c_symbol"),
+            (
+                "scala.scala",
+                Language::Scala,
+                "object ScalaSymbol\n",
+                "ScalaSymbol",
+            ),
+            (
+                "elixir.ex",
+                Language::Elixir,
+                "defmodule ElixirSymbol do\nend\n",
+                "ElixirSymbol",
+            ),
+            (
+                "lua.lua",
+                Language::Lua,
+                "function lua_symbol()\nend\n",
+                "lua_symbol",
+            ),
+            (
+                "objective.m",
+                Language::ObjectiveC,
+                "@interface ObjcSymbol\n@end\n",
+                "ObjcSymbol",
+            ),
+            (
+                "zig.zig",
+                Language::Zig,
+                "pub fn zig_symbol() void {}\n",
+                "zig_symbol",
+            ),
+            (
+                "julia.jl",
+                Language::Julia,
+                "function julia_symbol()\nend\n",
+                "julia_symbol",
+            ),
+            (
+                "ocaml.ml",
+                Language::OCaml,
+                "let ocaml_symbol = 1\n",
+                "ocaml_symbol",
+            ),
+            (
+                "haskell.hs",
+                Language::Haskell,
+                "haskellSymbol :: IO ()\n",
+                "haskellSymbol",
+            ),
+            (
+                "plsql.plsql",
+                Language::PlSql,
+                "create or replace procedure plsql_symbol is begin null; end;\n",
+                "plsql_symbol",
+            ),
+        ];
+
+        for (path, _, content, _) in cases {
+            fs::write(temp.path().join("src/languages").join(path), content).unwrap();
+        }
+
+        let index = build_index(temp.path()).unwrap();
+
+        for (path, language, _, symbol_name) in cases {
+            let full_path = format!("src/languages/{path}");
+            assert!(
+                index
+                    .files
+                    .iter()
+                    .any(|file| file.path == full_path && file.language == language),
+                "missing indexed file for {path}"
+            );
+            assert!(
+                index.symbols.iter().any(|symbol| {
+                    symbol.name == symbol_name
+                        && index
+                            .files
+                            .iter()
+                            .any(|file| file.id == symbol.file_id && file.path == full_path)
+                }),
+                "missing symbol {symbol_name} for {path}"
+            );
+        }
     }
 
     #[test]
