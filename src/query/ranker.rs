@@ -1,10 +1,32 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::Serialize;
 
 use crate::store::{CodeIndex, FileRecord, SymbolRecord};
 
 use super::{formatter, path_tokens};
+
+/// BM25+ free parameters (standard defaults). `K1` controls term-frequency
+/// saturation and `B` controls document-length normalization strength.
+const BM25_K1: f32 = 1.2;
+const BM25_B: f32 = 0.75;
+
+/// Opt-in BM25+ length normalization for the content-keyword component. Off by
+/// default so the proven deterministic ranker and the checked-in benchmark
+/// gates stay byte-identical; enabled process-wide by `--bm25`, matching how
+/// `--embeddings` / `--git-boost` only change ordering when explicitly asked.
+static BM25: AtomicBool = AtomicBool::new(false);
+
+/// Enables or disables BM25+ length normalization for this process. Call once
+/// at startup before ranking.
+pub fn set_bm25(enabled: bool) {
+    BM25.store(enabled, Ordering::Relaxed);
+}
+
+fn bm25_enabled() -> bool {
+    BM25.load(Ordering::Relaxed)
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct RankedMatch {
@@ -67,11 +89,22 @@ pub fn rank(index: &CodeIndex, question: &str, limit: usize) -> Vec<RankedMatch>
 /// its full weight.
 struct TokenWeights {
     weights: BTreeMap<String, f32>,
+    /// Average document length (in lines) across the corpus, used for BM25+
+    /// length normalization. Zero when the corpus is empty.
+    avg_doc_len: f32,
+    /// Whether BM25+ length normalization is active for this ranking pass.
+    bm25: bool,
 }
 
 impl TokenWeights {
     fn new(index: &CodeIndex, query_tokens: &[String]) -> Self {
         let document_count = index.files.len();
+        let avg_doc_len = if document_count == 0 {
+            0.0
+        } else {
+            let total: u64 = index.files.iter().map(|file| file.line_count as u64).sum();
+            total as f32 / document_count as f32
+        };
         let query_set: BTreeSet<&str> = query_tokens.iter().map(String::as_str).collect();
         let mut document_frequency: BTreeMap<&str, usize> =
             query_set.iter().map(|token| (*token, 0usize)).collect();
@@ -142,7 +175,25 @@ impl TokenWeights {
             })
             .collect();
 
-        Self { weights }
+        Self {
+            weights,
+            avg_doc_len,
+            bm25: bm25_enabled(),
+        }
+    }
+
+    /// BM25+ length-normalization multiplier for a document of `doc_len` lines.
+    /// Returns `1.0` for an average-length document, `< 1.0` for longer ones
+    /// (so a big file no longer wins on cumulative matches alone), and `> 1.0`
+    /// for shorter, more focused files. Term frequency is treated as binary
+    /// here because the index stores a deduplicated content-term set rather than
+    /// raw counts; the IDF clamp in `weight` already supplies the BM25+ δ floor.
+    fn length_norm(&self, doc_len: usize) -> f32 {
+        if self.avg_doc_len <= 0.0 {
+            return 1.0;
+        }
+        let dl = doc_len as f32;
+        (BM25_K1 + 1.0) / (BM25_K1 * (1.0 - BM25_B + BM25_B * dl / self.avg_doc_len) + 1.0)
     }
 
     fn weight(&self, token: &str) -> f32 {
@@ -158,6 +209,18 @@ impl TokenWeights {
     /// contributes `base * rarity_weight` points instead of a flat `base`.
     fn overlap_points(&self, base: i32, tokens: &[String]) -> i32 {
         let weighted: f32 = tokens.iter().map(|token| self.weight(token)).sum();
+        ((base as f32 * weighted).round() as i32).max(1)
+    }
+
+    /// Like `overlap_points`, but for a document's content terms it applies
+    /// BM25+ length normalization when `--bm25` is enabled. With BM25+ off this
+    /// is identical to `overlap_points`, so default ranking is unchanged.
+    fn content_overlap_points(&self, base: i32, doc_len: usize, tokens: &[String]) -> i32 {
+        if !self.bm25 {
+            return self.overlap_points(base, tokens);
+        }
+        let weighted: f32 =
+            tokens.iter().map(|token| self.weight(token)).sum::<f32>() * self.length_norm(doc_len);
         ((base as f32 * weighted).round() as i32).max(1)
     }
 }
@@ -583,7 +646,7 @@ fn score_file(
             &mut why,
             &mut score_debug,
             "content_keyword_overlap",
-            weights.overlap_points(weight, &content_overlap),
+            weights.content_overlap_points(weight, file.line_count, &content_overlap),
             format!("content keyword overlap: {}", content_overlap.join(", ")),
         );
     }
@@ -3643,6 +3706,43 @@ mod tests {
                 .iter()
                 .any(|reason| reason == "command surface intent"),
             "CLI module should explain command-surface evidence"
+        );
+    }
+
+    #[test]
+    fn bm25_length_norm_penalizes_long_files_and_boosts_short_ones() {
+        let weights = TokenWeights {
+            weights: BTreeMap::new(),
+            avg_doc_len: 100.0,
+            bm25: true,
+        };
+        // Average-length document is unaffected.
+        assert!((weights.length_norm(100) - 1.0).abs() < 1e-6);
+        // Longer than average is down-weighted, shorter is up-weighted, and the
+        // multiplier is monotonically decreasing in document length.
+        let long = weights.length_norm(1000);
+        let short = weights.length_norm(10);
+        assert!(long < 1.0, "long files should be penalized, got {long}");
+        assert!(short > 1.0, "short files should be boosted, got {short}");
+        assert!(short > weights.length_norm(50));
+        assert!(weights.length_norm(50) > long);
+    }
+
+    #[test]
+    fn content_overlap_points_unchanged_when_bm25_disabled() {
+        let mut map = BTreeMap::new();
+        map.insert("auth".to_string(), 1.0);
+        let weights = TokenWeights {
+            weights: map,
+            avg_doc_len: 100.0,
+            bm25: false,
+        };
+        let tokens = vec!["auth".to_string()];
+        // With BM25 off, content scoring must equal the legacy overlap points
+        // regardless of document length, so default ranking stays byte-identical.
+        assert_eq!(
+            weights.content_overlap_points(8, 5000, &tokens),
+            weights.overlap_points(8, &tokens)
         );
     }
 }

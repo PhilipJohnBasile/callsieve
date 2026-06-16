@@ -249,6 +249,11 @@ fn tools_list_result() -> Value {
                             "type": "integer",
                             "minimum": 0,
                             "default": 1
+                        },
+                        "skeleton": {
+                            "type": "boolean",
+                            "default": false,
+                            "description": "Collapse symbol bodies to signature + `{ … }` markers for a compact, low-token view of the file's shape."
                         }
                     },
                     "required": ["path", "file"]
@@ -794,6 +799,7 @@ fn execute_focus(arguments: &Value) -> Result<Value> {
     let line = optional_usize_opt(arguments, "line")?;
     let include_references = optional_bool(arguments, "references", false)?;
     let snippets_per_symbol = optional_usize(arguments, "snippets_per_symbol", 1)?;
+    let skeleton = optional_bool(arguments, "skeleton", false)?;
     let index = load_index_cached(&path)?;
     let output = query::focus_file(
         &path,
@@ -803,6 +809,7 @@ fn execute_focus(arguments: &Value) -> Result<Value> {
         line,
         include_references,
         snippets_per_symbol,
+        skeleton,
     )?;
 
     Ok(serde_json::to_value(output)?)

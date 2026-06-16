@@ -5,7 +5,9 @@ pub mod embed;
 pub mod embed_build;
 pub mod formatter;
 pub mod ranker;
+pub mod skeleton;
 pub mod stacktrace;
+pub mod tokens;
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -1928,6 +1930,7 @@ pub fn find_symbol(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn focus_file(
     root: &Path,
     index: &CodeIndex,
@@ -1936,6 +1939,7 @@ pub fn focus_file(
     line: Option<usize>,
     include_references: bool,
     snippets_per_symbol: usize,
+    skeleton: bool,
 ) -> Result<FocusOutput> {
     let lookup = IndexLookup::new(index);
     let file = lookup
@@ -1995,7 +1999,9 @@ pub fn focus_file(
             signature: symbol.signature.clone(),
         })
         .collect();
-    let snippets = if symbol_name.is_some() || line.is_some() {
+    let snippets = if skeleton {
+        skeleton_snippets(root, file, &symbol_records)
+    } else if symbol_name.is_some() || line.is_some() {
         focused_symbol_snippets(root, file, &symbol_records, snippets_per_symbol)
     } else {
         context_snippets(
@@ -7839,11 +7845,7 @@ fn benchmark_terms(task: &str) -> Vec<String> {
 }
 
 fn estimate_tokens(text: &str) -> usize {
-    if text.is_empty() {
-        0
-    } else {
-        text.len().div_ceil(4)
-    }
+    tokens::count(text)
 }
 
 fn context_payload_reduction(
@@ -8202,6 +8204,27 @@ fn focused_symbol_snippets(
         .iter()
         .take(snippets_per_symbol)
         .filter_map(|symbol| focused_symbol_snippet_from_lines(&lines, symbol))
+        .collect()
+}
+
+/// Signature-only snippets for each symbol in the file, bodies collapsed to a
+/// `{ … }` / `…` marker. Far cheaper than full snippets for surveying a file's
+/// shape; reuses the `Snippet` schema so output stays unchanged downstream.
+fn skeleton_snippets(root: &Path, file: &FileRecord, symbols: &[&SymbolRecord]) -> Vec<Snippet> {
+    let Ok(content) = fs::read_to_string(root.join(&file.path)) else {
+        return Vec::new();
+    };
+    let lines: Vec<&str> = content.lines().collect();
+    symbols
+        .iter()
+        .filter_map(|symbol| {
+            skeleton::skeletonize(&lines, symbol.start_line, symbol.end_line).map(|skel| Snippet {
+                lines: skel.lines,
+                text: skel.text,
+                truncated: skel.omitted_lines > 0,
+                omitted_lines: (skel.omitted_lines > 0).then_some(skel.omitted_lines),
+            })
+        })
         .collect()
 }
 
