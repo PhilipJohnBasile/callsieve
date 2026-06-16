@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Known follow-up
+
+- The v0.4.0 ranker changes bumped the retrieval-contract fingerprint, so the checked-in public-proof benchmark reports (`swe-bench-lite-50`, `requests-seed-10`, `natural-language-30`, `rust-slice-12`, `typescript-slice-4`) are flagged **stale** and `public-proof-report` is currently `needs_work`. Default ranking output is byte-identical (the new signals are opt-in), so regenerating the reports under the current contract should reproduce the same numbers with a fresh fingerprint — it is a provenance refresh, not a retrieval regression. Regeneration (a slow `bench-run` across the public repos) is pending. The example manifest also reports default packet `5195 > 5000` tokens, attributable to this session's added source growing the repo, not a change in default selection.
+
 ### Changed
 
 - Documented `--pagerank` as experimental after measuring it. On the authoritative public Django natural-language slice (`manifest-nl`, 30 SWE-bench tasks) it is neutral — first-correct-file@5 `0.967`, identical to default and to `--bm25` — so it neither lifts nor regresses real-repo NL retrieval. On small local fixtures it is mixed (helps some identifier/structural queries, can shuffle natural-language ones). It remains opt-in and off by default; treat it as a lever to try, not a proven default. (Gating PageRank to non-natural-language queries was tried and reverted — `QueryKind` could not separate the helpful from the harmful cases, so it only neutralized the signal.)
