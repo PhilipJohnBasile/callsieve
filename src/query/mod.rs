@@ -512,6 +512,10 @@ struct TaskMemoryEntry {
     /// Which agent client taught this entry (claude, codex, cursor, ...).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     client: String,
+    /// When true, this entry is exempt from the eviction cap so a deliberately
+    /// pinned task is never aged out by newer tasks.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pinned: bool,
 }
 
 struct ScoredTaskMemoryEntry<'a> {
@@ -4331,11 +4335,9 @@ pub fn confirm_task_memory_reads(
             tests: Vec::new(),
             confirmed_files: confirmed,
             client: client.to_string(),
+            pinned: false,
         });
-        if memory.entries.len() > MAX_TASK_MEMORY_ENTRIES {
-            let excess = memory.entries.len() - MAX_TASK_MEMORY_ENTRIES;
-            memory.entries.drain(0..excess);
-        }
+        enforce_task_memory_cap(&mut memory.entries);
     }
     save_task_memory(&path, &memory)?;
     Ok(stored)
@@ -4450,16 +4452,14 @@ fn merge_task_memory_entries(root: &Path, incoming: Vec<TaskMemoryEntry>) -> Res
             if existing.client.is_empty() {
                 existing.client = entry.client;
             }
+            existing.pinned = existing.pinned || entry.pinned;
         } else {
             memory.entries.push(entry);
         }
         imported_count += 1;
     }
     memory.entries.sort_by_key(|entry| entry.created_at);
-    if memory.entries.len() > MAX_TASK_MEMORY_ENTRIES {
-        let excess = memory.entries.len() - MAX_TASK_MEMORY_ENTRIES;
-        memory.entries.drain(0..excess);
-    }
+    enforce_task_memory_cap(&mut memory.entries);
     let total = memory.entries.len();
     save_task_memory(&path, &memory)?;
     Ok((imported_count, total))
@@ -4511,6 +4511,8 @@ struct MxfAttributes {
     confirmed_files: Vec<String>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     client: String,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pinned: bool,
 }
 
 impl TaskMemoryEntry {
@@ -4527,6 +4529,7 @@ impl TaskMemoryEntry {
                 tests: self.tests.clone(),
                 confirmed_files: self.confirmed_files.clone(),
                 client: self.client.clone(),
+                pinned: self.pinned,
             },
         }
     }
@@ -4548,6 +4551,7 @@ impl TaskMemoryEntry {
             tests: memory.attributes.tests,
             confirmed_files: memory.attributes.confirmed_files,
             client: memory.attributes.client,
+            pinned: memory.attributes.pinned,
         }
     }
 }
@@ -4621,8 +4625,10 @@ pub fn task_memory_stats(root: &Path) -> Value {
         .iter()
         .max_by_key(|entry| entry.created_at)
         .map(|entry| entry.task.clone());
+    let pinned = memory.entries.iter().filter(|entry| entry.pinned).count();
     json!({
         "entries": memory.entries.len(),
+        "pinned": pinned,
         "clients": clients,
         "last_task": last_task,
         "path": path.display().to_string(),
@@ -4677,15 +4683,13 @@ pub fn task_memory_for_context(
         {
             entry.confirmed_files = previous.confirmed_files.clone();
             entry.client = previous.client.clone();
+            entry.pinned = previous.pinned;
         }
         memory.entries.retain(|existing| {
             existing.task != entry.task || existing.read_first_files != entry.read_first_files
         });
         memory.entries.push(entry);
-        if memory.entries.len() > MAX_TASK_MEMORY_ENTRIES {
-            let excess = memory.entries.len() - MAX_TASK_MEMORY_ENTRIES;
-            memory.entries.drain(0..excess);
-        }
+        enforce_task_memory_cap(&mut memory.entries);
         save_task_memory(&path, &memory)?;
     }
 
@@ -4697,6 +4701,56 @@ pub fn task_memory_for_context(
         recommended_files,
         recommended_symbols,
     })
+}
+
+/// Trims task memory back to the entry cap, evicting the oldest **unpinned**
+/// entries first. Pinned entries are never evicted (even if they alone exceed
+/// the cap), so a deliberately pinned task survives newer ones. Callers keep
+/// `entries` in oldest-first order, so removing from the front drops the
+/// stalest unpinned memory.
+fn enforce_task_memory_cap(entries: &mut Vec<TaskMemoryEntry>) {
+    if entries.len() <= MAX_TASK_MEMORY_ENTRIES {
+        return;
+    }
+    let mut excess = entries.len() - MAX_TASK_MEMORY_ENTRIES;
+    let mut index = 0;
+    while excess > 0 && index < entries.len() {
+        if entries[index].pinned {
+            index += 1;
+        } else {
+            entries.remove(index);
+            excess -= 1;
+        }
+    }
+}
+
+/// Pins or unpins every remembered task matching `task_query` (exact match, or
+/// case-insensitive substring when there is no exact hit), protecting it from
+/// the eviction cap. Returns how many entries changed.
+pub fn set_task_memory_pin(root: &Path, task_query: &str, pinned: bool) -> Result<usize> {
+    let path = task_memory_path(root);
+    let mut memory = load_task_memory(&path);
+    let has_exact = memory
+        .entries
+        .iter()
+        .any(|entry| entry.task == task_query);
+    let needle = task_query.to_ascii_lowercase();
+    let mut changed = 0usize;
+    for entry in &mut memory.entries {
+        let matches = if has_exact {
+            entry.task == task_query
+        } else {
+            entry.task.to_ascii_lowercase().contains(&needle)
+        };
+        if matches && entry.pinned != pinned {
+            entry.pinned = pinned;
+            changed += 1;
+        }
+    }
+    if changed > 0 {
+        save_task_memory(&path, &memory)?;
+    }
+    Ok(changed)
 }
 
 /// Builds the recall view (similar tasks with their read-first files) shared by
@@ -4782,6 +4836,7 @@ fn task_memory_entry_from_context(
         read_first_files,
         symbols,
         tests,
+        pinned: false,
     }
 }
 
@@ -9277,6 +9332,57 @@ mod tests {
             json!(1),
             "recall must not write a new entry"
         );
+    }
+
+    #[test]
+    fn pinned_entries_survive_the_eviction_cap() {
+        // Oldest entry is pinned; fill well past the cap with newer entries.
+        let mut entries: Vec<TaskMemoryEntry> = (0..MAX_TASK_MEMORY_ENTRIES + 5)
+            .map(|i| TaskMemoryEntry {
+                task: format!("task {i}"),
+                task_terms: Vec::new(),
+                created_at: i as u64,
+                read_first_files: Vec::new(),
+                symbols: Vec::new(),
+                tests: Vec::new(),
+                confirmed_files: Vec::new(),
+                client: String::new(),
+                pinned: i == 0,
+            })
+            .collect();
+
+        enforce_task_memory_cap(&mut entries);
+
+        assert_eq!(entries.len(), MAX_TASK_MEMORY_ENTRIES);
+        assert!(
+            entries.iter().any(|entry| entry.task == "task 0" && entry.pinned),
+            "the pinned oldest entry must survive eviction"
+        );
+        // The next-oldest unpinned entries are the ones evicted.
+        assert!(!entries.iter().any(|entry| entry.task == "task 1"));
+    }
+
+    #[test]
+    fn set_task_memory_pin_marks_entries_and_reports_in_stats() {
+        let temp = tempfile::tempdir().unwrap();
+        confirm_task_memory_reads(
+            temp.path(),
+            "investigate session creation lifecycle",
+            &["a.ts".to_string()],
+            &["a.ts".to_string()],
+            "claude",
+            100,
+        )
+        .unwrap();
+
+        let updated = set_task_memory_pin(temp.path(), "session creation", true).unwrap();
+        assert_eq!(updated, 1, "substring match should pin the entry");
+        assert_eq!(task_memory_stats(temp.path())["pinned"], json!(1));
+
+        // Idempotent: re-pinning changes nothing; unpin clears it.
+        assert_eq!(set_task_memory_pin(temp.path(), "session creation", true).unwrap(), 0);
+        assert_eq!(set_task_memory_pin(temp.path(), "session creation", false).unwrap(), 1);
+        assert_eq!(task_memory_stats(temp.path())["pinned"], json!(0));
     }
 
     #[test]

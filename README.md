@@ -165,6 +165,7 @@ callsieve index-export <path> --out <file>
 callsieve index-import <path> --from <file> [--allow-partial]
 callsieve memory-export <path> --out <file> [--format json|mxf]
 callsieve memory-import <path> --from <file> [--format json|mxf]
+callsieve memory-pin <path> --task "<task>" [--unpin]
 callsieve receipt <path> [--session <id>] [--format json|markdown]
 callsieve receipts <path>
 callsieve bootstrap <path> --client <codex|claude|copilot|opencode|antigravity|cursor|vscode|windsurf|continue|zed|junie|jetbrains|amp|goose|warp|cline|zoo|roo|generic> [--strict] [--force] [--lsp]
@@ -773,6 +774,7 @@ If a server is missing or fails, CallSieve keeps the tree-sitter and heuristic g
 - `callsieve_memory_export`: export task memory in the vendor-neutral Memory Exchange Format (mxf) or native json (`amp.export`)
 - `callsieve_memory_import`: merge an mxf or json memory document into local task memory (`amp.import`)
 - `callsieve_memory_forget`: clear this repo's local task memory (`amp.forget`)
+- `callsieve_memory_pin`: pin or unpin remembered tasks so they survive the eviction cap (`amp.pin`)
 
 The memory verbs map CallSieve's local task-memory cache onto Agent Memory Protocol verb names and return Agent-Memory-Protocol-style error codes (`AMP_INVALID_ARGUMENT`, `AMP_INTERNAL`), and the Memory Exchange Format keeps export/import portable across agent-memory tools rather than CallSieve-proprietary.
 
