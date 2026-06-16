@@ -22,20 +22,41 @@ pub fn extract_imports(content: &str, language: Language) -> Vec<RawImport> {
             Language::TypeScript | Language::JavaScript => extract_js_import(line, &mut imports),
             Language::Php => extract_php_import(line, &mut imports),
             Language::Go => extract_go_import(line, &mut imports),
-            Language::Java | Language::Kotlin | Language::Swift | Language::Scala => {
+            Language::Java | Language::Kotlin | Language::Swift | Language::Scala | Language::D => {
                 extract_dotted_import(line, &mut imports)
             }
             Language::CSharp => extract_csharp_import(line, &mut imports),
-            Language::C | Language::Cpp => extract_c_include(line, &mut imports),
+            Language::C | Language::Cpp | Language::ObjectiveC => {
+                extract_c_include(line, &mut imports)
+            }
+            Language::VisualBasic | Language::ClassicVisualBasic | Language::VbScript => {
+                extract_basic_import(line, &mut imports)
+            }
+            Language::Sql | Language::PlSql | Language::TransactSql => {}
+            Language::R => extract_r_import(line, &mut imports),
+            Language::Delphi => extract_delphi_import(line, &mut imports),
+            Language::Ada => extract_ada_import(line, &mut imports),
+            Language::Fortran => extract_fortran_import(line, &mut imports),
+            Language::Perl => extract_perl_import(line, &mut imports),
+            Language::Matlab => extract_matlab_import(line, &mut imports),
+            Language::Julia => extract_julia_import(line, &mut imports),
+            Language::ML | Language::OCaml | Language::Caml => {
+                extract_ml_import(line, &mut imports)
+            }
+            Language::Haskell => extract_haskell_import(line, &mut imports),
+            Language::Erlang => extract_erlang_import(line, &mut imports),
+            Language::Elixir => extract_elixir_import(line, &mut imports),
             Language::Ruby => extract_ruby_import(line, &mut imports),
             Language::Dart => extract_dart_import(line, &mut imports),
             Language::Lua => extract_lua_import(line, &mut imports),
             Language::Shell => extract_shell_import(line, &mut imports),
+            Language::PowerShell => extract_powershell_import(line, &mut imports),
             Language::Markdown
             | Language::Json
             | Language::Toml
             | Language::Yaml
             | Language::Text => {}
+            _ => {}
         }
     }
 
@@ -204,7 +225,7 @@ fn extract_csharp_import(line: &str, imports: &mut Vec<RawImport>) {
 
 fn extract_c_include(line: &str, imports: &mut Vec<RawImport>) {
     let trimmed = line.trim_start();
-    if !trimmed.starts_with("#include") {
+    if !trimmed.starts_with("#include") && !trimmed.starts_with("#import") {
         return;
     }
     let imported = first_quoted(trimmed).or_else(|| {
@@ -217,6 +238,205 @@ fn extract_c_include(line: &str, imports: &mut Vec<RawImport>) {
             imported,
             aliases: Vec::new(),
         });
+    }
+}
+
+fn extract_basic_import(line: &str, imports: &mut Vec<RawImport>) {
+    let trimmed = line.trim_start();
+    if let Some(rest) = strip_prefix_ci(trimmed, "imports ") {
+        let imported = rest.trim().to_string();
+        if !imported.is_empty() {
+            imports.push(RawImport {
+                imported,
+                aliases: Vec::new(),
+            });
+        }
+    }
+}
+
+fn extract_r_import(line: &str, imports: &mut Vec<RawImport>) {
+    let trimmed = line.trim_start();
+    if (trimmed.starts_with("source(")
+        || trimmed.starts_with("library(")
+        || trimmed.starts_with("require("))
+        && let Some(imported) = first_quoted(trimmed).or_else(|| call_argument(trimmed))
+    {
+        imports.push(RawImport {
+            imported,
+            aliases: Vec::new(),
+        });
+    }
+}
+
+fn extract_delphi_import(line: &str, imports: &mut Vec<RawImport>) {
+    let trimmed = line.trim_start();
+    if let Some(rest) = strip_prefix_ci(trimmed, "uses ") {
+        for imported in rest.trim_end_matches(';').split(',') {
+            let imported = imported.trim();
+            if !imported.is_empty() {
+                imports.push(RawImport {
+                    imported: imported.to_string(),
+                    aliases: Vec::new(),
+                });
+            }
+        }
+    }
+}
+
+fn extract_ada_import(line: &str, imports: &mut Vec<RawImport>) {
+    let trimmed = line.trim_start();
+    for prefix in ["with ", "use "] {
+        if let Some(rest) = strip_prefix_ci(trimmed, prefix) {
+            imports.push(RawImport {
+                imported: rest.trim_end_matches(';').trim().to_string(),
+                aliases: Vec::new(),
+            });
+            return;
+        }
+    }
+}
+
+fn extract_fortran_import(line: &str, imports: &mut Vec<RawImport>) {
+    let trimmed = line.trim_start();
+    if let Some(rest) = strip_prefix_ci(trimmed, "use ") {
+        let imported = rest
+            .split([',', ':', '!'])
+            .next()
+            .unwrap_or_default()
+            .trim();
+        if !imported.is_empty() {
+            imports.push(RawImport {
+                imported: imported.to_string(),
+                aliases: Vec::new(),
+            });
+        }
+    }
+}
+
+fn extract_perl_import(line: &str, imports: &mut Vec<RawImport>) {
+    let trimmed = line.trim_start();
+    for prefix in ["use ", "require "] {
+        if let Some(rest) = trimmed.strip_prefix(prefix) {
+            let imported = first_quoted(rest).unwrap_or_else(|| {
+                rest.split_whitespace()
+                    .next()
+                    .unwrap_or_default()
+                    .trim_end_matches(';')
+                    .to_string()
+            });
+            if !imported.is_empty() {
+                imports.push(RawImport {
+                    imported,
+                    aliases: Vec::new(),
+                });
+            }
+            return;
+        }
+    }
+}
+
+fn extract_matlab_import(line: &str, imports: &mut Vec<RawImport>) {
+    let trimmed = line.trim_start();
+    if let Some(rest) = trimmed.strip_prefix("import ") {
+        imports.push(RawImport {
+            imported: rest.trim_end_matches(';').trim().to_string(),
+            aliases: Vec::new(),
+        });
+    }
+}
+
+fn extract_julia_import(line: &str, imports: &mut Vec<RawImport>) {
+    let trimmed = line.trim_start();
+    for prefix in ["using ", "import "] {
+        if let Some(rest) = trimmed.strip_prefix(prefix) {
+            imports.push(RawImport {
+                imported: rest.trim().to_string(),
+                aliases: Vec::new(),
+            });
+            return;
+        }
+    }
+    if trimmed.starts_with("include(")
+        && let Some(imported) = first_quoted(trimmed)
+    {
+        imports.push(RawImport {
+            imported,
+            aliases: Vec::new(),
+        });
+    }
+}
+
+fn extract_ml_import(line: &str, imports: &mut Vec<RawImport>) {
+    let trimmed = line.trim_start();
+    for prefix in ["open ", "include ", "module "] {
+        if let Some(rest) = trimmed.strip_prefix(prefix) {
+            let imported = rest
+                .split(['=', ':', ' '])
+                .next()
+                .unwrap_or_default()
+                .trim();
+            if !imported.is_empty() {
+                imports.push(RawImport {
+                    imported: imported.to_string(),
+                    aliases: Vec::new(),
+                });
+            }
+            return;
+        }
+    }
+}
+
+fn extract_haskell_import(line: &str, imports: &mut Vec<RawImport>) {
+    let trimmed = line.trim_start();
+    if let Some(rest) = trimmed.strip_prefix("import ") {
+        let rest = rest
+            .trim_start_matches("qualified ")
+            .trim_start_matches("safe ")
+            .trim_start();
+        let imported = rest
+            .split_whitespace()
+            .next()
+            .unwrap_or_default()
+            .trim_end_matches(';');
+        if !imported.is_empty() {
+            imports.push(RawImport {
+                imported: imported.to_string(),
+                aliases: Vec::new(),
+            });
+        }
+    }
+}
+
+fn extract_erlang_import(line: &str, imports: &mut Vec<RawImport>) {
+    let trimmed = line.trim_start();
+    if (trimmed.starts_with("-include(") || trimmed.starts_with("-include_lib("))
+        && let Some(imported) = first_quoted(trimmed)
+    {
+        imports.push(RawImport {
+            imported,
+            aliases: Vec::new(),
+        });
+    }
+}
+
+fn extract_elixir_import(line: &str, imports: &mut Vec<RawImport>) {
+    let trimmed = line.trim_start();
+    for prefix in ["alias ", "import ", "require ", "use "] {
+        if let Some(rest) = trimmed.strip_prefix(prefix) {
+            let imported = rest
+                .split([',', '{'])
+                .next()
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+            if !imported.is_empty() {
+                imports.push(RawImport {
+                    imported,
+                    aliases: Vec::new(),
+                });
+            }
+            return;
+        }
     }
 }
 
@@ -273,6 +493,28 @@ fn extract_shell_import(line: &str, imports: &mut Vec<RawImport>) {
             imported,
             aliases: Vec::new(),
         });
+    }
+}
+
+fn extract_powershell_import(line: &str, imports: &mut Vec<RawImport>) {
+    let trimmed = line.trim_start();
+    for prefix in ["using module ", "using namespace ", "Import-Module "] {
+        if let Some(rest) = strip_prefix_ci(trimmed, prefix) {
+            let imported = first_quoted(rest).unwrap_or_else(|| {
+                rest.split_whitespace()
+                    .next()
+                    .unwrap_or_default()
+                    .trim_matches(['"', '\''])
+                    .to_string()
+            });
+            if !imported.is_empty() {
+                imports.push(RawImport {
+                    imported,
+                    aliases: Vec::new(),
+                });
+            }
+            return;
+        }
     }
 }
 
@@ -453,6 +695,23 @@ fn is_identifier(input: &str) -> bool {
         character.is_ascii_alphabetic() || character == '_' || character == '$'
     }) && chars
         .all(|character| character.is_ascii_alphanumeric() || character == '_' || character == '$')
+}
+
+fn strip_prefix_ci<'a>(input: &'a str, prefix: &str) -> Option<&'a str> {
+    input
+        .get(..prefix.len())
+        .is_some_and(|candidate| candidate.eq_ignore_ascii_case(prefix))
+        .then(|| &input[prefix.len()..])
+}
+
+fn call_argument(input: &str) -> Option<String> {
+    let start = input.find('(')? + 1;
+    let rest = input[start..].trim_start();
+    let value: String = rest
+        .chars()
+        .take_while(|character| !matches!(*character, ')' | ',' | ' ' | '\t'))
+        .collect();
+    (!value.is_empty()).then_some(value)
 }
 
 fn quoted_after(line: &str, marker: &str) -> Option<String> {
