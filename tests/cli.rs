@@ -2020,6 +2020,20 @@ fn agent_context_and_grep_default_to_five_read_first_files() {
             .len(),
         5
     );
+    // `--structural` attaches an ast-grep fallback block. The pattern is always
+    // echoed; `available` reflects whether ast-grep is on PATH, so this holds
+    // whether or not the binary is installed (it degrades gracefully).
+    let structural_grep = json(&run(&[
+        "grep",
+        root,
+        "targetFeature",
+        "--structural",
+        "fn $NAME($$$) { $$$ }",
+        "--structural-lang",
+        "rust",
+    ]));
+    assert_eq!(structural_grep["sg"]["pattern"], "fn $NAME($$$) { $$$ }");
+    assert!(structural_grep["sg"]["available"].is_boolean());
 
     let shim = json(&run(&[
         "shim-run",

@@ -28,6 +28,21 @@ fn bm25_enabled() -> bool {
     BM25.load(Ordering::Relaxed)
 }
 
+/// Opt-in PageRank graph-centrality boost. Off by default so default ranking
+/// and the checked-in benchmark gates stay byte-identical; enabled process-wide
+/// by `--pagerank`, like `--bm25` / `--git-boost`.
+static PAGERANK: AtomicBool = AtomicBool::new(false);
+
+/// Enables or disables the PageRank centrality boost for this process. Call once
+/// at startup before ranking.
+pub fn set_pagerank(enabled: bool) {
+    PAGERANK.store(enabled, Ordering::Relaxed);
+}
+
+pub fn pagerank_enabled() -> bool {
+    PAGERANK.load(Ordering::Relaxed)
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct RankedMatch {
     pub file_id: String,

@@ -372,6 +372,36 @@ fn tools_list_result() -> Value {
                 }
             },
             {
+                "name": "callsieve_graph_neighbors",
+                "description": "Walk the import/reference graph from a file up to N hops to explore blast radius beyond the single hop callsieve_related gives.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Repository root containing .callsieve/index.json."
+                        },
+                        "file": {
+                            "type": "string",
+                            "description": "Anchor file path to walk from."
+                        },
+                        "direction": {
+                            "type": "string",
+                            "enum": ["dependencies", "dependents", "both"],
+                            "default": "both",
+                            "description": "dependencies = outgoing (imports/references); dependents = incoming (imported_by/referenced_by)."
+                        },
+                        "depth": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 3,
+                            "default": 1
+                        }
+                    },
+                    "required": ["path", "file"]
+                }
+            },
+            {
                 "name": "callsieve_memory_recall",
                 "description": "Recall similar past tasks and their read-first files from local task memory (Agent Memory Protocol verb: amp.recall). Read-only; does not write the current task.",
                 "inputSchema": {
@@ -517,6 +547,9 @@ fn call_tool(params: Option<Value>) -> Result<Value> {
         "callsieve_status" => Ok(tool_execution_result(execute_status(&arguments))),
         "callsieve_trace_check" => Ok(tool_execution_result(execute_trace_check(&arguments))),
         "callsieve_benchmark" => Ok(tool_execution_result(execute_benchmark(&arguments))),
+        "callsieve_graph_neighbors" => {
+            Ok(tool_execution_result(execute_graph_neighbors(&arguments)))
+        }
         "callsieve_memory_recall" => Ok(memory_tool_result(execute_memory_recall(&arguments))),
         "callsieve_memory_stats" => Ok(memory_tool_result(execute_memory_stats(&arguments))),
         "callsieve_memory_export" => Ok(memory_tool_result(execute_memory_export(&arguments))),
@@ -1004,6 +1037,22 @@ fn execute_benchmark(arguments: &Value) -> Result<Value> {
         },
     )?;
 
+    Ok(serde_json::to_value(output)?)
+}
+
+fn execute_graph_neighbors(arguments: &Value) -> Result<Value> {
+    let path = repo_path(arguments)?;
+    let file = required_str(arguments, "file")?;
+    let direction_arg = arguments
+        .get("direction")
+        .and_then(Value::as_str)
+        .unwrap_or("both");
+    let direction = query::GraphDirection::parse(direction_arg).ok_or_else(|| {
+        anyhow!("unknown direction '{direction_arg}' (expected dependencies, dependents, or both)")
+    })?;
+    let depth = optional_usize(arguments, "depth", 1)?;
+    let index = load_index_cached(&path)?;
+    let output = query::graph_neighbors(&path, &index, file, direction, depth)?;
     Ok(serde_json::to_value(output)?)
 }
 

@@ -2049,6 +2049,152 @@ pub fn focus_file(
     })
 }
 
+/// Caps for multi-hop graph traversal so a deep walk can never blow the token
+/// budget or fan out unboundedly.
+const MAX_GRAPH_NEIGHBORS: usize = 100;
+const MAX_GRAPH_DEPTH: usize = 3;
+
+/// Direction of a graph walk relative to the anchor file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GraphDirection {
+    /// Outgoing: files the anchor imports or references (its dependencies).
+    Dependencies,
+    /// Incoming: files that import or reference the anchor (its dependents).
+    Dependents,
+    /// Both directions.
+    Both,
+}
+
+impl GraphDirection {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "dependencies" | "out" => Some(Self::Dependencies),
+            "dependents" | "in" => Some(Self::Dependents),
+            "both" => Some(Self::Both),
+            _ => None,
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::Dependencies => "dependencies",
+            Self::Dependents => "dependents",
+            Self::Both => "both",
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct GraphNeighborsOutput {
+    root: String,
+    file: String,
+    direction: &'static str,
+    depth: usize,
+    neighbors: Vec<GraphNeighbor>,
+    #[serde(skip_serializing_if = "is_false")]
+    truncated: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    warnings: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct GraphNeighbor {
+    file: String,
+    hop: usize,
+    via: &'static str,
+}
+
+/// Walks the file-level import/reference graph from `file_path` up to `depth`
+/// hops in `direction`, returning a compact, bounded adjacency packet. Lets an
+/// agent explore blast radius beyond the single hop `focus`/`related` give,
+/// reusing the edges already in the index.
+pub fn graph_neighbors(
+    root: &Path,
+    index: &CodeIndex,
+    file_path: &str,
+    direction: GraphDirection,
+    depth: usize,
+) -> Result<GraphNeighborsOutput> {
+    let lookup = IndexLookup::new(index);
+    let file = lookup
+        .file_by_path(file_path)
+        .ok_or_else(|| anyhow!("file is not indexed: {file_path}"))?;
+    let depth = depth.clamp(1, MAX_GRAPH_DEPTH);
+
+    let mut visited: BTreeSet<String> = BTreeSet::new();
+    visited.insert(file.path.clone());
+    let mut frontier = vec![file.path.clone()];
+    let mut neighbors: Vec<GraphNeighbor> = Vec::new();
+    let mut truncated = false;
+
+    'walk: for hop in 1..=depth {
+        let mut next = Vec::new();
+        for path in &frontier {
+            for (neighbor, via) in graph_adjacency(&lookup, path, direction) {
+                if neighbors.len() >= MAX_GRAPH_NEIGHBORS {
+                    truncated = true;
+                    break 'walk;
+                }
+                if visited.insert(neighbor.clone()) {
+                    neighbors.push(GraphNeighbor {
+                        file: neighbor.clone(),
+                        hop,
+                        via,
+                    });
+                    next.push(neighbor);
+                }
+            }
+        }
+        if next.is_empty() {
+            break;
+        }
+        frontier = next;
+    }
+
+    Ok(GraphNeighborsOutput {
+        root: root_label(root),
+        file: file.path.clone(),
+        direction: direction.name(),
+        depth,
+        neighbors,
+        truncated,
+        warnings: stale_warnings(root, index),
+    })
+}
+
+/// One-hop neighbors of `path` in the requested direction, tagged by edge kind.
+fn graph_adjacency(
+    lookup: &IndexLookup<'_>,
+    path: &str,
+    direction: GraphDirection,
+) -> Vec<(String, &'static str)> {
+    let mut out = Vec::new();
+    let want_out = matches!(
+        direction,
+        GraphDirection::Dependencies | GraphDirection::Both
+    );
+    let want_in = matches!(direction, GraphDirection::Dependents | GraphDirection::Both);
+    if want_out {
+        for imported in resolved_imports_for_file(lookup, path) {
+            out.push((imported, "imports"));
+        }
+        for reference in lookup.references_from_path(path) {
+            if let Some(target) = &reference.target_path {
+                out.push((target.clone(), "references"));
+            }
+        }
+    }
+    if want_in {
+        for import in lookup.imports_to_path(path) {
+            out.push((import.source_path.clone(), "imported_by"));
+        }
+        for reference in lookup.references_to_path(path) {
+            out.push((reference.source_path.clone(), "referenced_by"));
+        }
+    }
+    out
+}
+
 pub fn related_file(root: &Path, index: &CodeIndex, file_path: &str) -> Result<RelatedOutput> {
     let lookup = IndexLookup::new(index);
     let file = lookup
@@ -2331,6 +2477,7 @@ pub fn build_context_with(
     // test-offtopic penalty so they rank at the top. No-op when no trace given.
     apply_error_context(index, &mut candidates, options.error_frames, options.limit);
     apply_git_boost(index, &mut candidates, options.git_boost);
+    apply_pagerank_boost(index, &lookup, &mut candidates, ranker::pagerank_enabled());
 
     let mut warnings = stale_warnings(root, index);
     // Graph consensus exists for vocabulary-gap queries: natural-language
@@ -2711,6 +2858,127 @@ const GIT_HOTSPOT_CAP_COMMITS: u32 = 10;
 /// baseline and the retrieval benchmark stay byte-identical; when enabled it
 /// nudges recently-changed and frequently-touched files up with an explicit
 /// `why` so the boost is auditable.
+/// PageRank damping factor and iteration budget. Fixed so centrality is
+/// deterministic across runs.
+const PAGERANK_DAMPING: f32 = 0.85;
+const PAGERANK_ITERATIONS: usize = 30;
+/// Maximum points the centrality signal can add, relative to the most central
+/// file. Kept modest so PageRank nudges/ties-breaks rather than dominating
+/// query relevance.
+const PAGERANK_MAX_BOOST: i32 = 30;
+
+/// File-level PageRank over the import + reference graph (nodes = files; an edge
+/// `a -> b` means `a` imports or references `b`). Returns a path -> rank map.
+/// Deterministic: fixed iteration count and sorted node order.
+fn compute_file_pagerank(index: &CodeIndex) -> BTreeMap<String, f32> {
+    // Sorted, de-duplicated node set over every file path for stable indexing.
+    let mut nodes: Vec<&str> = index.files.iter().map(|file| file.path.as_str()).collect();
+    nodes.sort_unstable();
+    nodes.dedup();
+    let node_count = nodes.len();
+    if node_count == 0 {
+        return BTreeMap::new();
+    }
+    let position: BTreeMap<&str, usize> = nodes
+        .iter()
+        .enumerate()
+        .map(|(idx, path)| (*path, idx))
+        .collect();
+
+    // Out-edges with multiplicity, so a file referenced many times pulls more
+    // rank from its source than one referenced once.
+    let mut out: Vec<Vec<usize>> = vec![Vec::new(); node_count];
+    let mut add_edge = |from: &str, to: &str| {
+        if let (Some(&from_idx), Some(&to_idx)) = (position.get(from), position.get(to))
+            && from_idx != to_idx
+        {
+            out[from_idx].push(to_idx);
+        }
+    };
+    for import in &index.imports {
+        if let Some(target) = &import.resolved_path {
+            add_edge(&import.source_path, target);
+        }
+    }
+    for reference in &index.references {
+        if let Some(target) = &reference.target_path {
+            add_edge(&reference.source_path, target);
+        }
+    }
+
+    let teleport = (1.0 - PAGERANK_DAMPING) / node_count as f32;
+    let mut rank = vec![1.0 / node_count as f32; node_count];
+    for _ in 0..PAGERANK_ITERATIONS {
+        let mut next = vec![teleport; node_count];
+        // Dangling nodes (no out-edges) spread their mass across all nodes.
+        let dangling: f32 = (0..node_count)
+            .filter(|&i| out[i].is_empty())
+            .map(|i| rank[i])
+            .sum();
+        let dangling_share = PAGERANK_DAMPING * dangling / node_count as f32;
+        for slot in next.iter_mut() {
+            *slot += dangling_share;
+        }
+        for (i, neighbors) in out.iter().enumerate() {
+            if neighbors.is_empty() {
+                continue;
+            }
+            let share = PAGERANK_DAMPING * rank[i] / neighbors.len() as f32;
+            for &j in neighbors {
+                next[j] += share;
+            }
+        }
+        rank = next;
+    }
+
+    nodes
+        .into_iter()
+        .zip(rank)
+        .map(|(path, score)| (path.to_string(), score))
+        .collect()
+}
+
+/// Adds a bounded PageRank centrality boost so a file the codebase structurally
+/// centers on is preferred over an equally-relevant leaf. Opt-in via `--pagerank`;
+/// a no-op otherwise, keeping default ranking unchanged.
+fn apply_pagerank_boost(
+    index: &CodeIndex,
+    lookup: &IndexLookup<'_>,
+    candidates: &mut [ContextCandidate],
+    enabled: bool,
+) {
+    if !enabled || candidates.len() <= 1 {
+        return;
+    }
+    let ranks = compute_file_pagerank(index);
+    let max_rank = ranks.values().copied().fold(0.0f32, f32::max);
+    if max_rank <= 0.0 {
+        return;
+    }
+    for candidate in candidates.iter_mut() {
+        let Some(file) = lookup.file_by_id(&candidate.file_id) else {
+            continue;
+        };
+        let Some(&rank) = ranks.get(&file.path) else {
+            continue;
+        };
+        let boost = ((rank / max_rank) * PAGERANK_MAX_BOOST as f32).round() as i32;
+        if boost <= 0 {
+            continue;
+        }
+        let why = format!("central file (pagerank {:.4})", rank);
+        candidate.best_score = candidate.best_score.saturating_add(boost);
+        if candidate.seen_why.insert(why.clone()) {
+            candidate.why.insert(0, why.clone());
+        }
+        candidate.push_debug(ranker::ScoreComponent {
+            name: "pagerank_centrality".to_string(),
+            points: boost,
+            detail: why,
+        });
+    }
+}
+
 fn apply_git_boost(index: &CodeIndex, candidates: &mut [ContextCandidate], enabled: bool) {
     if !enabled {
         return;
@@ -9020,6 +9288,72 @@ mod tests {
             source_range: None,
             target_range: None,
         }
+    }
+
+    #[test]
+    fn graph_neighbors_walks_multiple_hops_in_direction() {
+        let files = vec![
+            minimal_file("a", "src/a.rs"),
+            minimal_file("b", "src/b.rs"),
+            minimal_file("c", "src/c.rs"),
+        ];
+        let mut index = minimal_index(files);
+        index.imports = vec![
+            import_record("src/a.rs", "src/b.rs"),
+            import_record("src/b.rs", "src/c.rs"),
+        ];
+
+        // a -> b -> c. Depth 2 outgoing from a reaches b (hop 1) and c (hop 2).
+        let out =
+            graph_neighbors(Path::new("."), &index, "src/a.rs", GraphDirection::Dependencies, 2)
+                .unwrap();
+        let hops: BTreeMap<&str, usize> =
+            out.neighbors.iter().map(|n| (n.file.as_str(), n.hop)).collect();
+        assert_eq!(hops.get("src/b.rs"), Some(&1));
+        assert_eq!(hops.get("src/c.rs"), Some(&2));
+
+        // Depth 1 stops before c.
+        let shallow =
+            graph_neighbors(Path::new("."), &index, "src/a.rs", GraphDirection::Dependencies, 1)
+                .unwrap();
+        assert!(shallow.neighbors.iter().all(|n| n.file != "src/c.rs"));
+
+        // Incoming from c reaches b then a.
+        let up =
+            graph_neighbors(Path::new("."), &index, "src/c.rs", GraphDirection::Dependents, 2)
+                .unwrap();
+        let up_files: Vec<&str> = up.neighbors.iter().map(|n| n.file.as_str()).collect();
+        assert!(up_files.contains(&"src/b.rs"));
+        assert!(up_files.contains(&"src/a.rs"));
+    }
+
+    #[test]
+    fn pagerank_ranks_hub_above_leaf_and_conserves_mass() {
+        let files = vec![
+            minimal_file("hub", "src/core/hub.rs"),
+            minimal_file("a", "src/a.rs"),
+            minimal_file("b", "src/b.rs"),
+            minimal_file("c", "src/c.rs"),
+            minimal_file("leaf", "src/leaf.rs"),
+        ];
+        let mut index = minimal_index(files);
+        // a, b, c all reference the hub; nothing references the leaf.
+        index.references = vec![
+            reference_record("src/a.rs", "src/core/hub.rs", "call"),
+            reference_record("src/b.rs", "src/core/hub.rs", "call"),
+            reference_record("src/c.rs", "src/core/hub.rs", "call"),
+        ];
+
+        let ranks = compute_file_pagerank(&index);
+        assert!(
+            ranks["src/core/hub.rs"] > ranks["src/leaf.rs"],
+            "a referenced hub must outrank an unreferenced leaf"
+        );
+        let total: f32 = ranks.values().sum();
+        assert!(
+            (total - 1.0).abs() < 1e-3,
+            "PageRank should conserve probability mass (~1.0), got {total}"
+        );
     }
 
     #[test]

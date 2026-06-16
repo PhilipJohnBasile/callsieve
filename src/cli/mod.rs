@@ -726,6 +726,11 @@ pub struct Cli {
     #[arg(long, global = true)]
     bm25: bool,
 
+    /// Enable a PageRank graph-centrality boost so files the codebase structurally
+    /// centers on rank higher. Opt-in and deterministic; off by default.
+    #[arg(long, global = true)]
+    pagerank: bool,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -801,6 +806,23 @@ pub enum Command {
 
         #[arg(long)]
         file: String,
+    },
+
+    /// Walk the import/reference graph from a file up to N hops to see blast
+    /// radius beyond the single hop `related`/`focus` give.
+    Graph {
+        path: PathBuf,
+
+        #[arg(long)]
+        file: String,
+
+        /// dependencies (outgoing), dependents (incoming), or both.
+        #[arg(long, default_value = "both")]
+        direction: String,
+
+        /// Hops to walk (1-3).
+        #[arg(long, default_value_t = 1)]
+        depth: usize,
     },
 
     /// Return tests likely related to one indexed file.
@@ -2052,6 +2074,16 @@ pub enum Command {
         #[arg(long)]
         run_rg: bool,
 
+        /// Run an ast-grep structural search after returning context, matching
+        /// code by AST shape instead of text. Requires `ast-grep` on PATH.
+        #[arg(long)]
+        structural: Option<String>,
+
+        /// Language for the `--structural` pattern (e.g. rust, python, ts).
+        /// ast-grep needs a language to parse a structural pattern.
+        #[arg(long)]
+        structural_lang: Option<String>,
+
         #[arg(long, default_value_t = query::DEFAULT_AGENT_CONTEXT_LIMIT)]
         limit: usize,
 
@@ -2969,6 +3001,8 @@ struct GrepOutput {
     audit_event: AuditEvent,
     #[serde(skip_serializing_if = "Option::is_none")]
     rg: Option<RgOutput>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sg: Option<SgOutput>,
 }
 
 #[derive(Debug, Serialize)]
@@ -2983,6 +3017,21 @@ struct AuditEvent {
 
 #[derive(Debug, Serialize)]
 struct RgOutput {
+    status_code: Option<i32>,
+    stdout: String,
+    stderr: String,
+}
+
+/// Result of the optional ast-grep structural search fallback. `available` is
+/// false when `ast-grep` is not on PATH, so a missing binary degrades
+/// gracefully instead of failing the whole grep command.
+#[derive(Debug, Serialize)]
+struct SgOutput {
+    available: bool,
+    pattern: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    lang: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     status_code: Option<i32>,
     stdout: String,
     stderr: String,
@@ -4461,6 +4510,7 @@ pub fn run() -> Result<()> {
     })?;
     query::tokens::set_active(tokenizer);
     query::ranker::set_bm25(cli.bm25);
+    query::ranker::set_pagerank(cli.pagerank);
 
     match cli.command {
         Command::Index {
@@ -4542,6 +4592,21 @@ pub fn run() -> Result<()> {
         Command::Related { path, file } => {
             let index = store::json_store::load_index(&path)?;
             let output = query::related_file(&path, &index, &file)?;
+            output::json::print(&output)?;
+        }
+        Command::Graph {
+            path,
+            file,
+            direction,
+            depth,
+        } => {
+            let direction = query::GraphDirection::parse(&direction).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "unknown --direction '{direction}' (expected dependencies, dependents, or both)"
+                )
+            })?;
+            let index = store::json_store::load_index(&path)?;
+            let output = query::graph_neighbors(&path, &index, &file, direction, depth)?;
             output::json::print(&output)?;
         }
         Command::Tests { path, file } => {
@@ -5964,6 +6029,8 @@ pub fn run() -> Result<()> {
             path,
             pattern,
             run_rg: should_run_rg,
+            structural,
+            structural_lang,
             limit,
             snippets_per_file,
             shim_strict,
@@ -5991,6 +6058,9 @@ pub fn run() -> Result<()> {
             } else {
                 None
             };
+            let sg = structural
+                .as_deref()
+                .map(|pattern| run_sg(&path, pattern, structural_lang.as_deref()));
             let mut output = serde_json::to_value(GrepOutput {
                 command: "grep",
                 policy: "callsieve_context_first; rg only runs when --run-rg is set",
@@ -6008,6 +6078,7 @@ pub fn run() -> Result<()> {
                     called_at: now_unix_seconds(),
                 },
                 rg,
+                sg,
             })?;
             if let Some(shim_event) = shim_event
                 && let Some(object) = output.as_object_mut()
@@ -24755,6 +24826,39 @@ fn run_rg(root: &Path, pattern: &str) -> Result<RgOutput> {
         stdout: String::from_utf8_lossy(&output.stdout).to_string(),
         stderr: String::from_utf8_lossy(&output.stderr).to_string(),
     })
+}
+
+/// Runs `ast-grep` structural search (AST-shape match) under the repo. Returns
+/// gracefully with `available: false` when `ast-grep` is not installed so the
+/// structural fallback is never fatal to the context-first grep flow.
+fn run_sg(root: &Path, pattern: &str, lang: Option<&str>) -> SgOutput {
+    let mut command = ProcessCommand::new("ast-grep");
+    command.arg("run").arg("--pattern").arg(pattern).arg("--json");
+    if let Some(lang) = lang {
+        command.arg("--lang").arg(lang);
+    }
+    command.arg(root);
+
+    match command.output() {
+        Ok(output) => SgOutput {
+            available: true,
+            pattern: pattern.to_string(),
+            lang: lang.map(str::to_string),
+            status_code: output.status.code(),
+            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+        },
+        Err(_) => SgOutput {
+            available: false,
+            pattern: pattern.to_string(),
+            lang: lang.map(str::to_string),
+            status_code: None,
+            stdout: String::new(),
+            stderr: "ast-grep is not installed or not on PATH; install ast-grep \
+                     (https://ast-grep.github.io) to enable structural search"
+                .to_string(),
+        },
+    }
 }
 
 fn now_unix_seconds() -> u64 {
