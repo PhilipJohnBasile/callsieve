@@ -715,6 +715,17 @@ pub struct Cli {
     #[arg(long, global = true)]
     pretty: bool,
 
+    /// Tokenizer for budget enforcement and proof token counts:
+    /// `heuristic` (default, dependency-light bytes/4), or `o200k` / `cl100k`
+    /// for exact counts (requires a binary built with `--features tokenizers`).
+    #[arg(long, global = true, default_value = "heuristic")]
+    tokenizer: String,
+
+    /// Enable BM25+ length normalization for the content-keyword ranking signal.
+    /// Opt-in and deterministic; off by default so default ranking is unchanged.
+    #[arg(long, global = true)]
+    bm25: bool,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -777,6 +788,11 @@ pub enum Command {
 
         #[arg(long, default_value_t = 1)]
         snippets_per_symbol: usize,
+
+        /// Collapse symbol bodies to signature + `{ … }` markers for a compact,
+        /// low-token view of the file's shape.
+        #[arg(long)]
+        skeleton: bool,
     },
 
     /// Return import, caller, callee, and blast-radius hints for one indexed file.
@@ -4413,6 +4429,14 @@ pub fn run() -> Result<()> {
     let cli = Cli::parse();
     init_tracing(cli.verbose)?;
     output::json::set_pretty(cli.pretty);
+    let tokenizer = query::tokens::TokenizerKind::parse(&cli.tokenizer).ok_or_else(|| {
+        anyhow::anyhow!(
+            "unknown --tokenizer '{}' (expected heuristic, o200k, or cl100k)",
+            cli.tokenizer
+        )
+    })?;
+    query::tokens::set_active(tokenizer);
+    query::ranker::set_bm25(cli.bm25);
 
     match cli.command {
         Command::Index {
@@ -4476,6 +4500,7 @@ pub fn run() -> Result<()> {
             line,
             references,
             snippets_per_symbol,
+            skeleton,
         } => {
             let index = store::json_store::load_index(&path)?;
             let output = query::focus_file(
@@ -4486,6 +4511,7 @@ pub fn run() -> Result<()> {
                 line,
                 references,
                 snippets_per_symbol,
+                skeleton,
             )?;
             output::json::print(&output)?;
         }

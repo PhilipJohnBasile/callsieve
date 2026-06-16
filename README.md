@@ -91,7 +91,7 @@ target/debug/callsieve agent-context <repo> "<task>" --error <stacktrace.log>
 
 `--embeddings` requires a binary built with `--features embed`; the default build stays deterministic and dependency-light. `--git-boost` nudges recently changed or high-churn files only when requested and keeps compact `git` hints in skim output. `--error` parses stack traces and error logs, then promotes indexed files named in the frames. The integer displayed score remains lexical and explainable; normal/full packets also expose `selection_confidence` as `high`, `medium`, or `low` relative to the top selected file. Hybrid retrieval only changes ordering when explicitly enabled.
 
-JSON output is compact by default for agent token savings. Add global `--pretty` for human-readable formatting.
+JSON output is compact by default for agent token savings. Add global `--pretty` for human-readable formatting. Add global `--tokenizer o200k|cl100k` (requires a binary built with `--features tokenizers`) to count budget-enforcement and proof tokens with a real BPE tokenizer instead of the default `bytes/4` heuristic. Add global `--bm25` to enable opt-in BM25+ length normalization for the content-keyword ranking signal; like `--embeddings` and `--git-boost` it only changes ordering when explicitly enabled.
 
 ## Current CLI Surface
 
@@ -102,7 +102,7 @@ callsieve symbol <path> <symbol_name>
 callsieve query <path> "<question>" [--why-debug]
 callsieve context <path> "<task>" [--limit <n>] [--snippets-per-file <n>] [--no-snippets] [--profile skim|normal|full] [--token-budget <n>] [--why-debug] [--format json|markdown]
 callsieve agent-context <path> "<task>" [--limit <n>] [--snippets-per-file <n>] [--profile skim|normal|full] [--token-budget <n>] [--why-debug] [--embeddings] [--error <file>] [--git-boost] [--format json|markdown]
-callsieve focus <path> --file <file> [--symbol <symbol>] [--line <line>] [--references]
+callsieve focus <path> --file <file> [--symbol <symbol>] [--line <line>] [--references] [--skeleton]
 callsieve related <path> --file <file>
 callsieve tests <path> --file <file>
 callsieve demo <path> [--task "<task>"] [--lsp]

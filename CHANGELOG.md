@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Added an optional real-tokenizer token counter behind the `tokenizers` Cargo feature, selectable with the global `--tokenizer heuristic|o200k|cl100k` flag. The default build stays dependency-light and uses the deterministic `bytes/4` heuristic (byte-identical to prior behavior); a binary built with `--features tokenizers` counts budget-enforcement and proof tokens with the real OpenAI `o200k_base` / `cl100k_base` BPE. Requesting a real tokenizer without the feature warns and falls back to the heuristic so counts are never silently wrong.
+- Added code skeletonization to `focus` via `--skeleton` (and a `skeleton` MCP arg): each symbol is rendered as its signature with the body collapsed to a `{ … }` / `…` marker, giving a compact, low-token view of a file's shape. Reuses the tree-sitter-derived symbol line ranges, so it adds no new parsing dependency and stays deterministic.
+- Added opt-in BM25+ length normalization for the content-keyword ranking signal via the global `--bm25` flag. It down-weights long files that match many query terms by length alone and boosts shorter, focused files, reusing the existing IDF clamp as the BM25+ δ floor. Off by default so default ranking and the checked-in benchmark gates stay byte-identical; like `--embeddings` / `--git-boost` it only changes ordering when explicitly enabled.
+
 ## v0.3.5 - 2026-06-14
 
 ### Added

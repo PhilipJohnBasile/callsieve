@@ -25,6 +25,7 @@ pkg-fmt = "zip"
 [features]
 default = []
 embed = ["dep:fastembed", "dep:half"]
+tokenizers = ["dep:tiktoken-rs"]
 
 [dependencies]
 anyhow = "1.0.102"
@@ -41,6 +42,7 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
 fastembed = { version = "4", optional = true, default-features = false, features = ["hf-hub-native-tls", "ort-download-binaries"] }
 half = { version = "2", optional = true, default-features = false, features = ["std"] }
+tiktoken-rs = { version = "0.6", optional = true }
 
 [dev-dependencies]
 tempfile = "3.27.0"
