@@ -4,13 +4,22 @@
 
 - `callsieve_context`
 - `callsieve_symbol`
-- `callsieve_focus`
+- `callsieve_focus` (pass `skeleton: true` for a signature-only, body-elided view)
 - `callsieve_related`
+- `callsieve_graph_neighbors` — walk the import/reference graph from a file up to 3 hops (`direction`: `dependencies` | `dependents` | `both`) for blast radius beyond one hop
 - `callsieve_tests`
 - `callsieve_stats`
 - `callsieve_status`
 - `callsieve_trace_check`
 - `callsieve_benchmark`
+- `callsieve_memory_recall` — recall similar past tasks from local task memory (Agent Memory Protocol verb `amp.recall`; read-only)
+- `callsieve_memory_stats` (`amp.stats`)
+- `callsieve_memory_export` — export task memory as vendor-neutral MXF or native json (`amp.export`)
+- `callsieve_memory_import` (`amp.import`)
+- `callsieve_memory_forget` (`amp.forget`)
+- `callsieve_memory_pin` — pin/unpin tasks so they survive the eviction cap (`amp.pin`)
+
+The memory verbs map CallSieve's local task-memory cache onto Agent Memory Protocol verb names and return Agent-Memory-Protocol-style error codes (`AMP_INVALID_ARGUMENT`, `AMP_INTERNAL`); MXF keeps export/import portable across agent-memory tools.
 
 For human installation and client setup, start with [INSTALL.md](INSTALL.md). For AI CLI behavior and automation rules, see [AGENT_CLI.md](AGENT_CLI.md).
 

@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## v0.4.1 - 2026-06-16
+
+### Documentation
+
+- Updated the reference docs for the v0.4.0 surface: `docs/MCP.md` now lists the memory verbs (`callsieve_memory_*`) and `callsieve_graph_neighbors`, and `docs/AGENT_CLI.md` documents `focus --skeleton`, the `graph` command, the `--tokenizer` / `--bm25` / `--pagerank` global flags, MXF memory export/import, `memory-pin`, and the `grep --structural` ast-grep fallback.
 
 ### Known follow-up
 
