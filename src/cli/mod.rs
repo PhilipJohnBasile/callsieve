@@ -24833,7 +24833,11 @@ fn run_rg(root: &Path, pattern: &str) -> Result<RgOutput> {
 /// structural fallback is never fatal to the context-first grep flow.
 fn run_sg(root: &Path, pattern: &str, lang: Option<&str>) -> SgOutput {
     let mut command = ProcessCommand::new("ast-grep");
-    command.arg("run").arg("--pattern").arg(pattern).arg("--json");
+    command
+        .arg("run")
+        .arg("--pattern")
+        .arg(pattern)
+        .arg("--json");
     if let Some(lang) = lang {
         command.arg("--lang").arg(lang);
     }

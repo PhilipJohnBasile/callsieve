@@ -4693,7 +4693,10 @@ pub fn merge_task_memory_mxf(root: &Path, imported: &str) -> Result<(usize, usiz
     merge_task_memory_entries(root, entries)
 }
 
-fn merge_task_memory_entries(root: &Path, incoming: Vec<TaskMemoryEntry>) -> Result<(usize, usize)> {
+fn merge_task_memory_entries(
+    root: &Path,
+    incoming: Vec<TaskMemoryEntry>,
+) -> Result<(usize, usize)> {
     let path = task_memory_path(root);
     let mut memory = load_task_memory(&path);
     let mut imported_count = 0usize;
@@ -4852,7 +4855,10 @@ pub fn export_task_memory_mxf(root: &Path) -> Result<(String, usize)> {
         exported_at: memory_now_seconds(),
         memories: memory.entries.iter().map(TaskMemoryEntry::to_mxf).collect(),
     };
-    Ok((serde_json::to_string_pretty(&document)?, memory.entries.len()))
+    Ok((
+        serde_json::to_string_pretty(&document)?,
+        memory.entries.len(),
+    ))
 }
 
 /// Read-only recall of similar past tasks for `task`, without writing the
@@ -4998,10 +5004,7 @@ fn enforce_task_memory_cap(entries: &mut Vec<TaskMemoryEntry>) {
 pub fn set_task_memory_pin(root: &Path, task_query: &str, pinned: bool) -> Result<usize> {
     let path = task_memory_path(root);
     let mut memory = load_task_memory(&path);
-    let has_exact = memory
-        .entries
-        .iter()
-        .any(|entry| entry.task == task_query);
+    let has_exact = memory.entries.iter().any(|entry| entry.task == task_query);
     let needle = task_query.to_ascii_lowercase();
     let mut changed = 0usize;
     for entry in &mut memory.entries {
@@ -9304,24 +9307,42 @@ mod tests {
         ];
 
         // a -> b -> c. Depth 2 outgoing from a reaches b (hop 1) and c (hop 2).
-        let out =
-            graph_neighbors(Path::new("."), &index, "src/a.rs", GraphDirection::Dependencies, 2)
-                .unwrap();
-        let hops: BTreeMap<&str, usize> =
-            out.neighbors.iter().map(|n| (n.file.as_str(), n.hop)).collect();
+        let out = graph_neighbors(
+            Path::new("."),
+            &index,
+            "src/a.rs",
+            GraphDirection::Dependencies,
+            2,
+        )
+        .unwrap();
+        let hops: BTreeMap<&str, usize> = out
+            .neighbors
+            .iter()
+            .map(|n| (n.file.as_str(), n.hop))
+            .collect();
         assert_eq!(hops.get("src/b.rs"), Some(&1));
         assert_eq!(hops.get("src/c.rs"), Some(&2));
 
         // Depth 1 stops before c.
-        let shallow =
-            graph_neighbors(Path::new("."), &index, "src/a.rs", GraphDirection::Dependencies, 1)
-                .unwrap();
+        let shallow = graph_neighbors(
+            Path::new("."),
+            &index,
+            "src/a.rs",
+            GraphDirection::Dependencies,
+            1,
+        )
+        .unwrap();
         assert!(shallow.neighbors.iter().all(|n| n.file != "src/c.rs"));
 
         // Incoming from c reaches b then a.
-        let up =
-            graph_neighbors(Path::new("."), &index, "src/c.rs", GraphDirection::Dependents, 2)
-                .unwrap();
+        let up = graph_neighbors(
+            Path::new("."),
+            &index,
+            "src/c.rs",
+            GraphDirection::Dependents,
+            2,
+        )
+        .unwrap();
         let up_files: Vec<&str> = up.neighbors.iter().map(|n| n.file.as_str()).collect();
         assert!(up_files.contains(&"src/b.rs"));
         assert!(up_files.contains(&"src/a.rs"));
@@ -9635,7 +9656,10 @@ mod tests {
         let (mxf, exported) = export_task_memory_mxf(source.path()).unwrap();
         assert_eq!(exported, 1);
         let document: Value = serde_json::from_str(&mxf).unwrap();
-        assert_eq!(document["mxf_version"], json!(MEMORY_EXCHANGE_FORMAT_VERSION));
+        assert_eq!(
+            document["mxf_version"],
+            json!(MEMORY_EXCHANGE_FORMAT_VERSION)
+        );
         assert_eq!(document["source"], json!("callsieve"));
         assert_eq!(document["memories"][0]["kind"], json!("task_context"));
         assert_eq!(
@@ -9689,7 +9713,9 @@ mod tests {
 
         assert_eq!(entries.len(), MAX_TASK_MEMORY_ENTRIES);
         assert!(
-            entries.iter().any(|entry| entry.task == "task 0" && entry.pinned),
+            entries
+                .iter()
+                .any(|entry| entry.task == "task 0" && entry.pinned),
             "the pinned oldest entry must survive eviction"
         );
         // The next-oldest unpinned entries are the ones evicted.
@@ -9714,8 +9740,14 @@ mod tests {
         assert_eq!(task_memory_stats(temp.path())["pinned"], json!(1));
 
         // Idempotent: re-pinning changes nothing; unpin clears it.
-        assert_eq!(set_task_memory_pin(temp.path(), "session creation", true).unwrap(), 0);
-        assert_eq!(set_task_memory_pin(temp.path(), "session creation", false).unwrap(), 1);
+        assert_eq!(
+            set_task_memory_pin(temp.path(), "session creation", true).unwrap(),
+            0
+        );
+        assert_eq!(
+            set_task_memory_pin(temp.path(), "session creation", false).unwrap(),
+            1
+        );
         assert_eq!(task_memory_stats(temp.path())["pinned"], json!(0));
     }
 

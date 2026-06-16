@@ -1088,7 +1088,9 @@ fn amp_repo_path(arguments: &Value) -> Result<PathBuf> {
 fn execute_memory_recall(arguments: &Value) -> Result<Value> {
     let path = amp_repo_path(arguments)?;
     let task = required_str(arguments, "task").map_err(amp_invalid_argument)?;
-    Ok(serde_json::to_value(query::recall_task_memory(&path, task)?)?)
+    Ok(serde_json::to_value(query::recall_task_memory(
+        &path, task,
+    )?)?)
 }
 
 fn execute_memory_stats(arguments: &Value) -> Result<Value> {
