@@ -22,10 +22,15 @@ Use `--format markdown` when the agent should read a compact text packet instead
 The default packet is `--profile skim --token-budget 1200` and intentionally omits snippets. Ask for more only when needed:
 
 ```bash
-callsieve focus <repo> --file <file> [--symbol <symbol>] [--line <line>] [--references]
+callsieve focus <repo> --file <file> [--symbol <symbol>] [--line <line>] [--references] [--skeleton]
 callsieve related <repo> --file <file>
+callsieve graph <repo> --file <file> [--direction dependencies|dependents|both] [--depth 1-3]
 callsieve tests <repo> --file <file>
 ```
+
+`focus --skeleton` collapses symbol bodies to signature + `{ … }` markers for a compact view of a file's shape. `graph` walks the import/reference graph multiple hops to surface blast radius beyond the single hop `related`/`focus` give.
+
+Optional, deterministic, off-by-default global flags change ranking or token accounting only when explicitly set: `--tokenizer o200k|cl100k` (exact BPE token counts, requires a binary built with `--features tokenizers`), `--bm25` (BM25+ length normalization for the content-keyword signal), and `--pagerank` (experimental PageRank graph-centrality boost; measured neutral on the public Django NL slice). Local task memory speaks the vendor-neutral Memory Exchange Format: `memory-export`/`memory-import --format json|mxf`, and `memory-pin <repo> --task "<task>" [--unpin]` protects entries from the eviction cap.
 
 If CallSieve is being run from this Rust source checkout instead of an installed binary, use:
 
@@ -230,7 +235,7 @@ Allowed after CallSieve:
 - Follow-up grep for a missing symbol, route, config key, or test name.
 - Full file reads for selected `read_first` files.
 
-Use `callsieve grep <repo> "<query>"` when an agent wants a grep-like fallback but should still receive compact CallSieve context first. Its nested context is the default `skim` packet with the standard token budget; raw `rg` only runs when `--run-rg` is explicitly set.
+Use `callsieve grep <repo> "<query>"` when an agent wants a grep-like fallback but should still receive compact CallSieve context first. Its nested context is the default `skim` packet with the standard token budget; raw `rg` only runs when `--run-rg` is explicitly set. For shape-based matches the lexical packet and `rg` miss (e.g. all `match` arms returning `Err`), add `--structural <ast-grep-pattern> [--structural-lang <lang>]`; it runs an ast-grep structural search after the context packet and degrades gracefully when `ast-grep` is not installed.
 
 ## Self-Healing For AI CLIs
 
