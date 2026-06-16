@@ -370,6 +370,96 @@ fn tools_list_result() -> Value {
                     },
                     "required": ["path", "task"]
                 }
+            },
+            {
+                "name": "callsieve_memory_recall",
+                "description": "Recall similar past tasks and their read-first files from local task memory (Agent Memory Protocol verb: amp.recall). Read-only; does not write the current task.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Repository root containing .callsieve/."
+                        },
+                        "task": {
+                            "type": "string",
+                            "description": "Coding task or natural-language question to match against remembered tasks."
+                        }
+                    },
+                    "required": ["path", "task"]
+                }
+            },
+            {
+                "name": "callsieve_memory_stats",
+                "description": "Summary metrics for this repo's task memory: entry count, contributing clients, last task (Agent Memory Protocol verb: amp.stats).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Repository root containing .callsieve/."
+                        }
+                    },
+                    "required": ["path"]
+                }
+            },
+            {
+                "name": "callsieve_memory_export",
+                "description": "Export this repo's task memory for portability (Agent Memory Protocol verb: amp.export). Use the vendor-neutral Memory Exchange Format (mxf) to round-trip with other agent-memory tools.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Repository root containing .callsieve/."
+                        },
+                        "format": {
+                            "type": "string",
+                            "enum": ["mxf", "json"],
+                            "default": "mxf",
+                            "description": "mxf = vendor-neutral Memory Exchange Format; json = CallSieve native store shape."
+                        }
+                    },
+                    "required": ["path"]
+                }
+            },
+            {
+                "name": "callsieve_memory_import",
+                "description": "Merge an exported memory document into this repo's task memory (Agent Memory Protocol verb: amp.import). Accepts the vendor-neutral Memory Exchange Format (mxf) or CallSieve native json.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Repository root containing .callsieve/."
+                        },
+                        "document": {
+                            "type": "string",
+                            "description": "Serialized memory document to import."
+                        },
+                        "format": {
+                            "type": "string",
+                            "enum": ["mxf", "json"],
+                            "default": "mxf",
+                            "description": "Format of the supplied document."
+                        }
+                    },
+                    "required": ["path", "document"]
+                }
+            },
+            {
+                "name": "callsieve_memory_forget",
+                "description": "Clear this repo's local task memory (Agent Memory Protocol verb: amp.forget). Coarse: forgets all remembered tasks for the repo.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Repository root containing .callsieve/."
+                        }
+                    },
+                    "required": ["path"]
+                }
             }
         ]
     })
@@ -404,6 +494,11 @@ fn call_tool(params: Option<Value>) -> Result<Value> {
         "callsieve_status" => Ok(tool_execution_result(execute_status(&arguments))),
         "callsieve_trace_check" => Ok(tool_execution_result(execute_trace_check(&arguments))),
         "callsieve_benchmark" => Ok(tool_execution_result(execute_benchmark(&arguments))),
+        "callsieve_memory_recall" => Ok(memory_tool_result(execute_memory_recall(&arguments))),
+        "callsieve_memory_stats" => Ok(memory_tool_result(execute_memory_stats(&arguments))),
+        "callsieve_memory_export" => Ok(memory_tool_result(execute_memory_export(&arguments))),
+        "callsieve_memory_import" => Ok(memory_tool_result(execute_memory_import(&arguments))),
+        "callsieve_memory_forget" => Ok(memory_tool_result(execute_memory_forget(&arguments))),
         name => Err(anyhow!("unknown tool: {name}")),
     }
 }
@@ -886,6 +981,144 @@ fn execute_benchmark(arguments: &Value) -> Result<Value> {
     )?;
 
     Ok(serde_json::to_value(output)?)
+}
+
+/// Error carrying an Agent Memory Protocol error code so memory-verb failures
+/// map to a stable contract (`AMP_INVALID_ARGUMENT`, `AMP_INTERNAL`, ...)
+/// instead of opaque strings.
+#[derive(Debug)]
+struct AmpError {
+    code: &'static str,
+    message: String,
+}
+
+impl std::fmt::Display for AmpError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for AmpError {}
+
+fn amp_invalid_argument(error: impl std::fmt::Display) -> anyhow::Error {
+    AmpError {
+        code: "AMP_INVALID_ARGUMENT",
+        message: error.to_string(),
+    }
+    .into()
+}
+
+fn amp_repo_path(arguments: &Value) -> Result<PathBuf> {
+    repo_path(arguments).map_err(amp_invalid_argument)
+}
+
+fn execute_memory_recall(arguments: &Value) -> Result<Value> {
+    let path = amp_repo_path(arguments)?;
+    let task = required_str(arguments, "task").map_err(amp_invalid_argument)?;
+    Ok(serde_json::to_value(query::recall_task_memory(&path, task)?)?)
+}
+
+fn execute_memory_stats(arguments: &Value) -> Result<Value> {
+    let path = amp_repo_path(arguments)?;
+    Ok(query::task_memory_stats(&path))
+}
+
+fn execute_memory_export(arguments: &Value) -> Result<Value> {
+    let path = amp_repo_path(arguments)?;
+    let format = memory_format_arg(arguments)?;
+    let (serialized, entries) = match format {
+        MemoryDocumentFormat::Mxf => query::export_task_memory_mxf(&path)?,
+        MemoryDocumentFormat::Json => query::export_task_memory(&path)?,
+    };
+    Ok(json!({
+        "format": format.as_str(),
+        "entries": entries,
+        "document": serialized,
+    }))
+}
+
+fn execute_memory_import(arguments: &Value) -> Result<Value> {
+    let path = amp_repo_path(arguments)?;
+    let document = required_str(arguments, "document").map_err(amp_invalid_argument)?;
+    let format = memory_format_arg(arguments)?;
+    let (imported, total) = match format {
+        MemoryDocumentFormat::Mxf => query::merge_task_memory_mxf(&path, document),
+        MemoryDocumentFormat::Json => query::merge_task_memory(&path, document),
+    }
+    .map_err(amp_invalid_argument)?;
+    Ok(json!({
+        "format": format.as_str(),
+        "imported": imported,
+        "entries_total": total,
+    }))
+}
+
+fn execute_memory_forget(arguments: &Value) -> Result<Value> {
+    let path = amp_repo_path(arguments)?;
+    let cleared = query::clear_task_memory(&path)?;
+    Ok(json!({ "cleared": cleared }))
+}
+
+#[derive(Clone, Copy)]
+enum MemoryDocumentFormat {
+    Mxf,
+    Json,
+}
+
+impl MemoryDocumentFormat {
+    fn as_str(self) -> &'static str {
+        match self {
+            MemoryDocumentFormat::Mxf => "mxf",
+            MemoryDocumentFormat::Json => "json",
+        }
+    }
+}
+
+/// Parses the optional `format` argument for memory verbs. Defaults to the
+/// portable MXF format, matching the tool schema.
+fn memory_format_arg(arguments: &Value) -> Result<MemoryDocumentFormat> {
+    match arguments.get("format").and_then(Value::as_str) {
+        None | Some("mxf") => Ok(MemoryDocumentFormat::Mxf),
+        Some("json") => Ok(MemoryDocumentFormat::Json),
+        Some(other) => Err(amp_invalid_argument(format!(
+            "unknown format '{other}' (expected mxf or json)"
+        ))),
+    }
+}
+
+/// Wraps a memory-verb result in the MCP tool envelope, mapping failures to an
+/// Agent Memory Protocol error code (carried by `AmpError`, else `AMP_INTERNAL`).
+fn memory_tool_result(result: Result<Value>) -> Value {
+    match result {
+        Ok(value) => tool_execution_result(Ok(value)),
+        Err(error) => {
+            let code = error
+                .downcast_ref::<AmpError>()
+                .map_or("AMP_INTERNAL", |amp| amp.code);
+            amp_error_value(code, error.to_string())
+        }
+    }
+}
+
+fn amp_error_value(code: &str, message: String) -> Value {
+    let structured_content = json!({
+        "error": {
+            "code": code,
+            "message": message
+        }
+    });
+    let text = serde_json::to_string_pretty(&structured_content)
+        .unwrap_or_else(|_| structured_content.to_string());
+    json!({
+        "content": [
+            {
+                "type": "text",
+                "text": text
+            }
+        ],
+        "structuredContent": structured_content,
+        "isError": true
+    })
 }
 
 fn repo_path(arguments: &Value) -> Result<PathBuf> {

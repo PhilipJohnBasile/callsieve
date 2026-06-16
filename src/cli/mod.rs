@@ -1792,6 +1792,11 @@ pub enum Command {
 
         #[arg(long)]
         out: PathBuf,
+
+        /// Output format: `json` (native store) or `mxf` (vendor-neutral
+        /// Memory Exchange Format for cross-tool portability).
+        #[arg(long, value_enum, default_value_t = MemoryFormat::Json)]
+        format: MemoryFormat,
     },
 
     /// Merge an exported task memory into this repo's store (newest entry
@@ -1802,6 +1807,11 @@ pub enum Command {
 
         #[arg(long)]
         from: PathBuf,
+
+        /// Input format: `json` (native store) or `mxf` (vendor-neutral
+        /// Memory Exchange Format from another agent-memory tool).
+        #[arg(long, value_enum, default_value_t = MemoryFormat::Json)]
+        format: MemoryFormat,
     },
 
     /// Emit a tamper-evident receipt for one observed agent session: packets
@@ -5547,8 +5557,11 @@ pub fn run() -> Result<()> {
             let output = index_import(&path, &from, allow_partial)?;
             output::json::print(&output)?;
         }
-        Command::MemoryExport { path, out } => {
-            let (serialized, entries) = query::export_task_memory(&path)?;
+        Command::MemoryExport { path, out, format } => {
+            let (serialized, entries) = match format {
+                MemoryFormat::Json => query::export_task_memory(&path)?,
+                MemoryFormat::Mxf => query::export_task_memory_mxf(&path)?,
+            };
             if let Some(parent) = out.parent().filter(|parent| !parent.as_os_str().is_empty()) {
                 fs::create_dir_all(parent)
                     .with_context(|| format!("failed to create {}", parent.display()))?;
@@ -5559,17 +5572,22 @@ pub fn run() -> Result<()> {
                 "command": "memory-export",
                 "root": root_label(&path),
                 "out": out.display().to_string(),
+                "format": format!("{format:?}").to_lowercase(),
                 "entries": entries
             }))?;
         }
-        Command::MemoryImport { path, from } => {
+        Command::MemoryImport { path, from, format } => {
             let raw = fs::read_to_string(&from)
                 .with_context(|| format!("failed to read {}", from.display()))?;
-            let (imported, total) = query::merge_task_memory(&path, &raw)?;
+            let (imported, total) = match format {
+                MemoryFormat::Json => query::merge_task_memory(&path, &raw)?,
+                MemoryFormat::Mxf => query::merge_task_memory_mxf(&path, &raw)?,
+            };
             output::json::print(&serde_json::json!({
                 "command": "memory-import",
                 "root": root_label(&path),
                 "from": from.display().to_string(),
+                "format": format!("{format:?}").to_lowercase(),
                 "imported": imported,
                 "entries_total": total
             }))?;
@@ -18548,6 +18566,15 @@ fn detect_agent_clients(
 pub enum ReceiptFormat {
     Json,
     Markdown,
+}
+
+/// Serialization format for task-memory export/import. `json` is CallSieve's
+/// native store shape; `mxf` is the vendor-neutral Memory Exchange Format for
+/// round-tripping with other agent-memory tools.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum MemoryFormat {
+    Json,
+    Mxf,
 }
 
 /// Per-session retrieval receipt: locally observed counts only — no
