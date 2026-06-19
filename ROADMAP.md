@@ -99,6 +99,10 @@ Positioning Agent.
 
 ## 2. Hybrid retrieval - deterministic floor, optional local embeddings
 
+> **June-2026 SOTA grounding:** see [`docs/RESEARCH_2026.md`](docs/RESEARCH_2026.md) — maps this workstream onto the
+> current code-retrieval frontier (graph-RAG over the AST index, ColBERT-style late-interaction reranking, AST-aware
+> embeddings) and confirms the deterministic-floor + opt-in-embeddings bet is exactly where the field landed.
+
 ### Goal
 Keep the deterministic ranker as the default and the only thing that runs
 when offline. Add an opt-in local embedding layer that augments (never
