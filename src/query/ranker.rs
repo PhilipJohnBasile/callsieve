@@ -1932,6 +1932,46 @@ pub fn has_test_intent(query_tokens: &[String]) -> bool {
         .any(|token| matches!(token.as_str(), "test" | "tests" | "fixture" | "fixtures"))
 }
 
+/// Whether the query expresses a bug / failure / fix intent — meaning the user wants the broken
+/// implementation, even when the wording also mentions "test" (e.g. "a unit test is failing").
+pub fn has_bug_intent(query_tokens: &[String]) -> bool {
+    query_tokens.iter().any(|token| {
+        matches!(
+            token.as_str(),
+            "fail"
+                | "fails"
+                | "failing"
+                | "failed"
+                | "failure"
+                | "bug"
+                | "bugs"
+                | "buggy"
+                | "fix"
+                | "fixes"
+                | "broken"
+                | "break"
+                | "breaks"
+                | "error"
+                | "errors"
+                | "panic"
+                | "panics"
+                | "crash"
+                | "crashes"
+                | "wrong"
+                | "incorrect"
+                | "debug"
+                | "regression"
+        )
+    })
+}
+
+/// Whether a source file's focus symbol should be the implementation rather than an inline test:
+/// true for bug-localization ("a test is failing", or any non-test query), false only for a *pure*
+/// test-browse request ("show me the tests for X") with no bug/fix intent.
+pub fn prefers_implementation_focus(query_tokens: &[String]) -> bool {
+    has_bug_intent(query_tokens) || !has_test_intent(query_tokens)
+}
+
 fn is_readme(file: &FileRecord) -> bool {
     file.path.eq_ignore_ascii_case("README.md")
 }
