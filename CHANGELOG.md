@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.5.0 - 2026-06-21
+
+### Added
+
+- Working-tree-diff bug localization. For a bug-intent query ("a test is failing", "fix the …", "the … is broken"), `agent-context` now runs `git diff -U0 HEAD` and focuses the source symbol whose body just changed — the prime suspect for a regression or mutation. This is decisive even when a single failing test exercises several functions, where the test name alone cannot disambiguate which callee holds the bug. It is a safe no-op for a non-git repo, a clean tree, or any git error, and only runs for bug-intent queries so other retrieval paths are untouched.
+- Index-time detection of bare `#[test]` / `#[cfg(test)]` / `#[bench]` functions that live outside a `mod tests` block: they are now marked `test` kind, so test-aware ranking recognizes them as scaffolding rather than implementation. Complements the existing `mod tests` line-range and `test_*`-prefix heuristics, across both the tree-sitter and fallback symbol extractors.
+
+### Changed
+
+- Bug-localization focus now points at the implementation, not the inline test. When a source file is surfaced for a bug query and its matched symbols are all test scaffolding — common for "a test is failing", where lexical matching attaches the inline `mod tests` rather than the code it exercises — `read_first` recovers the source the failing test exercises (from the call graph) and focuses it. Source candidates are ranked by: body overlaps the working-tree diff (strongest), called directly by the matched test, name embedded in a test name (`heuristic_is_…` tests `heuristic`), then query affinity, preferring callable kinds. A query that carries the failing test name pinpoints the same source symbol. A *pure* test-browse query ("show me the tests for X", with no bug/fix intent) still focuses the test. This changes default bug-localization focus output, so the retrieval-contract fingerprint moves accordingly; the checked-in public-proof benchmark gates still pass.
+
+### Fixed
+
+- A source file with an inline `#[cfg(test)] mod tests` no longer sends a bug-localization reader into the test module instead of the buggy implementation. Root cause: the indexer's module kind is the string `module`, while an earlier internal test-detection check compared against the compact `mod` display form, so the demotion was a silent no-op.
+
 ## v0.4.1 - 2026-06-16
 
 ### Documentation
