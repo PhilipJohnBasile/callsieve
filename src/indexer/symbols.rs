@@ -17,13 +17,46 @@ pub fn extract_symbols(content: &str, language: Language) -> Vec<RawSymbol> {
         return Vec::new();
     }
 
-    if let Some(symbols) = tree_sitter_symbols::extract_symbols(content, language)
-        && !symbols.is_empty()
-    {
-        return symbols;
+    let mut symbols = match tree_sitter_symbols::extract_symbols(content, language) {
+        Some(symbols) if !symbols.is_empty() => symbols,
+        _ => extract_symbols_fallback(content, language),
+    };
+    if language == Language::Rust {
+        mark_rust_test_functions(content, &mut symbols);
     }
+    symbols
+}
 
-    extract_symbols_fallback(content, language)
+/// Mark `#[test]` / `#[bench]` / `#[cfg(test)]`-attributed functions (e.g. a bare `#[test] fn` not
+/// inside a `mod tests`) as `test` kind, so test-aware ranking recognizes them as scaffolding rather
+/// than implementation. Scans the attribute and blank lines directly above each function.
+fn mark_rust_test_functions(content: &str, symbols: &mut [RawSymbol]) {
+    let lines: Vec<&str> = content.lines().collect();
+    for symbol in symbols.iter_mut() {
+        if symbol.kind != "function" {
+            continue;
+        }
+        let mut above = symbol.start_line;
+        while above > 1 {
+            above -= 1;
+            let line = match lines.get(above - 1) {
+                Some(line) => line.trim(),
+                None => break,
+            };
+            if line.is_empty() {
+                continue;
+            }
+            if line.starts_with("#[") {
+                let lower = line.to_ascii_lowercase();
+                if lower.contains("test") || lower.contains("bench") {
+                    symbol.kind = "test".to_string();
+                    break;
+                }
+                continue; // stacked attributes — keep scanning upward
+            }
+            break; // first non-attribute, non-blank line ends the attribute block
+        }
+    }
 }
 
 fn extract_symbols_fallback(content: &str, language: Language) -> Vec<RawSymbol> {
@@ -1768,6 +1801,22 @@ mod tests {
 
         assert!(symbols.iter().any(|symbol| symbol.name == "User"));
         assert!(symbols.iter().any(|symbol| symbol.name == "create_user"));
+    }
+
+    #[test]
+    fn bare_test_attribute_marks_function_as_test_kind() {
+        let symbols = extract_symbols(
+            "pub fn real() -> u32 {\n    1\n}\n\n#[test]\nfn checks_real() {\n    assert_eq!(real(), 1);\n}\n",
+            Language::Rust,
+        );
+        let kind_of = |name: &str| {
+            symbols
+                .iter()
+                .find(|symbol| symbol.name == name)
+                .map(|symbol| symbol.kind.as_str())
+        };
+        assert_eq!(kind_of("real"), Some("function"));
+        assert_eq!(kind_of("checks_real"), Some("test"));
     }
 
     #[test]

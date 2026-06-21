@@ -2510,25 +2510,90 @@ pub fn build_context_with(
         .first()
         .map(ContextCandidate::score)
         .unwrap_or_default();
+    // Working-tree diff (only for bug-localization queries) — the changed function is the prime
+    // suspect, so it can be focused even when a failing test exercises several functions.
+    let changed_lines = if ranker::has_bug_intent(&query_tokens) {
+        working_tree_changed_lines(root)
+    } else {
+        BTreeMap::new()
+    };
     let read_first: Vec<ContextFile> = candidates
         .into_iter()
         .take(options.limit)
         .enumerate()
         .filter_map(|(rank_index, candidate)| {
             let file = lookup.file_by_id(&candidate.file_id)?;
-            let mut symbol_records: Vec<&SymbolRecord> = candidate
+            let symbol_records: Vec<&SymbolRecord> = candidate
                 .symbol_ids
                 .iter()
                 .filter_map(|symbol_id| lookup.symbol_by_id(symbol_id))
                 .collect();
-            // Snippet the region most relevant to the query first, so a large
-            // multi-purpose file points at the matching symbol instead of the
-            // first symbol by accumulation order.
-            symbol_records.sort_by(|left, right| {
+            // Bug-localization queries ("a test is failing") should focus the implementation, not an
+            // inline `mod tests`; a pure test-browse query ("show me the tests for X") keeps the test
+            // as focus. Only ~1 symbol survives into the compact `sy`, so this ordering is decisive.
+            let file_symbols = lookup.symbols_for_file(&candidate.file_id);
+            let test_ranges = test_module_ranges(file_symbols);
+            let prefer_impl_focus = ranker::prefers_implementation_focus(&query_tokens);
+            let changed_in_file = changed_lines
+                .get(file.path.as_str())
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            let symbol_records = if prefer_impl_focus {
+                // Source symbols the matched test(s) call — the implementation they exercise. Test
+                // detection uses the file's FULL symbol list for `mod tests` ranges, so a matched
+                // inner test fn is recognized even when the enclosing mod symbol isn't matched.
+                let mut called_source_ids: BTreeSet<&str> = BTreeSet::new();
+                for symbol in &symbol_records {
+                    if is_test_symbol(symbol, &test_ranges) {
+                        for reference in lookup.references_from_symbol(&symbol.id) {
+                            if let Some(target) = &reference.target_symbol_id {
+                                called_source_ids.insert(target.as_str());
+                            }
+                        }
+                    }
+                }
+                enrich_test_only_file(
+                    symbol_records,
+                    file_symbols,
+                    &test_ranges,
+                    &called_source_ids,
+                    changed_in_file,
+                    &query_tokens,
+                )
+            } else {
+                symbol_records
+            };
+            // Snippet the region most relevant to the query first, so a large multi-purpose file
+            // points at the matching symbol instead of the first symbol by accumulation order. For
+            // bug-localization (`prefer_impl_focus`), demote inline `mod tests` symbols below source
+            // so the focus is the implementation to edit, not the test that caught the bug.
+            let mut ranked_symbols: Vec<(bool, &SymbolRecord)> = symbol_records
+                .into_iter()
+                .map(|symbol| {
+                    (
+                        prefer_impl_focus && is_test_symbol(symbol, &test_ranges),
+                        symbol,
+                    )
+                })
+                .collect();
+            ranked_symbols.sort_by(|(left_test, left), (right_test, right)| {
+                if left_test != right_test {
+                    return left_test.cmp(right_test); // false (source) sorts before true (test)
+                }
+                // For bug-localization, the symbol whose body just changed is the prime suspect.
+                let left_changed = overlaps_changed(left, changed_in_file);
+                let right_changed = overlaps_changed(right, changed_in_file);
+                if left_changed != right_changed {
+                    return right_changed.cmp(&left_changed); // changed sorts first
+                }
                 ranker::symbol_query_affinity(right, &query_tokens)
                     .cmp(&ranker::symbol_query_affinity(left, &query_tokens))
                     .then(left.start_line.cmp(&right.start_line))
             });
+            let symbol_records: Vec<&SymbolRecord> = ranked_symbols
+                .into_iter()
+                .map(|(_, symbol)| symbol)
+                .collect();
 
             let symbols: Vec<QuerySymbol> = symbol_records
                 .iter()
@@ -2673,6 +2738,178 @@ pub fn context_read_first_targets(context: &ContextOutput) -> Vec<FocusTarget> {
             }
         })
         .collect()
+}
+
+fn is_test_module_name(name: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    n == "tests" || n == "test" || n.ends_with("_tests") || n.ends_with("_test")
+}
+
+/// The indexer's module kind is the full string "module"; "mod" is only the compact display form.
+fn is_module_kind(kind: &str) -> bool {
+    kind == "module" || kind == "mod"
+}
+
+/// Line ranges of the test modules in a file, computed from the file's FULL symbol list so a matched
+/// inner test fn is recognized as test scaffolding even when the enclosing `mod tests` symbol isn't
+/// itself in the matched set (e.g. a query naming the failing test function directly).
+fn test_module_ranges(file_symbols: &[&SymbolRecord]) -> Vec<(usize, usize)> {
+    file_symbols
+        .iter()
+        .filter(|symbol| is_module_kind(&symbol.kind) && is_test_module_name(&symbol.name))
+        .map(|symbol| (symbol.start_line, symbol.end_line))
+        .collect()
+}
+
+/// Whether a symbol is test scaffolding rather than implementation: a test module
+/// (`mod tests`/`mod *_tests`), a `test`-kind symbol, a `test_*` function, or anything whose line
+/// range sits inside a test module (so inner test fns with arbitrary names like
+/// `heuristic_is_bytes_over_four_rounded_up` are caught, not just the `test_`-prefixed ones). Used to
+/// keep inline tests from being chosen as a source file's focus symbol when localizing a bug.
+fn is_test_symbol(symbol: &SymbolRecord, test_ranges: &[(usize, usize)]) -> bool {
+    symbol.kind == "test"
+        || (is_module_kind(&symbol.kind) && is_test_module_name(&symbol.name))
+        || symbol.name.to_ascii_lowercase().starts_with("test_")
+        || test_ranges
+            .iter()
+            .any(|(lo, hi)| symbol.start_line >= *lo && symbol.end_line <= *hi)
+}
+
+// Bug-localization ranking boosts for a test-only file's source candidates (largest signal wins).
+const CHANGED_SYMBOL_BOOST: i32 = 100; // body overlaps the working-tree diff — the prime suspect
+const TEST_CALL_EDGE_BOOST: i32 = 20; // called directly by the matched (failing) test
+const TEST_NAME_LINK_BOOST: i32 = 5; // name embedded in a test name (`heuristic_is_…` -> `heuristic`)
+
+/// Changed line ranges (in the new file), keyed by repo-relative path, from the git working-tree
+/// diff vs HEAD. The function whose body just changed is the prime bug-localization suspect (a
+/// regression or mutation), so it can be focused even when a failing test exercises several
+/// functions. Empty for a non-git repo, a clean tree, or any git error — a safe no-op.
+fn working_tree_changed_lines(root: &Path) -> BTreeMap<String, Vec<(usize, usize)>> {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["diff", "--unified=0", "--no-color", "HEAD"])
+        .output();
+    let text = match output {
+        Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout).into_owned(),
+        _ => return BTreeMap::new(),
+    };
+    let mut changed: BTreeMap<String, Vec<(usize, usize)>> = BTreeMap::new();
+    let mut current: Option<String> = None;
+    for line in text.lines() {
+        if let Some(path) = line.strip_prefix("+++ b/") {
+            current = Some(path.to_string());
+        } else if line.starts_with("@@")
+            && let Some(path) = &current
+        {
+            // Hunk header `@@ -A,B +C,D @@`: the `+C,D` token is the changed range in the new file.
+            if let Some(plus) = line.split_whitespace().find(|token| token.starts_with('+')) {
+                let mut nums = plus[1..].split(',');
+                if let Some(Ok(start)) = nums.next().map(str::parse::<usize>) {
+                    let count = nums
+                        .next()
+                        .and_then(|n| n.parse::<usize>().ok())
+                        .unwrap_or(1);
+                    let end = start + count.saturating_sub(1);
+                    changed
+                        .entry(path.clone())
+                        .or_default()
+                        .push((start, end.max(start)));
+                }
+            }
+        }
+    }
+    changed
+}
+
+/// Whether a symbol's line span overlaps any changed range.
+fn overlaps_changed(symbol: &SymbolRecord, changed: &[(usize, usize)]) -> bool {
+    changed
+        .iter()
+        .any(|(lo, hi)| symbol.start_line <= *hi && symbol.end_line >= *lo)
+}
+
+/// When a file reaches read-first only through its tests (every matched symbol is test
+/// scaffolding — common for "a test is failing" tasks, where lexical matching attaches the
+/// `mod tests` block but not the implementation it exercises), pull the file's source symbols from
+/// the index so the focus is code to edit, not the test. Source symbols are ranked by: body overlaps
+/// the working-tree diff (strongest), called by the matched test, name embedded in a test name, then
+/// query affinity — preferring callable kinds. Matched tests stay in the list, lower.
+fn enrich_test_only_file<'a>(
+    matched: Vec<&'a SymbolRecord>,
+    file_symbols: &[&'a SymbolRecord],
+    test_ranges: &[(usize, usize)],
+    called_source_ids: &BTreeSet<&str>,
+    changed: &[(usize, usize)],
+    query_tokens: &[String],
+) -> Vec<&'a SymbolRecord> {
+    let surfaced_only_via_tests = !matched.is_empty()
+        && matched
+            .iter()
+            .all(|symbol| is_test_symbol(symbol, test_ranges));
+    if !surfaced_only_via_tests {
+        return matched;
+    }
+    let mut test_name_tokens: BTreeSet<String> = BTreeSet::new();
+    for &symbol in file_symbols {
+        if is_test_symbol(symbol, test_ranges) {
+            test_name_tokens.extend(formatter::tokenize(&symbol.name));
+        }
+    }
+    let excluded_kind = |kind: &str| {
+        matches!(
+            kind,
+            "macro" | "call" | "reference" | "import" | "use" | "include" | "mod" | "module"
+        )
+    };
+    let mut sources: Vec<&'a SymbolRecord> = Vec::new();
+    for &symbol in file_symbols {
+        if !is_test_symbol(symbol, test_ranges) && !excluded_kind(symbol.kind.as_str()) {
+            sources.push(symbol);
+        }
+    }
+    if sources.is_empty() {
+        return matched;
+    }
+    let link_score = |symbol: &SymbolRecord| -> i32 {
+        // Strongest signal: this source symbol's body just CHANGED in the working tree — the prime
+        // suspect for a regression/mutation, decisive even when a test exercises several functions.
+        let changed_hit = overlaps_changed(symbol, changed) as i32;
+        // Next: the matched (failing) test directly CALLS this symbol (call-graph edge).
+        let called = called_source_ids.contains(symbol.id.as_str()) as i32;
+        // Weakest: the source name appears as a token in one of the file's test names.
+        let name_linked = formatter::tokenize(&symbol.name)
+            .iter()
+            .any(|token| test_name_tokens.contains(token)) as i32;
+        ranker::symbol_query_affinity(symbol, query_tokens)
+            + changed_hit * CHANGED_SYMBOL_BOOST
+            + called * TEST_CALL_EDGE_BOOST
+            + name_linked * TEST_NAME_LINK_BOOST
+    };
+    // Prefer callable kinds as the focus (a fn over a const/type) when scores tie.
+    let kind_rank = |kind: &str| match kind {
+        "function" | "method" | "fn" => 0,
+        _ => 1,
+    };
+    sources.sort_by(|left, right| {
+        link_score(right)
+            .cmp(&link_score(left))
+            .then(kind_rank(&left.kind).cmp(&kind_rank(&right.kind)))
+            .then(left.start_line.cmp(&right.start_line))
+    });
+    let mut enriched: Vec<&'a SymbolRecord> = sources
+        .into_iter()
+        .take(MAX_CONTEXT_SYMBOLS_PER_FILE)
+        .collect();
+    for symbol in matched {
+        if enriched.len() >= MAX_CONTEXT_SYMBOLS_PER_FILE {
+            break;
+        }
+        if !enriched.iter().any(|existing| existing.id == symbol.id) {
+            enriched.push(symbol);
+        }
+    }
+    enriched
 }
 
 fn focus_symbol_for_context_file(file: &ContextFile) -> Option<&QuerySymbol> {
@@ -9232,6 +9469,143 @@ mod tests {
 
         let index = indexer::build_index(temp.path()).unwrap();
         (temp, index)
+    }
+
+    #[test]
+    fn inline_test_module_is_not_a_source_files_focus_symbol() {
+        // Regression: a source file with an inline `#[cfg(test)] mod tests` must point read-first
+        // at the implementation, not the test module, for a bug-localization query — even though
+        // the query mentions "test". (The module kind is the string "module", not "mod".)
+        let temp = tempfile::tempdir().unwrap();
+        write(
+            temp.path().join("src/calc.rs"),
+            "pub fn add(a: usize, b: usize) -> usize {\n    a + b\n}\n\n\
+             #[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    \
+             fn add_sums_two_numbers() {\n        assert_eq!(add(2, 2), 4);\n    }\n}\n",
+        );
+        let index = indexer::build_index(temp.path()).unwrap();
+        let context = build_context(
+            temp.path(),
+            &index,
+            "a unit test in src/calc.rs is failing, fix the bug in the source",
+            5,
+            2,
+            false,
+        )
+        .unwrap();
+        let file = context
+            .read_first
+            .iter()
+            .find(|file| file.file == "src/calc.rs")
+            .expect("calc.rs should be surfaced into read_first");
+        let focus = file.symbols.first().expect("a focus symbol");
+        assert_eq!(
+            focus.name, "add",
+            "focus should be the implementation `add`, not the inline test module; got {:?}",
+            file.symbols
+        );
+        assert_ne!(focus.kind, "module");
+
+        // Pinpoint: a query carrying the FAILING TEST NAME (what an agent has after running the
+        // suite) must land on the source fn it exercises, not the test fn itself — even though the
+        // test name matches a test symbol exactly. Test-module ranges come from the full file, so
+        // the inner test fn is recognized as scaffolding and demoted.
+        let by_test = build_context(
+            temp.path(),
+            &index,
+            "src/calc.rs add_sums_two_numbers is failing",
+            5,
+            2,
+            false,
+        )
+        .unwrap();
+        let focus = by_test
+            .read_first
+            .iter()
+            .find(|file| file.file == "src/calc.rs")
+            .and_then(|file| file.symbols.first())
+            .expect("calc.rs focus symbol");
+        assert_eq!(
+            focus.name, "add",
+            "a query naming the failing test must focus the source it exercises; got {:?}",
+            focus
+        );
+
+        // Regression guard: a PURE test-browse query (test intent, no bug/fix intent, and not naming
+        // a source symbol) must KEEP a test as focus — the demotion is for bug-localization only.
+        let browse = build_context(
+            temp.path(),
+            &index,
+            "list the tests in src/calc.rs",
+            5,
+            2,
+            false,
+        )
+        .unwrap();
+        let focus = browse
+            .read_first
+            .iter()
+            .find(|file| file.file == "src/calc.rs")
+            .and_then(|file| file.symbols.first())
+            .expect("calc.rs focus symbol");
+        assert!(
+            focus.kind == "module" || focus.name.contains("add_sums"),
+            "a test-browse query should keep a test as focus, not demote to source; got {:?}",
+            focus
+        );
+    }
+
+    #[test]
+    fn changed_function_is_focused_when_a_failing_test_exercises_several() {
+        // Raise the ceiling: a failing test that calls several functions can't be disambiguated by
+        // name, but the function whose body just changed in the working tree is the prime suspect.
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        let committed = "pub fn add(a: u32, b: u32) -> u32 {\n    a + b\n}\n\n\
+             pub fn sub(a: u32, b: u32) -> u32 {\n    a - b\n}\n\n\
+             #[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    \
+             fn add_and_sub_work() {\n        assert_eq!(add(2, 2), 4);\n        assert_eq!(sub(4, 2), 2);\n    }\n}\n";
+        write(root.join("src/calc.rs"), committed);
+        let git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(root)
+                .args(args)
+                .output()
+                .expect("git");
+        };
+        git(&["init", "-q"]);
+        git(&["config", "user.email", "t@example.com"]);
+        git(&["config", "user.name", "t"]);
+        git(&["add", "-A"]);
+        git(&["commit", "-q", "-m", "init"]);
+        // Mutate only `sub` (the LATER function). Without the diff signal a start-line tiebreak picks
+        // `add`; the changed-line boost must flip the focus to `sub`.
+        write(
+            root.join("src/calc.rs"),
+            &committed.replace("    a - b\n", "    b - a\n"),
+        );
+        let index = indexer::build_index(root).unwrap();
+        let context = build_context(
+            root,
+            &index,
+            "a unit test in src/calc.rs is failing",
+            5,
+            2,
+            false,
+        )
+        .unwrap();
+        let focus = context
+            .read_first
+            .iter()
+            .find(|file| file.file == "src/calc.rs")
+            .and_then(|file| file.symbols.first())
+            .expect("calc.rs focus symbol");
+        assert_eq!(
+            focus.name, "sub",
+            "the changed function should be focused, not the first-defined callee; got {:?}",
+            focus
+        );
     }
 
     fn minimal_file(id: &str, path: &str) -> FileRecord {
