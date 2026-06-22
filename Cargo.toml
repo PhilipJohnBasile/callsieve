@@ -40,7 +40,7 @@ tree-sitter-rust = "0.24.2"
 tree-sitter-typescript = "0.23.2"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
-fastembed = { version = "4", optional = true, default-features = false, features = ["hf-hub-native-tls", "ort-download-binaries"] }
+fastembed = { version = "5", optional = true, default-features = false, features = ["hf-hub-native-tls", "ort-download-binaries"] }
 half = { version = "2", optional = true, default-features = false, features = ["std"] }
 tiktoken-rs = { version = "0.6", optional = true }
 
