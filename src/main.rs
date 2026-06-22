@@ -1,10 +1,6 @@
-mod bench_public;
-mod cli;
-mod indexer;
-mod mcp;
-mod output;
-mod query;
-mod store;
+//! callsieve CLI — a thin binary over the `callsieve` library (see `src/lib.rs`).
+
+use callsieve::{cli, output};
 
 fn main() {
     if let Err(error) = cli::run() {
