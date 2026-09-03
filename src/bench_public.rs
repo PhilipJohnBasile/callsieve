@@ -121,11 +121,9 @@ pub struct Issue {
 
 impl Manifest {
     /// Parse a manifest from a JSON string.
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(json: &str) -> Result<Self> {
-        let manifest: Manifest = serde_json::from_str(json)
-            .context("failed to parse benchmarks/public manifest JSON")?;
-        manifest.validate()?;
-        Ok(manifest)
+        <Self as std::str::FromStr>::from_str(json)
     }
 
     fn validate(&self) -> Result<()> {
@@ -158,6 +156,17 @@ impl Manifest {
             }
         }
         Ok(())
+    }
+}
+
+impl std::str::FromStr for Manifest {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        let manifest: Manifest = serde_json::from_str(s)
+            .context("failed to parse benchmarks/public manifest JSON")?;
+        manifest.validate()?;
+        Ok(manifest)
     }
 }
 

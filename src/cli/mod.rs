@@ -507,7 +507,7 @@ struct AgentNativeSourceArtifactEvidence {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ValueEnum)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum AgentNativeCheckMode {
+pub enum AgentNativeCheckMode {
     Template,
     Measured,
 }
