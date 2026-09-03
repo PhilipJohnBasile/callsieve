@@ -163,8 +163,8 @@ impl std::str::FromStr for Manifest {
     type Err = anyhow::Error;
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        let manifest: Manifest = serde_json::from_str(s)
-            .context("failed to parse benchmarks/public manifest JSON")?;
+        let manifest: Manifest =
+            serde_json::from_str(s).context("failed to parse benchmarks/public manifest JSON")?;
         manifest.validate()?;
         Ok(manifest)
     }
